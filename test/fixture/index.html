@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>fixture</title>
+<style>
+:root{--c:#2563eb;--w:80cqw}
+body{margin:8px;font:16px/1.7 sans-serif;color:#222}
+.page{container-type:inline-size;background:#f1f5f9}
+.hero{position:relative;height:50cqw;background:#eee}
+.hero .a{position:absolute;left:10cqw;top:5cqw;width:30cqw;height:20cqw;background:var(--c);transform:rotate(-8deg)}
+.hero .b{position:absolute;right:4cqw;bottom:4cqw;background:#222;color:#fff;padding:4px 8px}
+.row{display:flex;gap:4cqw;margin:6cqw 0;align-items:center}
+.row::before{content:"";width:6cqw;height:6cqw;background:var(--c);border-radius:50%}
+.row .tag{position:absolute;left:0;top:-10px;background:#000;color:#fff;font-size:12px}
+.row{position:relative}
+.box{width:var(--w);margin:0 auto;padding:10px;border:2px solid #333;box-sizing:content-box}
+ul.plain{list-style:none;padding:0}
+ul.plain li{display:flex;gap:8px}
+ul.plain i{width:10px;height:10px;background:#333;flex:none;margin-top:8px}
+.over{position:relative;z-index:1;height:40px;background:#9cf}
+.under{margin-top:-15px;height:40px;background:#fc9}
+p.lead{font-size:1.2rem}
+p.lead::after{content:" →"}
+.dot{position:relative}
+.dot i{position:absolute;right:-12px;top:0;width:8px;height:8px;border-radius:50%;background:var(--c)}
+img{display:block;width:100%}
+</style></head>
+<body>
+<div class="page">
+  <header class="hero"><div class="a"></div><span class="b">右下角</span></header>
+  <p class="lead">导语<a href="#x">跳到下面</a>和<a href="https://example.com/">站外链接</a>。</p>
+  <div class="row"><span>一</span><span>二</span><span class="tag">标签</span></div>
+  <div class="box">内容盒，content-box 宽 80cqw</div>
+  <ul class="plain"><li><i></i>列表一</li><li><i></i>列表二</li></ul>
+  <div class="over">在上面（z-index:1）</div>
+  <div class="under">被压住</div>
+  <p class="dot">末尾圆点<i></i></p>
+  <img src="pic.png" alt="小图">
+  <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='4'%3E%3Crect width='10' height='4' fill='%23396'/%3E%3C/svg%3E" alt="内嵌">
+  <img src="missing.png" alt="缺图">
+</div>
+</body></html>

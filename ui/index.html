@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wxpaste · 公众号图文粘贴</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<aside class="side">
+  <header class="brand">
+    <h1>wxpaste <span class="sub">公众号图文粘贴</span></h1>
+    <p>本地 HTML 文章 → 公众号编辑器原样保留的格式</p>
+  </header>
+
+  <section class="card" id="srcCard" aria-labelledby="srcTitle">
+    <h2 id="srcTitle">文章</h2>
+    <div id="drop" class="drop" tabindex="0" role="button" aria-describedby="dropHint">
+      <strong>把文章文件夹拖到这里</strong>
+      <span id="dropHint">文件夹里要有 index.html 和它用到的图片</span>
+    </div>
+    <div class="row">
+      <button type="button" id="pickDir">选择文件夹…</button>
+      <input type="file" id="dirInput" webkitdirectory multiple hidden>
+    </div>
+    <form id="pathForm" class="row">
+      <label for="pathInput" class="sr-only">文件或文件夹路径</label>
+      <input id="pathInput" placeholder="或粘贴路径，如 D:\推送\index.html" autocomplete="off">
+      <button type="submit">打开</button>
+    </form>
+    <div id="current" class="current" hidden>
+      <div class="file" id="curName"></div>
+      <div class="muted" id="curWhere"></div>
+      <button type="button" class="link" id="reload">重新转换</button>
+    </div>
+  </section>
+
+  <section class="card copy" aria-labelledby="copyTitle">
+    <h2 id="copyTitle" class="sr-only">复制</h2>
+    <button type="button" id="copy" class="primary" disabled>复制到剪贴板</button>
+    <p id="copyNote" class="muted" aria-live="polite">载入文章后可复制。</p>
+    <p id="fetchLine" class="status" aria-live="polite" hidden></p>
+    <div class="row small">
+      <label for="width">版心宽度</label>
+      <select id="width">
+        <option value="320">320px · 360 宽安卓机</option>
+        <option value="335">335px · 375 宽 iPhone</option>
+        <option value="353">353px · 393 宽 iPhone</option>
+        <option value="374">374px · 414 宽机型</option>
+      </select>
+    </div>
+    <p class="muted small">所有尺寸按这个宽度固定成 px。更宽的手机两侧会留白，更窄的手机右侧会被裁掉一点。</p>
+  </section>
+
+  <section class="card" aria-labelledby="hostTitle">
+    <h2 id="hostTitle">图片外链</h2>
+    <p id="hostLine" class="status">检测中…</p>
+    <fieldset id="hostPick" class="hosts" hidden>
+      <legend class="sr-only">选择图片用哪个公网出口</legend>
+      <div id="hostList"></div>
+    </fieldset>
+    <p id="hostHelp" class="muted small" hidden></p>
+    <div class="row small">
+      <button type="button" id="recheck">重新检测</button>
+      <span id="hostWhen" class="muted"></span>
+    </div>
+    <details>
+      <summary>用隧道等自定义地址</summary>
+      <form id="customForm" class="row">
+        <label for="customInput" class="sr-only">自定义图床地址</label>
+        <input id="customInput" placeholder="http(s)://主机:端口" autocomplete="off">
+        <button type="submit">使用</button>
+      </form>
+    </details>
+  </section>
+
+  <section class="card" aria-labelledby="checkTitle">
+    <h2 id="checkTitle">检查结果</h2>
+    <div id="checks" class="checks"><p class="muted">载入文章后显示。</p></div>
+  </section>
+
+</aside>
+
+<main class="stage">
+  <div id="status" class="banner" role="status" aria-live="polite" hidden></div>
+  <div class="panes" id="panes" hidden>
+    <figure class="pane">
+      <figcaption>原稿</figcaption>
+      <div class="phone"><iframe id="paneA" title="原稿预览" sandbox="allow-same-origin"></iframe></div>
+    </figure>
+    <figure class="pane">
+      <figcaption>粘贴后（模拟微信正文样式）</figcaption>
+      <div class="phone"><iframe id="paneB" title="粘贴后预览" sandbox="allow-same-origin"></iframe></div>
+    </figure>
+  </div>
+  <div id="empty" class="empty">
+    <p>还没有文章。</p>
+    <p class="muted">把文章文件夹拖进左边，或者直接把文件夹拖到 serve.cmd 上启动。</p>
+  </div>
+  <iframe id="scratch" class="scratch" title="转换用" aria-hidden="true" tabindex="-1" sandbox="allow-same-origin"></iframe>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

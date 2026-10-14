@@ -1,0 +1,14 @@
+{
+  "name": "wxpaste",
+  "version": "0.1.0",
+  "private": true,
+  "description": "把本地 HTML 文章转成公众号编辑器能原样保留的格式，并临时提供图片外链",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node test/e2e.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "25.13.0"
+  }
+}
