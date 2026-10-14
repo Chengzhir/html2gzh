@@ -5,7 +5,7 @@ import { cleanStructure, keepShapes, squashWhitespace, cleanAttributes } from '.
 import { mergeWidths, annotateContainerWidths, stripTool, markIgnoreWidth } from './responsive.js';
 
 /** 微信手机端正文区的默认样式（抓自线上文章页 CSS），预览与校验都在它下面进行 */
-export const READER_CSS = `.rich_media_content{color:rgba(0,0,0,.9);font-size:17px;overflow:hidden;text-align:justify;position:relative;z-index:0;line-height:1.6;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+export const READER_CSS = `.rich_media_content{color:rgba(0,0,0,.9);font-size:17px;overflow:hidden;text-align:justify;position:relative;z-index:0;line-height:1.6;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:.544px;hyphens:auto;-webkit-hyphens:auto;text-underline-position:under;text-underline-offset:1.6px;text-decoration-skip-ink:none}
 .rich_media_content *{max-width:100%!important;box-sizing:border-box!important;word-wrap:break-word!important}
 .rich_media_content p{clear:both;min-height:1em}
 .rich_media_content img{height:auto!important}
@@ -231,6 +231,10 @@ async function convertAt(html, width, frame) {
   while (doc.body.firstChild) root.appendChild(doc.body.firstChild);
   doc.body.appendChild(root);
   for (const [k, v] of rootDecl) root.style.setProperty(k, k === 'text-align' ? v.replace(/^start$/, 'left').replace(/^end$/, 'right') : v);
+  // 阅读页正文区还给这几项设了值（字距 0.544px、自动断词等），原稿没声明的元素会继承过去，换行全变；根容器写回原稿的值
+  for (const k of ['letter-spacing', 'hyphens', 'text-underline-position', 'text-underline-offset', 'text-decoration-skip-ink']) {
+    if (!root.style.getPropertyValue(k)) root.style.setProperty(k, bodyCs.getPropertyValue(k));
+  }
   if (pageBg) root.style.setProperty('background-color', pageBg);
   root.style.setProperty('container-type', 'inline-size');
   const capped = keepMaxWidth(doc, root);
