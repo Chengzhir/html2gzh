@@ -2,8 +2,9 @@ import { ID, isHtmlEl } from './util.js';
 
 // 粘贴后编辑器（ProseMirror）的实测行为：div 会被重建成 p 并丢掉容器样式，section 原样保留；
 // 空的行内元素没有文字可挂，会被吞掉。下面的改写都围绕这两点。
+// blockquote 也改：阅读页给它强加灰字、左侧 ::before 竖条和 15px 字号，发表/预览时还会删掉它身上的 color
 const TO_SECTION = new Set(['div', 'article', 'header', 'footer', 'main', 'nav', 'aside', 'hgroup', 'address', 'dl', 'dt', 'dd',
-  'details', 'summary', 'center', 'search', 'figcaption']);
+  'details', 'summary', 'center', 'search', 'figcaption', 'blockquote']);
 const MARKS = new Set(['b', 'strong', 'i', 'em', 'u', 's', 'del', 'ins', 'mark', 'small', 'code', 'kbd', 'samp', 'var', 'cite', 'abbr', 'time', 'label', 'sub', 'sup', 'big', 'font', 'dfn']);
 const FREEZE = ['display', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'padding-top', 'padding-right', 'padding-bottom',
   'padding-left', 'font-weight', 'font-style', 'font-size', 'font-family', 'text-decoration-line', 'color', 'vertical-align'];
@@ -15,6 +16,8 @@ function rename(doc, el, tag) {
   const win = doc.defaultView;
   const before = win.getComputedStyle(el);
   const vals = FREEZE.map(k => before.getPropertyValue(k));
+  // 浏览器默认样式里只有链接自带颜色；其他标签此刻的颜色若和父级不同，只可能来自套上的微信正文样式，不能冻结
+  const keepColor = el.localName === 'a';
   const n = doc.createElement(tag);
   for (const a of el.attributes) n.setAttribute(a.name, a.value);
   while (el.firstChild) n.appendChild(el.firstChild);
@@ -23,6 +26,7 @@ function rename(doc, el, tag) {
   FREEZE.forEach((k, i) => {
     if (after.getPropertyValue(k) === vals[i]) return;
     if (k === 'display' && vals[i] === 'list-item') return;
+    if (k === 'color' && !keepColor) return;
     n.style.setProperty(k, vals[i]);
   });
   return n;
@@ -62,7 +66,7 @@ export function cleanStructure(doc, root, findings) {
     const t = el.localName;
     if (TO_SECTION.has(t)) { rename(doc, el, 'section'); n++; } else if (MARKS.has(t) && el.hasAttribute('style')) { rename(doc, el, 'span'); n++; }
   }
-  if (n) findings.fixed('容器', `${n} 个 div 等容器改成了 section（编辑器会把 div 重建成段落，样式全丢）`);
+  if (n) findings.fixed('容器', `${n} 个 div/blockquote 等容器改成了 section（编辑器会把 div 重建成段落；blockquote 在阅读页会被强制成灰字）`);
 }
 
 const isTextContext = (win, el) => {

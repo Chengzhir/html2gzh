@@ -23,7 +23,7 @@ const res = await p.evaluate(async (d, o, c) => {
     crops.push(btoa(s));
   }
   return { bands: top.map(t => t.join('-')), crops };
-}, ...['diff', 'original', 'converted'].map(n => fs.readFileSync(`test/out/${n}.png`).toString('base64')));
+}, ...['diff', 'original', 'converted'].map(n => fs.readFileSync(`test/out/${n}${process.argv[2] ? '-' + process.argv[2] : ''}.png`).toString('base64')));
 console.log(res.bands);
 res.crops.forEach((c, i) => fs.writeFileSync(`test/out/crop${i}.png`, Buffer.from(c, 'base64')));
 await b.close();

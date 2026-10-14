@@ -53,8 +53,8 @@ export function convertPositions(doc, root, findings) {
     if (p.pos === 'fixed') fixed++;
     stripInset(s);
     s.setProperty('float', p.side);
-    s.setProperty('clear', 'none', 'important');
-    s.setProperty('box-sizing', 'border-box', 'important');
+    s.setProperty('clear', 'none');
+    s.setProperty('box-sizing', 'border-box');
     s.setProperty('width', p.maxContent ? 'max-content' : round(p.w) + 'px');
     if (p.explicitH || !el.childNodes.length) s.setProperty('height', round(p.h) + 'px');
     s.setProperty('margin', '0');

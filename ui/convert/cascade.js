@@ -131,12 +131,15 @@ export function convertUnits(prop, v, env) {
   });
   v = v.replace(RE_REM, (m, n) => { env.hit.rem++; return round(n * env.rem) + 'px'; });
   v = v.replace(RE_VW, (m, n) => { env.hit.vw++; return round(n * env.vw / 100) + 'px'; });
-  if (PCT_PROPS.test(prop) && v.includes('%') && !/url\(/i.test(v)) v = v.replace(RE_PCT, (m, n) => { env.hit.pct++; return round(n * env.cbw() / 100) + 'px'; });
+  if (PCT_PROPS.test(prop) && v.includes('%') && !/url\(/i.test(v)) {
+    const cb = env.cbw();
+    if (cb != null) v = v.replace(RE_PCT, (m, n) => { env.hit.pct++; return round(n * cb / 100) + 'px'; });
+  }
   if (prop === 'text-align' || prop === 'text-align-last') v = v.replace(/^start$/i, 'left').replace(/^end$/i, 'right');
   return v;
 }
 
-export const DROP = /^(content|container(-type|-name)?|transition(-.*)?|animation(-.*)?|will-change|cursor|pointer-events|user-select|-webkit-user-select|scroll-.*|content-visibility|counter-.*)$/;
+export const DROP = /^(content|container-name|transition(-.*)?|animation(-.*)?|will-change|cursor|pointer-events|user-select|-webkit-user-select|scroll-.*|content-visibility|counter-.*)$/;
 
 /** 排好序的声明 → 内联 style 文本；简写/长写覆盖交给浏览器 CSSOM 处理 */
 export function toStyle(sorted, cs, env, tmp) {

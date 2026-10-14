@@ -294,6 +294,7 @@ function refreshCopy() {
   const pick = chosen();
   if (imgs.length && !pick) { btn.disabled = true; note.textContent = `有 ${imgs.length} 张本地图片，需要先有可用的图片外链才能复制。`; return; }
   btn.disabled = state.busy;
+  if (state.copiedAt) { note.textContent = '已复制。到公众号后台正文里 Ctrl+V。'; return; }
   note.textContent = imgs.length ? `复制后到公众号后台正文里 Ctrl+V。${imgs.length} 张图片会由微信从本机抓取，抓完前别关 serve.cmd。` : '复制后到公众号后台正文里 Ctrl+V。';
 }
 
