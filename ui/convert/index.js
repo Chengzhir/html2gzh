@@ -1,7 +1,7 @@
 import { ID, isHtmlEl, measure, diffBoxes, loadFrame } from './util.js';
 import { collectRules, matchRules, cascadeOrder, toStyle } from './cascade.js';
 import { convertPositions, correctOffsets, INHERITED } from './position.js';
-import { cleanStructure, keepShapes, squashWhitespace, cleanAttributes } from './structure.js';
+import { cleanStructure, keepShapes, squashWhitespace, keepNoWrap, cleanAttributes } from './structure.js';
 import { mergeWidths, annotateContainerWidths, stripTool, markIgnoreWidth } from './responsive.js';
 
 /** 微信手机端正文区的默认样式（抓自线上文章页 CSS），预览与校验都在它下面进行 */
@@ -132,7 +132,7 @@ async function convertAt(html, width, frame) {
   const notes = { media: 0, fontface: 0, keyframes: 0, imports: 0, container: 0, unreadable: 0, nested: 0, otherPseudo: 0, dynamic: 0, badSel: 0 };
   const rules = collectRules(doc, notes);
   const matched = matchRules(doc, rules, notes);
-  const hit = { cq: 0, rem: 0, vw: 0, pct: 0, badVar: 0 };
+  const hit = { cq: 0, rem: 0, vw: 0, pct: 0, badVar: 0, font: 0 };
   const rem = parseFloat(cs(doc.documentElement).fontSize) || 16;
   const tmp = doc.createElement('span');
   const noTf = doc.createElement('style');
@@ -279,6 +279,7 @@ async function convertAt(html, width, frame) {
   cleanStructure(doc, root, F);
   keepShapes(doc, root, F);
   const ws = squashWhitespace(doc, root);
+  const nw = keepNoWrap(doc, root);
   cleanAttributes(root);
   fixReader();
   const { moved, stuck } = correctOffsets(doc, root, target, layers);
@@ -291,6 +292,8 @@ async function convertAt(html, width, frame) {
   if (capped) F.fixed('最大宽度', `${capped} 处 max-width 改写成 width（微信会把所有 max-width 强制成 100%）`);
   if (bqFixed) F.fixed('文字颜色', `${bqFixed} 个链接/mark 补上了文字颜色（阅读页给这几种标签直接上色、不继承父级，深底浅字会变色）`);
   if (forcedN) F.fixed('微信默认样式', `${forcedN} 处被微信正文默认样式（max-width、段落最小高度等）顶掉的属性已补回`);
+  if (nw) F.fixed('不换行', `${nw} 处 nowrap 文字改用不换行空格和连接符禁止折行（公众号会删掉 white-space）`);
+  if (hit.font) F.fixed('手机字体', `${hit.font} 处字体栈补上了 iOS/安卓自带的近似字体（公众号用不了网络字体，读者手机上没有电脑字体）`);
   if (ws > 200) F.fixed('空白', `清掉 ${ws} 个标签间空白字符（手机端会把它们渲染成额外的空行）`);
   if (notes.fontface) F.warn('网络字体', `${notes.fontface} 个 @font-face 字体用不了，读者看到的是手机系统字体，字宽不同可能导致换行变化`);
   if (notes.keyframes) F.warn('动画', `${notes.keyframes} 个 @keyframes 动画会丢失`);

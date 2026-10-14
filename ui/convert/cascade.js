@@ -151,5 +151,36 @@ export function toStyle(sorted, cs, env, tmp) {
     v = convertUnits(d.prop, v, env);
     tmp.style.setProperty(d.prop, v, d.important ? 'important' : '');
   }
+  const ff = tmp.style.getPropertyValue('font-family');
+  if (ff) {
+    const more = mobileFonts(ff);
+    if (more !== ff) { tmp.style.setProperty('font-family', more, tmp.style.getPropertyPriority('font-family')); env.hit.font++; }
+  }
   return tmp.getAttribute('style') || '';
+}
+
+// 公众号正文加载不了网络字体，读者只能用手机自带的字体。电脑字体在手机上没有时，
+// 按字形风格补上 iOS / 安卓自带的近似字体，插在通用族名之前
+const MOBILE = [
+  [/^(bahnschrift( (semi)?condensed)?|din( condensed| alternate| next.*)?|dinpro.*|arial narrow|roboto condensed|oswald|barlow( semi)? condensed)$/i,
+    ['DIN Condensed', 'Roboto Condensed', 'sans-serif-condensed']],
+  [/^(microsoft yahei( ui)?|微软雅黑|noto sans (cjk )?sc|source han sans( sc| cn)?|思源黑体|simhei|黑体|dengxian|等线|hiragino sans gb)$/i,
+    ['PingFang SC', 'Noto Sans CJK SC']],
+  [/^(simsun|宋体|nsimsun|新宋体|noto serif (cjk )?sc|source han serif( sc| cn)?|思源宋体|stsong|华文宋体)$/i,
+    ['Songti SC', 'Noto Serif CJK SC', 'serif']],
+  [/^(kaiti|楷体|stkaiti|华文楷体|kaiti sc)$/i, ['Kaiti SC', 'STKaiti']],
+];
+const GENERIC = /^(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-[a-z-]+|-apple-system|emoji|math|fangsong)$/i;
+export function mobileFonts(stack) {
+  const names = splitTop(stack).map(s => s.trim());
+  const bare = n => n.replace(/^["']|["']$/g, '');
+  const have = new Set(names.map(n => bare(n).toLowerCase()));
+  const add = [];
+  for (const n of names) for (const [re, list] of MOBILE) if (re.test(bare(n))) for (const f of list) {
+    if (!have.has(f.toLowerCase())) { have.add(f.toLowerCase()); add.push(GENERIC.test(f) ? f : `"${f}"`); }
+  }
+  if (!add.length) return stack;
+  const g = names.findIndex(n => GENERIC.test(bare(n)));
+  const at = g < 0 ? names.length : g;
+  return [...names.slice(0, at), ...add, ...names.slice(at)].join(', ');
 }

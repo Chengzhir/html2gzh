@@ -147,6 +147,29 @@ export function squashWhitespace(doc, root) {
   return saved;
 }
 
+/**
+ * 公众号会删掉 white-space（实测预览页里一处都不剩），nowrap 的标题、日期在窄字体的手机上会被折行。
+ * 改在文字层面禁止断行：空格换成不换行空格，字与字之间插 U+2060（WORD JOINER，前后都不许断行）。
+ */
+const WJ = '\u2060';
+export function keepNoWrap(doc, root) {
+  const win = doc.defaultView;
+  const nowrap = el => /^nowrap$/.test(win.getComputedStyle(el).whiteSpace);
+  let n = 0;
+  for (const el of [...root.querySelectorAll('*')]) {
+    if (!isHtmlEl(el) || !nowrap(el) || (el.parentElement && el.parentElement !== root && nowrap(el.parentElement))) continue;
+    const walker = doc.createTreeWalker(el, 4);
+    const texts = [];
+    while (walker.nextNode()) if (walker.currentNode.data) texts.push(walker.currentNode);
+    texts.forEach((t, i) => {
+      const chars = [...t.data.replace(/ /g, '\u00a0')];
+      t.data = chars.join(WJ) + (i < texts.length - 1 ? WJ : '');
+    });
+    if (texts.length) n++;
+  }
+  return n;
+}
+
 export function cleanAttributes(root) {
   for (const el of root.querySelectorAll('*')) {
     for (const a of [...el.attributes]) {

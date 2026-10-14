@@ -9,6 +9,7 @@ export const INHERITED = ['color', 'font-family', 'font-size', 'font-weight', 'f
 const REPLACED = new Set(['img', 'svg', 'video', 'canvas', 'iframe', 'object', 'embed', 'input']);
 
 const stripInset = s => INSET.forEach(p => s.removeProperty(p));
+const FAR = 4000;
 const layoutRect = (doc, el) => {
   const st = doc.createElement('style');
   st.textContent = '*{transform:none!important;translate:none!important;rotate:none!important;scale:none!important}';
@@ -57,8 +58,10 @@ export function convertPositions(doc, root, findings) {
     s.setProperty('box-sizing', 'border-box');
     s.setProperty('width', p.maxContent ? 'max-content' : round(p.w) + 'px');
     if (p.explicitH || !el.childNodes.length) s.setProperty('height', round(p.h) + 'px');
+    // 横向外边距取一个远大于任何宽度的负值，而不是正好抵消量到的宽度：手机上没有原稿字体时文字会变宽，
+    // 正好抵消就会剩出占位，把同一行后面的浮动推开。纵向照旧精确抵消（改成大负值会动到 clear 的落点）
     s.setProperty('margin', '0');
-    s.setProperty(p.side === 'left' ? 'margin-right' : 'margin-left', -round(p.w) + 'px');
+    s.setProperty(p.side === 'left' ? 'margin-right' : 'margin-left', -FAR + 'px');
     s.setProperty('margin-bottom', -round(p.h) + 'px');
     el.setAttribute('data-wxc-float', '');
     // 在 flex/grid/table 容器里 float 不生效：挪到容器后面，并补上挪动后丢失的继承值
