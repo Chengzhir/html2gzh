@@ -52,6 +52,39 @@
     <p class="muted small">成品随手机宽度等比缩放，这里只决定预览用哪个宽度；其他常见宽度会自动比对。</p>
   </section>
 
+  <section class="card" aria-labelledby="fontTitle">
+    <h2 id="fontTitle">字体</h2>
+    <fieldset class="modes">
+      <legend class="sr-only">读者手机上没有原稿字体时怎么办</legend>
+      <label><input type="radio" name="fontMode" value="fallback"> <span><b>备用字体</b><span class="muted">全部保留为文字，换成手机自带的相近字体</span></span></label>
+      <label><input type="radio" name="fontMode" value="svg"> <span><b>大字转 SVG 轮廓</b><span class="muted">标题、编号等大字按原稿字形画出来，正文仍用备用字体</span></span></label>
+    </fieldset>
+    <div id="svgOpts" class="sub-opts">
+      <div class="row small">
+        <label for="svgMin">字号不小于</label>
+        <input id="svgMin" type="number" min="6" max="200" step="0.5" inputmode="decimal" aria-describedby="svgMinHint">
+        <span id="svgMinHint" class="muted">px（按 375 宽 iPhone）</span>
+      </div>
+      <div id="faceBox">
+        <p class="muted small">文中用到的每套字（字体 + 字重）分别怎么处理。选择会记住，下一篇用到同一套字时沿用。</p>
+        <div id="faceList" class="faces"></div>
+        <div class="row small"><button type="button" id="facesReset">全部恢复默认</button></div>
+      </div>
+      <label class="check small"><input type="checkbox" id="svgCopy"> 叠一层透明文字，读者能选中、复制、搜索</label>
+    </div>
+    <label class="check small"><input type="checkbox" id="noWrap"> 原稿不换行的文字在手机上也不换行</label>
+    <details id="rulesBox">
+      <summary>备用字体规则</summary>
+      <p class="muted small">一行一条：<code>原稿字体, … =&gt; 补上的字体, …</code>。名字整名匹配、不分大小写，* 匹配任意字符，# 开头是注释。补上的字体插在通用族名（sans-serif 等）之前。</p>
+      <label for="rules" class="sr-only">备用字体规则</label>
+      <textarea id="rules" rows="9" spellcheck="false" autocomplete="off"></textarea>
+      <div class="row small">
+        <button type="button" id="rulesReset">恢复默认</button>
+        <span id="rulesNote" class="muted" aria-live="polite"></span>
+      </div>
+    </details>
+  </section>
+
   <section class="card" aria-labelledby="hostTitle">
     <h2 id="hostTitle">图片外链</h2>
     <p id="hostLine" class="status">检测中…</p>

@@ -3,6 +3,8 @@ import { collectRules, matchRules, cascadeOrder, toStyle } from './cascade.js';
 import { convertPositions, correctOffsets, INHERITED } from './position.js';
 import { cleanStructure, keepShapes, squashWhitespace, keepNoWrap, cleanAttributes } from './structure.js';
 import { mergeWidths, annotateContainerWidths, stripTool, markIgnoreWidth } from './responsive.js';
+import { DEFAULT_OPTS, parseRules, mobileNote } from './fonts.js';
+import { selectUnits, outline, decide, finalize, listFaces, webFamilies, webIn } from './outline.js';
 
 /** 微信手机端正文区的默认样式（抓自线上文章页 CSS），预览与校验都在它下面进行 */
 export const READER_CSS = `.rich_media_content{color:rgba(0,0,0,.9);font-size:17px;overflow:hidden;text-align:justify;position:relative;z-index:0;line-height:1.6;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:.544px;hyphens:auto;-webkit-hyphens:auto;text-underline-position:under;text-underline-offset:1.6px;text-decoration-skip-ink:none}
@@ -36,12 +38,30 @@ const FLOW = /^(block|flow-root|list-item)$/;
  * 输入已改写好图片地址的 HTML。按 width 与另一个宽度各转换一遍，合并成随宽度等比缩放的成品，
  * 再在多个正文宽度下与原稿逐元素比对。payload 里的本地图片地址由调用方换成公网地址。
  */
-export async function convert(html, { width, frame, verifyFrame }) {
+export async function convert(html, { width, frame, verifyFrame, opts = {}, glyphs = null }) {
+  const o = { ...DEFAULT_OPTS, ...opts };
+  const { rules: fontRules, bad: badRules } = parseRules(o.rules);
+  const ctx = { o, fontRules, glyphs, units: null, faces: null, web: null, notes: { miss: new Map(), server: '' } };
   const wb = width < 400 ? width + 64 : width - 64;
-  const A = await convertAt(html, width, frame);
-  const B = await convertAt(html, wb, frame);
-  const { html: mergedRaw, stat } = mergeWidths(A.preview, B.preview);
+  const A = await convertAt(html, width, frame, ctx);
+  const B = await convertAt(html, wb, frame, ctx);
+  let pa = A.preview, pb = B.preview, outlineStat = null;
+  if (A.outlined) {
+    const verdicts = decide(A.outlined, B.outlined);
+    pa = finalize(pa, A.outlined, verdicts);
+    pb = finalize(pb, B.outlined, verdicts);
+    outlineStat = { units: verdicts.length, verdicts, kept: 0, chars: 0, bytes: 0 };
+    const byKey = new Map(ctx.faces.map(f => [f.key, f]));
+    verdicts.forEach((v, i) => {
+      if (!v.keep) return;
+      const r = A.outlined[i];
+      outlineStat.kept++; outlineStat.chars += r.chars; outlineStat.bytes += r.bytes;
+      for (const [k, n] of Object.entries(r.faces)) if (byKey.has(k)) byKey.get(k).outlined += n;
+    });
+  }
+  const { html: mergedRaw, stat } = mergeWidths(pa, pb);
   const F = A.F;
+  if (outlineStat) outlineFindings(F, outlineStat, ctx);
   // 内容结构检测就在 375/585/677 三个宽度下来量（见其 xr 数组），超出正文区的节点会被判"存在溢出问题"
   const overIds = new Set();
   for (const w of CHECK_WIDTHS.filter(w => w > 460 || w === 375)) for (const id of overflowing(await loadFrame(verifyFrame, previewDoc(mergedRaw), w))) overIds.add(id);
@@ -58,6 +78,7 @@ export async function convert(html, { width, frame, verifyFrame }) {
     if (w === width) { visualBad = bad; verified = V.size; } else if (bad.length) others.push([w, bad]);
   }
 
+  if (badRules.length) F.warn('备用字体规则', `第 ${badRules.join('、')} 行格式不对，已跳过（应为「原稿字体, … => 补上的字体, …」）`);
   if (stat.cq) F.fixed('等比缩放', `${stat.cq} 个长度写成了 cqw，随手机宽度等比缩放` + (stat.split ? `，${stat.split} 处位移拆成固定 + 比例两段` : ''));
   if (stat.approx) F.warn('缩放近似', `${stat.approx} 个长度既有固定部分又有比例部分，微信不支持 calc()，只能在 ${width}px 下精确、其他宽度近似`);
   if (stat.diverged) F.warn('缩放近似', `${stat.diverged} 处在两个宽度下转换结果结构不同，按 ${width}px 的结果等比换算`);
@@ -65,10 +86,28 @@ export async function convert(html, { width, frame, verifyFrame }) {
   else F.info('其他宽度', `正文宽 ${widths.filter(w => w !== width).join('/')}px 下也与原稿逐元素一致`);
 
   return {
-    payload: stripTool(merged), preview: merged, original: A.original, findings: F.list,
-    stats: { chars: stripTool(merged).length, elements: A.n, moved: A.moved, visualBad, verified, others },
-    debug: { tv: [...A.targetV], v: [...V], approx: stat.where },
+    payload: stripTool(merged), preview: merged, original: A.original, findings: F.list, fonts: ctx.faces,
+    stats: { chars: stripTool(merged).length, elements: A.n, moved: A.moved, visualBad, verified, others,
+      outline: outlineStat && { units: outlineStat.units, kept: outlineStat.kept, chars: outlineStat.chars, bytes: outlineStat.bytes } },
+    debug: { tv: [...A.targetV], v: [...V], approx: stat.where,
+      verdicts: outlineStat && outlineStat.verdicts.map((v, i) => ({ ...v, id: ctx.units[i].id, run: ctx.units[i].from != null, text: ctx.units[i].text.slice(0, 40) })) },
   };
+}
+
+const WHY = {
+  font: '取不到原字体的字形', layout: '换成轮廓后周围元素会挪位', reflow: '换行或缩放方式随屏宽变化，轮廓没法跟着变',
+  shaping: '连字或上下文变体和浏览器的排法对不上', baseline: '量不准基线', server: '取字形失败', mismatch: '两个宽度下结构不同', missing: '两个宽度下结构不同', ineligible: '在另一个宽度下不再符合条件', empty: '没有可见的字',
+};
+function outlineFindings(F, s, ctx) {
+  if (s.kept) F.fixed('大字转轮廓', `${s.kept} 段大字（${s.chars} 个字）画成了 SVG 轮廓，手机上和原稿字形一致` + (ctx.o.svgCopy ? '，上面叠了透明文字，读者仍能选中复制' : '，不能选中复制') + `；正文多出约 ${Math.round(s.bytes / 1024)} KB`);
+  const why = new Map();
+  for (const v of s.verdicts) if (!v.keep) why.set(v.why, (why.get(v.why) || 0) + 1);
+  if (ctx.notes.server) F.warn('大字转轮廓', `取字形失败（${ctx.notes.server}），大字仍是文字，读者看到的是备用字体`);
+  else if (why.size) {
+    const fonts = ctx.notes.miss.size ? `（${[...ctx.notes.miss.keys()].slice(0, 3).join('；')}）` : '';
+    F.warn('大字转轮廓', `${s.units - s.kept} 段保留为文字：` + [...why].map(([k, n]) => `${n} 段${WHY[k] || k}${k === 'font' ? fonts : ''}`).join('；'));
+  }
+  if (!s.units) F.info('大字转轮廓', `没有字号达到 ${ctx.o.svgMin}px（按 375 宽 iPhone 计）或使用指定字体的文字`);
 }
 
 /** 与内容结构检测同一判据：盒子左右任一侧超出正文区 1px 以上、且不是左右对称居中 */
@@ -116,7 +155,7 @@ function keepMaxWidth(doc, root) {
   return n;
 }
 /** 按一个固定正文宽度转换：所有长度量成 px，供 mergeWidths 拟合 */
-async function convertAt(html, width, frame) {
+async function convertAt(html, width, frame, ctx) {
   const F = collector();
   const src = html.replace(/<head([^>]*)>/i, `<head$1><style data-wxc-tool>${NEUTRAL}</style>`);
   const doc = await loadFrame(frame, /<head/i.test(src) ? src : `<head><style data-wxc-tool>${NEUTRAL}</style></head>` + src, width);
@@ -127,6 +166,7 @@ async function convertAt(html, width, frame) {
   for (const el of doc.body.querySelectorAll('*')) if (isHtmlEl(el) || el.localName === 'svg') el.setAttribute(ID, 'e' + n++);
   const original = '<!DOCTYPE html>' + doc.documentElement.outerHTML;
   const S0 = measure(doc, true), S0v = measure(doc, false);
+  if (!ctx.web) ctx.web = webFamilies(doc);
 
   // 层叠：逐元素算出生效声明，伪元素同理
   const notes = { media: 0, fontface: 0, keyframes: 0, imports: 0, container: 0, unreadable: 0, nested: 0, otherPseudo: 0, dynamic: 0, badSel: 0 };
@@ -143,7 +183,7 @@ async function convertAt(html, width, frame) {
   const box = el => { const r = layoutBox(el), c = cs(el); return { pw: r.width - parseFloat(c.borderLeftWidth) - parseFloat(c.borderRightWidth), ph: r.height - parseFloat(c.borderTopWidth) - parseFloat(c.borderBottomWidth), c }; };
   const contentW = el => { const { pw, c } = box(el); return pw - parseFloat(c.paddingLeft) - parseFloat(c.paddingRight); };
   const envFor = (el, pseudoAbs) => ({
-    hit, rem, vw: win.innerWidth,
+    hit, rem, vw: win.innerWidth, fontRules: ctx.fontRules,
     cq: () => {
       for (let a = pseudoAbs !== undefined ? el : el.parentElement; a; a = a.parentElement) {
         if (cs(a).containerType !== 'normal') { const { ph, c } = box(a); return { w: contentW(a), h: ph - parseFloat(c.paddingTop) - parseFloat(c.paddingBottom) }; }
@@ -279,11 +319,21 @@ async function convertAt(html, width, frame) {
   cleanStructure(doc, root, F);
   keepShapes(doc, root, F);
   const ws = squashWhitespace(doc, root);
-  const nw = keepNoWrap(doc, root);
+  const nw = ctx.o.noWrap ? keepNoWrap(doc, root) : 0;
   cleanAttributes(root);
   fixReader();
   const { moved, stuck } = correctOffsets(doc, root, target, layers);
   annotateContainerWidths(doc, root);
+  // 轮廓放在最后：逐字位置要在最终布局里量；主宽度选单元，另一个宽度沿用同一组描述
+  let outlined = null;
+  if (!ctx.faces) ctx.faces = listFaces(doc, root).map(f => {
+    const web = !!webIn(f.stack, ctx.web);
+    return { ...f, web, note: web ? '网络字体：公众号加载不了，轮廓也只能画本机装的字体，所以留成文字，读者看到的是手机自带字体' : mobileNote(f.family, f.weight, ctx.fontRules) };
+  });
+  if (ctx.o.fontMode === 'svg') {
+    if (!ctx.units) ctx.units = selectUnits(doc, root, ctx.o, ctx.web);
+    outlined = await outline(doc, root, ctx.units, ctx, ctx.notes);
+  }
 
   root.querySelectorAll('[data-wxc-float],[data-wxc-pseudo]').forEach(e => { e.removeAttribute('data-wxc-float'); e.removeAttribute('data-wxc-pseudo'); });
   const preview = root.outerHTML;
@@ -306,7 +356,7 @@ async function convertAt(html, width, frame) {
   if (stuck.length) F.warn('位置偏差', `${stuck.length} 个行内元素没法用位移校正，位置可能有偏差`, stuck.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean));
   if (notes.media) F.info('@media', `${notes.media} 条 @media 规则已按 ${width}px 手机宽度取值`);
 
-  return { F, preview, original, targetV, n, moved };
+  return { F, preview, original, targetV, n, moved, outlined };
 }
 
 /** 预览/校验用文档：微信正文区默认样式 + 成品片段 */

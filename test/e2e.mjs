@@ -6,9 +6,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
+import { alignUnits } from './align.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ARTICLE = path.resolve(process.argv[2] || path.join(HERE, 'fixture'));
+const args = process.argv.slice(2);
+const SVG_MODE = args.includes('--svg');
+const ARTICLE = path.resolve(args.find(a => !a.startsWith('--')) || path.join(HERE, 'fixture'));
 const IMG = 48960, UI = 48961;
 const CHROME = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(p => fs.existsSync(p));
 const OUT = path.join(HERE, 'out');
@@ -44,11 +47,14 @@ try {
       get() { return d.get.call(this); },
     });
   });
+  await page.evaluateOnNewDocument(svg => {
+    if (window === window.top) localStorage.setItem('wxc.opts', JSON.stringify(svg ? { fontMode: 'svg' } : {}));
+  }, SVG_MODE);
   await page.goto(`http://127.0.0.1:${UI}/`);
   await page.waitForFunction(() => window.__wxc.result || document.querySelector('.banner.err:not([hidden])'), { timeout: 90000 });
   const r = await page.evaluate(() => {
     const s = window.__wxc;
-    return s.result ? { findings: s.result.findings, report: s.result.report, stats: s.result.stats, payload: s.result.payload, preview: s.result.preview, original: s.result.original, approx: s.result.debug.approx }
+    return s.result ? { findings: s.result.findings, report: s.result.report, stats: s.result.stats, payload: s.result.payload, preview: s.result.preview, original: s.result.original, approx: s.result.debug.approx, verdicts: s.result.debug.verdicts, tv: s.result.debug.tv, v: s.result.debug.v }
       : { error: document.getElementById('status').textContent };
   });
   console.log('\n文章 ' + ARTICLE);
@@ -114,6 +120,43 @@ try {
   const otherIds = new Set(r.stats.others.flatMap(([, b]) => b));
   const listed = new Set(r.findings.filter(f => f.title === '其他宽度').flatMap(f => f.ids));
   check([...otherIds].every(id => listed.has(id)), '其他宽度下逐元素一致，或偏差已列入检查结果', r.stats.others.map(([w, b]) => `${w}px:${b.length}(${b.slice(0, 5).join(',')})`).join(' ') || '无偏差');
+  if (SVG_MODE) {
+    const o = r.stats.outline;
+    check(o && o.kept > 0, 'SVG 模式下有大字转成轮廓', o ? `${o.kept}/${o.units} 段，${o.chars} 字，约 ${Math.round(o.bytes / 1024)} KB` : '无统计');
+    // 复制层：每个轮廓的透明文字连起来要等于它替换掉的原文
+    const lost = await page.evaluate(html => {
+      const d = document.createElement('div'); d.innerHTML = html;
+      const norm = s => s.replace(/[\s\u00a0]+/g, ' ').trim();
+      return [...d.querySelectorAll('svg[aria-label]')].filter(s => s.querySelector('path') && s.querySelector('text'))
+        .map(s => [norm(s.getAttribute('aria-label')), norm([...s.querySelectorAll('text')].map(t => t.textContent).join(''))])
+        .filter(([a, b]) => a !== b);
+    }, p);
+    check(!lost.length, '轮廓的透明复制层文字与原文一致', lost.slice(0, 2).map(([a, b]) => `${a} ≠ ${b}`).join(' | '));
+    // 测试稿里用 data-expect 标了哪些该转、哪些不该转
+    const wrong = await page.evaluate(html => {
+      const d = document.createElement('div'); d.innerHTML = html;
+      return [...d.querySelectorAll('[data-expect]')].filter(e => (e.dataset.expect === 'svg') !== !!e.querySelector('svg[data-wxc-unit]')).map(e => `${e.dataset.expect}: ${e.textContent.slice(0, 12)}`);
+    }, r.preview);
+    check(!wrong.length, '该转的转了、不该转的没转（data-expect）', wrong.join(' | '));
+    // 连字：轮廓里每个字形以一个绝对 M 开头，数出来要等于测试稿标的字形数
+    const glyphN = await page.evaluate(html => {
+      const d = document.createElement('div'); d.innerHTML = html;
+      return [...d.querySelectorAll('[data-expect-glyphs]')].map(e => [e.dataset.expectGlyphs,
+        [...e.querySelectorAll('svg[data-wxc-unit] path')].reduce((n, p) => n + (p.getAttribute('d').match(/M/g) || []).length, 0), e.textContent.slice(0, 16)]);
+    }, r.preview);
+    if (glyphN.length) check(glyphN.every(([a, b]) => +a === b), '连字按整词排版画出（字形数与 Chrome 一致）', glyphN.map(([a, b, t]) => `${t}: ${b}/${a}`).join(' | '));
+    for (const v of r.verdicts || []) if (!v.keep) console.log(`    未转 ${v.why}${v.side ? '（另一宽度）' : ''}${v.dev ? ' 偏差[宽,高,字x,基线,字号]=' + v.dev.join(',') : ''}${v.detail ? ' 挪位 ' + v.detail.join(' | ') : ''}  ${v.id}${v.run ? '（行内段）' : ''} ${v.text}`);
+  }
+  {
+    const tv = new Map(r.tv), worst = [0, 0, 0, 0, ''];
+    for (const [k, b] of r.v) {
+      const a = tv.get(k);
+      if (!a) continue;
+      const d = [Math.abs(a.x - b.x), Math.abs(a.y - b.y), Math.abs(a.w - b.w), Math.abs(a.h - b.h)];
+      d.forEach((v, i) => { if (v > worst[i]) { worst[i] = v; if (i === 1) worst[4] = k; } });
+    }
+    console.log(`    主宽度逐元素最大偏差 x ${worst[0].toFixed(3)} · y ${worst[1].toFixed(3)}（${worst[4]}）· w ${worst[2].toFixed(3)} · h ${worst[3].toFixed(3)} px`);
+  }
   console.log(`    正文 ${p.length} 字符，translate 校正 ${r.stats.moved} 处`);
   for (const a of r.approx || []) console.log('    近似 ' + a);
   fs.writeFileSync(path.join(OUT, 'payload.html'), p);
@@ -121,30 +164,52 @@ try {
   // 逐像素：原稿与成品各截一张整页图，在页面里用 canvas 比
   const width = await page.$eval('#width', e => +e.value);
   const prevHtml = await page.evaluate(async frag => (await import('./convert/index.js')).previewDoc(frag), r.preview);
-  const shot = async (html, w) => {
+  const shot = async (html, w, masks) => {
     const pg = await browser.newPage();
     await pg.setViewport({ width: w, height: 800 });
     await pg.setContent(html, { waitUntil: 'networkidle0' });
     await pg.evaluate(() => document.fonts.ready);
+    // 不比像素的区域：轮廓（另做逐单元对位检查），以及测试稿里标了 data-pixel-skip 的元素
+    if (masks) masks.push(...await pg.evaluate(() => [...document.querySelectorAll('svg[data-wxc-unit]')].map(s => s.parentElement)
+      .concat([...document.querySelectorAll('[data-pixel-skip]')])
+      .map(e => { const b = e.getBoundingClientRect(); return [b.left + scrollX, b.top + scrollY, b.width, b.height]; })));
     const b = await pg.screenshot({ fullPage: true, encoding: 'base64' });
     await pg.close();
     return b;
   };
+  if (SVG_MODE) {
+    // 轮廓区域单独量：逐个单元的亚像素偏移与墨量（3 倍像素密度，接近手机）。
+    // 偏移门槛：Chrome 把 svg 盒子对齐到整 CSS 像素而字形保留小数位置，横向差最多 0.5px；纵向文字基线也取整，两次取整最多差 1px
+    console.log('\n轮廓对位（3x）');
+    const al = await alignUnits(browser, r.original, prevHtml, width, 3);
+    const off = al.filter(a => Math.abs(a.dx) > 0.55 || Math.abs(a.dy) > 1.1 || a.ink < 0.85 || a.ink > 1.15);
+    if (al.length) check(!off.length, '每个轮廓与原稿字形对齐（横向 ≤0.55px、纵向 ≤1.1px、墨量差 ≤15%）',
+      off.length ? off.slice(0, 4).map(a => `#${a.unit} dx${a.dx} dy${a.dy} ink${a.ink}`).join(' | ')
+        : `${al.length} 段，最大 |dx| ${Math.max(...al.map(a => Math.abs(a.dx))).toFixed(2)}、|dy| ${Math.max(...al.map(a => Math.abs(a.dy))).toFixed(2)}，墨量 ${Math.min(...al.map(a => a.ink)).toFixed(2)}–${Math.max(...al.map(a => a.ink)).toFixed(2)}`);
+  }
   console.log('\n逐像素');
   for (const w of [width, 320, 460, 637]) {
   const sfx = w === width ? '' : '-' + w;
-  const [a, b] = [await shot(r.original, w), await shot(prevHtml, w)];
+  const masks = [];
+  const [a, b] = [await shot(r.original, w), await shot(prevHtml, w, masks)];
   fs.writeFileSync(path.join(OUT, `original${sfx}.png`), Buffer.from(a, 'base64'));
   fs.writeFileSync(path.join(OUT, `converted${sfx}.png`), Buffer.from(b, 'base64'));
-  const diff = await page.evaluate(async (a, b) => {
+  const diff = await page.evaluate(async (a, b, masks) => {
     const load = s => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = 'data:image/png;base64,' + s; });
     const [ia, ib] = await Promise.all([load(a), load(b)]);
     const w = Math.min(ia.width, ib.width), h = Math.min(ia.height, ib.height);
     const px = img => { const c = new OffscreenCanvas(w, h); const x = c.getContext('2d'); x.drawImage(img, 0, 0); return x.getImageData(0, 0, w, h).data; };
     const da = px(ia), db = px(ib);
     const c = new OffscreenCanvas(w, h), x = c.getContext('2d'), out = x.createImageData(w, h);
-    let bad = 0;
+    // 屏蔽区域外扩 3px（容纳超出盒子的字形墨迹），不参与逐像素比较，画成浅蓝
+    const masked = new Uint8Array(w * h);
+    for (const [mx, my, mw, mh] of masks || []) {
+      for (let y = Math.max(0, Math.floor(my - 3)); y < Math.min(h, Math.ceil(my + mh + 3)); y++)
+        for (let X = Math.max(0, Math.floor(mx - 3)); X < Math.min(w, Math.ceil(mx + mw + 3)); X++) masked[y * w + X] = 1;
+    }
+    let bad = 0, area = 0;
     for (let i = 0; i < da.length; i += 4) {
+      if (masked[i / 4]) { area++; out.data[i] = 200; out.data[i + 1] = 225; out.data[i + 2] = 245; out.data[i + 3] = 255; continue; }
       const d = Math.max(Math.abs(da[i] - db[i]), Math.abs(da[i + 1] - db[i + 1]), Math.abs(da[i + 2] - db[i + 2]));
       const hit = d > 48; if (hit) bad++;
       out.data[i] = hit ? 255 : da[i] * 0.3 + 178; out.data[i + 1] = hit ? 0 : da[i + 1] * 0.3 + 178; out.data[i + 2] = hit ? 0 : da[i + 2] * 0.3 + 178; out.data[i + 3] = 255;
@@ -153,13 +218,33 @@ try {
     const blob = await c.convertToBlob();
     const buf = new Uint8Array(await blob.arrayBuffer());
     let s = ''; for (const v of buf) s += String.fromCharCode(v);
-    return { bad, total: w * h, ha: ia.height, hb: ib.height, png: btoa(s) };
-  }, a, b);
+    return { bad, area, total: w * h, ha: ia.height, hb: ib.height, png: btoa(s) };
+  }, a, b, masks);
   fs.writeFileSync(path.join(OUT, `diff${sfx}.png`), Buffer.from(diff.png, 'base64'));
-  const ratio = diff.bad / diff.total;
+  const ratio = diff.bad / (diff.total - diff.area);
   check(Math.abs(diff.ha - diff.hb) <= 2, `${w}px 页面高度一致`, `${diff.ha} vs ${diff.hb}`);
   // 主宽度要求 0.3%；其他宽度下图片重采样、斜排文字的亚像素位置不同，放宽到 0.5%（逐元素比对另有 1.5px 硬门槛）
-  check(ratio < (w === width ? 0.003 : 0.005), `${w}px 差异像素 < ${w === width ? '0.3' : '0.5'}%`, `${(ratio * 100).toFixed(3)}%（test/out/diff${sfx}.png）`);
+  check(ratio < (w === width ? 0.003 : 0.005), `${w}px 差异像素 < ${w === width ? '0.3' : '0.5'}%` + (diff.area ? `（不含屏蔽区域 ${(diff.area / diff.total * 100).toFixed(1)}%）` : ''),
+    `${(ratio * 100).toFixed(3)}%（test/out/diff${sfx}.png）`);
+  }
+
+  if (SVG_MODE) {
+    // 设置面板：每套字一行；把一套已转的字改成"保留文字"，重新转换后这套字一个也不转（放在逐像素之后：会触发重新转换）
+    console.log('\n字体设置面板');
+    const rows = await page.$$eval('#faceList fieldset', fs => fs.length);
+    const fonts = await page.evaluate(() => window.__wxc.result.fonts);
+    check(rows === fonts.length && rows > 0, '每套字列成一行', `${rows} 行：` + fonts.map(f => `${f.family} ${f.weight}（${f.chars} 字，已转 ${f.outlined}）`).join('、'));
+    const target = fonts.findIndex(f => f.outlined > 0);
+    if (target >= 0) {
+      const key = fonts[target].key, before = r.stats.outline.chars;
+      await page.click(`#faceList fieldset:nth-child(${target + 1}) input[value="text"]`);
+      const after = await page.waitForFunction(k => {
+        const s = window.__wxc;
+        const f = !s.busy && s.result && s.result.fonts.find(x => x.key === k);
+        return f && f.outlined === 0 && JSON.parse(localStorage.getItem('wxc.opts')).faces[k] === 'text' && s.result.stats.outline;
+      }, { timeout: 180000 }, key).then(h => h.jsonValue()).catch(() => null);
+      check(!!after && after.chars < before, '改成"保留文字"后重新转换，这套字不再转轮廓', after ? `轮廓字数 ${before} → ${after.chars}` : '超时或没生效');
+    }
   }
 
   console.log('\n端口安全');

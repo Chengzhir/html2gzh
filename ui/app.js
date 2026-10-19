@@ -1,4 +1,5 @@
 import { convert, previewDoc } from './convert/index.js';
+import { DEFAULT_OPTS, parseRules, faceDefault } from './convert/fonts.js';
 
 const $ = id => document.getElementById(id);
 const ORIGIN = location.origin;
@@ -138,9 +139,103 @@ function banner(text, err) {
 }
 const width = () => +$('width').value;
 
+/* ---------- 字体设置 ---------- */
+// 只存和默认值不同的项：以后默认规则更新，没改过的人自动用上新的
+const OPTS_KEY = 'wxc.opts';
+function loadOpts() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(OPTS_KEY) || '{}') || {}; } catch { /* 坏数据当没存 */ }
+  const o = { ...DEFAULT_OPTS };
+  for (const k of Object.keys(DEFAULT_OPTS)) if (k in saved && typeof saved[k] === typeof DEFAULT_OPTS[k]) o[k] = saved[k];
+  return o;
+}
+let opts = loadOpts();
+function saveOpts(patch) {
+  opts = { ...opts, ...patch };
+  const diff = Object.fromEntries(Object.entries(opts).filter(([k, v]) => v !== DEFAULT_OPTS[k]));
+  localStorage.setItem(OPTS_KEY, JSON.stringify(diff));
+  renderOpts();
+  rerun();
+}
+function renderOpts() {
+  for (const r of document.querySelectorAll('input[name="fontMode"]')) r.checked = r.value === opts.fontMode;
+  $('svgOpts').hidden = opts.fontMode !== 'svg';
+  if (document.activeElement !== $('svgMin')) $('svgMin').value = opts.svgMin;
+  $('svgCopy').checked = opts.svgCopy;
+  renderFaces();
+  $('noWrap').checked = opts.noWrap;
+  if (document.activeElement !== $('rules')) $('rules').value = opts.rules;
+  const { rules, bad } = parseRules(opts.rules);
+  $('rulesNote').textContent = (opts.rules === DEFAULT_OPTS.rules ? '默认规则' : '已修改') + `，${rules.length} 条` + (bad.length ? `；第 ${bad.join('、')} 行格式不对，已跳过` : '');
+}
+/* 每套字一行：样例用原字体画、字数与字号范围、手机上会换成什么、三档选择。只在字体集合变了时重建，免得抢走键盘焦点 */
+const PICKS = [['all', '全部转轮廓'], ['big', '只转大字'], ['text', '保留文字']];
+let faceSig = '';
+function renderFaces() {
+  const list = $('faceList');
+  const fonts = state.result && state.result.fonts || [];
+  if (!fonts.length) { faceSig = ''; list.innerHTML = '<p class="muted small">载入文章后列出。</p>'; return; }
+  const sig = fonts.map(f => f.key + (f.web ? '|web' : '')).join('\n');
+  if (sig !== faceSig) {
+    faceSig = sig; list.textContent = '';
+    fonts.forEach((f, i) => {
+      const fs = document.createElement('fieldset'); fs.dataset.key = f.key;
+      const lg = document.createElement('legend'); lg.className = 'sr-only';
+      // 样例放在 legend 外：legend 按内容定宽，省略号截不住长样例
+      const sm = document.createElement('p'); sm.className = 'sample'; sm.setAttribute('aria-hidden', 'true');
+      sm.style.setProperty('font-family', f.stack);
+      sm.style.setProperty('font-weight', f.weight);
+      sm.style.setProperty('font-style', f.italic ? 'italic' : 'normal');
+      sm.style.setProperty('font-stretch', f.stretch);
+      sm.textContent = f.sample;
+      lg.textContent = `${f.family} ${f.weight}${f.italic ? ' 斜体' : ''}`;
+      const meta = document.createElement('p'); meta.className = 'meta';
+      const picks = document.createElement('div'); picks.className = 'picks';
+      // 网络字体只能留成文字，不给选项
+      if (!f.web) for (const [v, label] of PICKS) {
+        const lab = document.createElement('label');
+        const r = document.createElement('input'); r.type = 'radio'; r.name = 'face' + i; r.value = v;
+        r.onchange = () => {
+          const faces = { ...opts.faces };
+          if (v === faceDefault(f.family)) delete faces[f.key]; else faces[f.key] = v;
+          saveOpts({ faces });
+        };
+        lab.append(r, document.createTextNode(label));
+        picks.appendChild(lab);
+      }
+      fs.append(lg, sm, meta, picks);
+      list.appendChild(fs);
+    });
+  }
+  for (const fs of list.children) {
+    const f = fonts.find(x => x.key === fs.dataset.key);
+    if (!f) continue;
+    const pick = opts.faces[f.key] || faceDefault(f.family);
+    fs.classList.toggle('changed', f.key in opts.faces);
+    for (const r of fs.querySelectorAll('input')) r.checked = r.value === pick;
+    const done = opts.fontMode === 'svg' && state.result.stats.outline ? `，已转 ${f.outlined} 字` : '';
+    fs.querySelector('.meta').textContent = `${f.family} ${f.weight}${f.italic ? ' 斜体' : ''} · ${f.chars} 字 · ${f.min === f.max ? f.min : f.min + '–' + f.max}px${done}。${f.note}`;
+  }
+}
+const debounce = (fn, ms) => { let t = 0; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+for (const r of document.querySelectorAll('input[name="fontMode"]')) r.onchange = () => saveOpts({ fontMode: r.value });
+$('svgMin').oninput = debounce(() => { const v = parseFloat($('svgMin').value); if (v >= 6 && v <= 200) saveOpts({ svgMin: v }); }, 500);
+$('svgMin').onblur = () => renderOpts();
+$('facesReset').onclick = () => saveOpts({ faces: {} });
+$('svgCopy').onchange = () => saveOpts({ svgCopy: $('svgCopy').checked });
+$('noWrap').onchange = () => saveOpts({ noWrap: $('noWrap').checked });
+$('rules').oninput = debounce(() => saveOpts({ rules: $('rules').value }), 700);
+$('rulesReset').onclick = () => { $('rules').value = DEFAULT_OPTS.rules; saveOpts({ rules: DEFAULT_OPTS.rules }); };
+renderOpts();
+
+const glyphs = body => api('/api/glyphs', body);
+let again = false;
+/** 转换进行中又改了设置：等这一轮结束再按新设置转一次 */
+function rerun() { if (state.busy) again = true; else run(); }
+
 async function run() {
   if (!state.src || state.busy) return;
-  state.busy = true; state.copiedAt = null;
+  state.busy = true; state.copiedAt = null; again = false;
   $('copy').disabled = true; $('fetchLine').hidden = true;
   banner('转换中…');
   try {
@@ -155,12 +250,14 @@ async function run() {
     }
     showCurrent(label, where);
     const prep = await prepare(html, entry);
-    const res = await convert(prep.html, { width: width(), frame: $('scratch'), verifyFrame: $('paneB') });
+    banner(opts.fontMode === 'svg' ? '转换中…（大字转轮廓，第一次要启动字体服务，稍慢）' : '转换中…');
+    const res = await convert(prep.html, { width: width(), frame: $('scratch'), verifyFrame: $('paneB'), opts, glyphs });
     state.result = { ...res, report: prep.report };
     for (const f of [$("paneA"), $("paneB")]) { f.style.width = width() + "px"; f.style.height = ""; }
     $('paneA').srcdoc = res.original;
     $('panes').hidden = false; $('empty').hidden = true;
     renderChecks();
+    renderFaces();
     banner('');
   } catch (e) {
     console.error(e);
@@ -168,6 +265,7 @@ async function run() {
   } finally {
     state.busy = false;
     refreshCopy();
+    if (again) run();
   }
 }
 
