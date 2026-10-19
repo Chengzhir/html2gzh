@@ -7,6 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { handleGlyphs } from './lib/glyphs.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(HERE, 'ui');
@@ -212,6 +213,12 @@ async function uiRoute(req, res) {
     const ext = '.' + String(url.searchParams.get('ext') || '').toLowerCase().replace(/^\./, '');
     if (!ASSET_EXT.has(ext)) return json(res, 400, { error: '不支持的文件类型 ' + ext });
     return json(res, 200, { id: register(body, ext, url.searchParams.get('name') || 'blob' + ext) });
+  }
+  if (p === '/api/glyphs') {
+    let req2;
+    try { req2 = j(); } catch { return json(res, 400, { error: '请求不是 JSON' }); }
+    try { return json(res, 200, await handleGlyphs(req2)); }
+    catch (e) { return json(res, 400, { error: e.message }); }
   }
   if (p === '/api/recheck') { await checkHosts(); return json(res, 200, { ok: true }); }
   if (p === '/api/custom') {
