@@ -62,7 +62,9 @@ export function convertPositions(doc, root, findings) {
     // 正好抵消就会剩出占位，把同一行后面的浮动推开。纵向照旧精确抵消（改成大负值会动到 clear 的落点）
     s.setProperty('margin', '0');
     s.setProperty(p.side === 'left' ? 'margin-right' : 'margin-left', -FAR + 'px');
-    s.setProperty('margin-bottom', -round(p.h) + 'px');
+    // 多抵消 1/16px：负外边距在布局里向零截断到 1/64px，浮动自身的高度在别的宽度下又随行高取整，正好抵消常会剩出
+    // 一两个 1/64px 的外边距盒，所在容器是 BFC（如 flex 项）时被它撑高。clear 的落点至多因此差 1/16px
+    s.setProperty('margin-bottom', -round(p.h + 1 / 16) + 'px');
     el.setAttribute('data-wxc-float', '');
     // 在 flex/grid/table 容器里 float 不生效：挪到容器后面，并补上挪动后丢失的继承值
     let C = el.parentElement;
@@ -127,19 +129,34 @@ function flexify(doc, P) {
   const pr = before[0];
   let cursor = pr.top + parseFloat(pc.borderTopWidth) + parseFloat(pc.paddingTop);
   const bottom = pr.bottom - parseFloat(pc.borderBottomWidth) - parseFloat(pc.paddingBottom);
+  // 量出的间距已按 1/64px 截断，原样写回会再截断一次、每个块少 1/64px，累积起来下文整像素错位。
+  // 所以先按计算值算出折叠后的外边距，和量出的间距相差不到 1/64px 就写它，布局截断后正好落回原位
+  const margins = kids.map(k => { const c = win.getComputedStyle(k); return [parseFloat(c.marginTop), parseFloat(c.marginBottom)]; });
+  const collapse = (a, b) => Math.max(a, b, 0) + Math.min(a, b, 0);
+  const floatH = kids.map(k => k.hasAttribute('data-wxc-float') ? layoutRect(doc, k).height : 0);
   P.style.setProperty('display', 'flex');
   P.style.setProperty('flex-direction', 'column');
   P.style.setProperty('align-items', 'stretch');
-  let last = null;
+  let last = null, prev = -1;
   kids.forEach((k, i) => {
     const r = before[i + (next ? 2 : 1)];
-    if (k.hasAttribute('data-wxc-float')) { k.style.setProperty('margin-top', '0px'); return; }
-    k.style.setProperty('margin-top', round(r.top - cursor) + 'px');
+    if (k.hasAttribute('data-wxc-float')) {
+      // flex 里浮动不生效，它就是个普通弹性项：下外边距必须正好抵消自身高度才不占位，多抵消一点都会把后面的项往上拉。
+      // 多写 1/128px，截断到 1/64px 后正好等于高度
+      k.style.setProperty('margin-top', '0px');
+      k.style.setProperty('margin-bottom', -round(floatH[i] + 1 / 128) + 'px');
+      return;
+    }
+    const gap = r.top - cursor, own = prev < 0 ? margins[i][0] : collapse(margins[prev][1], margins[i][0]);
+    k.style.setProperty('margin-top', round(Math.abs(gap - own) < 1 / 64 ? own : gap) + 'px');
     k.style.setProperty('margin-bottom', '0px');
     k.style.setProperty('flex', 'none');
-    cursor = r.bottom; last = k;
+    cursor = r.bottom; last = k; prev = i;
   });
-  if (last) last.style.setProperty('margin-bottom', round(bottom - cursor) + 'px');
+  if (last) {
+    const gap = bottom - cursor, own = margins[prev][1];
+    last.style.setProperty('margin-bottom', round(Math.abs(gap - own) < 1 / 64 ? own : gap) + 'px');
+  }
   const after = snap();
   const ok = after.every((r, i) => !r || Math.abs(r.top - before[i].top) < 0.75 && Math.abs(r.left - before[i].left) < 0.75
     && Math.abs(r.width - before[i].width) < 0.75 && Math.abs(r.height - before[i].height) < 0.75);
