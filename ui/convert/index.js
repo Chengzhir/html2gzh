@@ -5,22 +5,11 @@ import { cleanStructure, keepShapes, squashWhitespace, keepNoWrap, cleanAttribut
 import { mergeWidths, annotateContainerWidths, stripTool, markIgnoreWidth } from './responsive.js';
 import { DEFAULT_OPTS, parseRules, mobileNote } from './fonts.js';
 import { selectUnits, outline, decide, finalize, listFaces, webFamilies, webIn } from './outline.js';
+import { READER_CSS, NEUTRAL, previewDoc, readerImages, pinImages } from './reader.js';
 
-/** 微信手机端正文区的默认样式（抓自线上文章页 CSS），预览与校验都在它下面进行 */
-export const READER_CSS = `.rich_media_content{color:rgba(0,0,0,.9);font-size:17px;overflow:hidden;text-align:justify;position:relative;z-index:0;line-height:1.6;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:.544px;hyphens:auto;-webkit-hyphens:auto;text-underline-position:under;text-underline-offset:1.6px;text-decoration-skip-ink:none}
-.rich_media_content *{max-width:100%!important;box-sizing:border-box!important;word-wrap:break-word!important}
-.rich_media_content p{clear:both;min-height:1em}
-.rich_media_content img{height:auto!important}
-.rich_media_content em{font-style:italic}
-.rich_media_content table{table-layout:fixed!important}
-.rich_media_content td,.rich_media_content th{width:auto!important}
-.rich_media_content blockquote{color:rgba(0,0,0,.55)}
-.rich_media_content a{color:#576b95}
-.rich_media_content mark{color:#000}`;
 /** 阅读页直接给这几个标签上色、不从父级继承（在线上文章正文里逐个标签实测得出）：转换时把继承到的颜色写到它们自己身上。
  *  blockquote 不在此列：预览/发表时它身上的 color 会被删，所以 structure.js 直接把它改成 section */
 const SELF_COLORED = 'a,mark';
-const NEUTRAL = `html,body{margin:0!important;padding:0!important;border:0!important}html{scrollbar-width:none}html::-webkit-scrollbar{display:none}`;
 
 function collector() {
   const list = [];
@@ -41,7 +30,7 @@ const FLOW = /^(block|flow-root|list-item)$/;
 export async function convert(html, { width, frame, verifyFrame, opts = {}, glyphs = null }) {
   const o = { ...DEFAULT_OPTS, ...opts };
   const { rules: fontRules, bad: badRules } = parseRules(o.rules);
-  const ctx = { o, fontRules, glyphs, units: null, faces: null, web: null, notes: { miss: new Map(), server: '' } };
+  const ctx = { o, fontRules, glyphs, units: null, faces: null, web: null, pins: new Map(), notes: { miss: new Map(), server: '' } };
   const wb = width < 400 ? width + 64 : width - 64;
   const A = await convertAt(html, width, frame, ctx);
   const B = await convertAt(html, wb, frame, ctx);
@@ -73,7 +62,9 @@ export async function convert(html, { width, frame, verifyFrame, opts = {}, glyp
   let visualBad = [], verified = 0, V = new Map();
   for (const w of widths) {
     const target = w === width ? A.targetV : measure(await loadFrame(frame, A.original, w), false);
-    V = measure(await loadFrame(verifyFrame, previewDoc(merged), w), false);
+    const vd = await loadFrame(verifyFrame, previewDoc(merged), w);
+    readerImages(vd);
+    V = measure(vd, false);
     const bad = diffBoxes(new Map([...target].filter(([k]) => V.has(k))), V, 1.5);
     if (w === width) { visualBad = bad; verified = V.size; } else if (bad.length) others.push([w, bad]);
   }
@@ -323,6 +314,7 @@ async function convertAt(html, width, frame, ctx) {
   cleanAttributes(root);
   fixReader();
   const { moved, stuck } = correctOffsets(doc, root, target, layers);
+  const pinned = pinImages(doc, root, ctx.pins);
   annotateContainerWidths(doc, root);
   // 轮廓放在最后：逐字位置要在最终布局里量；主宽度选单元，另一个宽度沿用同一组描述
   let outlined = null;
@@ -341,6 +333,7 @@ async function convertAt(html, width, frame, ctx) {
   if (pn) F.fixed('伪元素', `${pn} 个 ::before/::after 改成了真实元素`);
   if (capped) F.fixed('最大宽度', `${capped} 处 max-width 改写成 width（微信会把所有 max-width 强制成 100%）`);
   if (bqFixed) F.fixed('文字颜色', `${bqFixed} 个链接/mark 补上了文字颜色（阅读页给这几种标签直接上色、不继承父级，深底浅字会变色）`);
+  if (pinned) F.fixed('图片尺寸', `${pinned} 张图片保住了原尺寸：阅读页会按原图宽高比重算图片高度，带边框/内边距、被拉伸或裁切的图会变形（已写 min-height = max-height，宽度不是定值的改成定宽）`, [...root.querySelectorAll('img')].filter(i => { const p = ctx.pins.get(i.getAttribute(ID)); return p && (p.w || p.h); }));
   if (forcedN) F.fixed('微信默认样式', `${forcedN} 处被微信正文默认样式（max-width、段落最小高度等）顶掉的属性已补回`);
   if (nw) F.fixed('不换行', `${nw} 处 nowrap 文字改用不换行空格和连接符禁止折行（公众号会删掉 white-space）`);
   if (hit.font) F.fixed('手机字体', `${hit.font} 处字体栈补上了 iOS/安卓自带的近似字体（公众号用不了网络字体，读者手机上没有电脑字体）`);
@@ -357,11 +350,6 @@ async function convertAt(html, width, frame, ctx) {
   if (notes.media) F.info('@media', `${notes.media} 条 @media 规则已按 ${width}px 手机宽度取值`);
 
   return { F, preview, original, targetV, n, moved, outlined };
-}
-
-/** 预览/校验用文档：微信正文区默认样式 + 成品片段 */
-export function previewDoc(fragment, extraCss = '') {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${NEUTRAL}${READER_CSS}${extraCss}</style></head><body><div class="rich_media_content">${fragment}</div></body></html>`;
 }
 
 /** 伪元素 content 计算值 → 文本；counter()/url() 无法转换返回 null */

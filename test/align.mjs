@@ -5,13 +5,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
+import { previewDoc, readerImages } from '../ui/convert/reader.js';
 
 const VIEW_H = 900;
-const load = async (browser, html, width, dpr) => {
+const load = async (browser, html, width, dpr, reader) => {
   const pg = await browser.newPage();
   await pg.setViewport({ width, height: VIEW_H, deviceScaleFactor: dpr });
   await pg.setContent(html, { waitUntil: 'networkidle0' });
   await pg.evaluate(() => document.fonts.ready);
+  if (reader) await pg.evaluate(`(${readerImages})(document, true)`);
   return pg;
 };
 // 整页撑成一个超高视口再裁图，超过 Chrome 的截图尺寸上限（约 16384 设备像素）会截错位置；改成逐个滚到视口里截
@@ -24,7 +26,7 @@ async function grab(pg, b) {
 
 /** → [{ unit, dx, dy, ink }]，dx/dy 是成品相对原稿的偏移（CSS px），ink 是成品墨量 / 原稿墨量 */
 export async function alignUnits(browser, original, preview, width, dpr) {
-  const pc = await load(browser, preview, width, dpr);
+  const pc = await load(browser, preview, width, dpr, true);
   // svg 只占第一行，后面几行的字画在它的溢出区：取它所在块的框（文档坐标）
   const boxes = await pc.evaluate(() => [...document.querySelectorAll('svg[data-wxc-unit]')].map(s => { const b = s.parentElement.getBoundingClientRect(); return { i: +s.dataset.wxcUnit, x: b.left + scrollX, y: b.top + scrollY, w: b.width, h: b.height }; }));
   const C = [];
@@ -81,7 +83,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     await ui.evaluateOnNewDocument(() => { if (window === window.top) localStorage.setItem('wxc.opts', JSON.stringify({ fontMode: 'svg' })); });
     await ui.goto(`http://127.0.0.1:${UI}/`);
     await ui.waitForFunction(() => window.__wxc.result, { timeout: 180000 });
-    const r = await ui.evaluate(async () => ({ original: window.__wxc.result.original, preview: (await import('./convert/index.js')).previewDoc(window.__wxc.result.preview), verdicts: window.__wxc.result.debug.verdicts }));
+    const r = await ui.evaluate(() => ({ original: window.__wxc.result.original, preview: window.__wxc.result.preview, verdicts: window.__wxc.result.debug.verdicts }));
+    r.preview = previewDoc(r.preview);
     const rows = [];
     for (const dpr of DPRS.length ? DPRS : [1, 3]) for (const a of await alignUnits(browser, r.original, r.preview, 335, dpr)) rows.push({ dpr, ...a, text: (r.verdicts[a.unit] || {}).text });
     console.table(rows);

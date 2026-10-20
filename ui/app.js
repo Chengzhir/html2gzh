@@ -1,4 +1,4 @@
-import { convert, previewDoc } from './convert/index.js';
+import { convert } from './convert/index.js';
 import { DEFAULT_OPTS, parseRules, faceDefault } from './convert/fonts.js';
 
 const $ = id => document.getElementById(id);

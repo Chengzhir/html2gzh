@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { alignUnits } from './align.mjs';
+import { previewDoc, readerImages } from '../ui/convert/reader.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -77,7 +78,7 @@ try {
   check(imp.every(k => /^(max-width|box-sizing|height)$/.test(k)), '!important 只用在微信强制的属性上', `${imp.length} 处 ${[...new Set(imp)].join(',')}`);
   check(/^<section data-ignore-width="" style="[^"]*container-type: inline-size/.test(p), '根容器是查询容器且豁免宽度检测');
   // 检测器的段落级溢出只看段落节点自身属性：在 375/585/677 屏宽（正文 335/545/637）下逐个复核
-  const prev = await page.evaluate(async frag => (await import('./convert/index.js')).previewDoc(frag), r.preview);
+  const prev = previewDoc(r.preview);
   const unexempt = [];
   for (const w of [335, 545, 637]) {
     const pg = await browser.newPage();
@@ -163,12 +164,14 @@ try {
 
   // 逐像素：原稿与成品各截一张整页图，在页面里用 canvas 比
   const width = await page.$eval('#width', e => +e.value);
-  const prevHtml = await page.evaluate(async frag => (await import('./convert/index.js')).previewDoc(frag), r.preview);
+  const prevHtml = previewDoc(r.preview);
+  // masks 只在截成品时传：成品要先跑一遍阅读页的图片尺寸脚本（小数宽度版，见 readerImages 的 exact）
   const shot = async (html, w, masks) => {
     const pg = await browser.newPage();
     await pg.setViewport({ width: w, height: 800 });
     await pg.setContent(html, { waitUntil: 'networkidle0' });
     await pg.evaluate(() => document.fonts.ready);
+    if (masks) await pg.evaluate(`(${readerImages})(document, true)`);
     // 不比像素的区域：轮廓（另做逐单元对位检查），以及测试稿里标了 data-pixel-skip 的元素
     if (masks) masks.push(...await pg.evaluate(() => [...document.querySelectorAll('svg[data-wxc-unit]')].map(s => s.parentElement)
       .concat([...document.querySelectorAll('[data-pixel-skip]')])
