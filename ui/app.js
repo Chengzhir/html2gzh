@@ -73,15 +73,16 @@ async function readLocalText(rel) {
 async function prepare(html, entryRel) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const baseDir = dirOf(entryRel);
-  const report = { missing: [], remote: 0, dataUri: 0, svgImage: 0, local: 0 };
+  // missing 只放 <img> 的图（粘贴后变错误卡片、草稿存不了）；样式表、CSS 与 svg <image> 引用的文件缺了只影响效果
+  const report = { missing: [], sheets: [], refs: [], remote: 0, dataUri: 0, svgImage: 0, local: 0 };
 
   const sheets = [];
   for (const link of [...doc.querySelectorAll('link[rel~="stylesheet"][href]')]) {
     const href = link.getAttribute('href');
-    if (!isLocalRef(href)) { link.remove(); report.missing.push(href + '（站外样式表，未载入）'); continue; }
+    if (!isLocalRef(href)) { link.remove(); report.sheets.push(href); continue; }
     const rel = joinRel(baseDir, cleanRef(href));
     const text = await readLocalText(rel).catch(() => null);
-    if (text == null) { report.missing.push(href); link.remove(); continue; }
+    if (text == null) { report.sheets.push(href); link.remove(); continue; }
     const st = doc.createElement('style');
     st.textContent = text; st.dataset.base = dirOf(rel);
     link.replaceWith(st); sheets.push(st);
@@ -107,24 +108,24 @@ async function prepare(html, entryRel) {
   for (const d of datas) dataIds.set(d, await uploadDataUri(d).catch(() => null));
 
   // 第二遍：改写
-  const swap = (ref, base) => {
+  const swap = (ref, base, lost = report.missing) => {
     const t = (ref || '').trim();
-    if (/^data:/i.test(t)) { const id = dataIds.get(t); if (id) { report.dataUri++; return ORIGIN + '/a/' + id; } report.missing.push('无法识别的 data: 图片'); return t; }
+    if (/^data:/i.test(t)) { const id = dataIds.get(t); if (id) { report.dataUri++; return ORIGIN + '/a/' + id; } lost.push('无法识别的 data: 图片'); return t; }
     if (/^https?:/i.test(t)) { report.remote++; return t; }
     if (!isLocalRef(t)) return t;
     const rel = joinRel(base, cleanRef(t));
     const id = ids.get(rel);
-    if (!id) { report.missing.push(rel); return t; }
+    if (!id) { lost.push(rel); return t; }
     report.local++;
     return ORIGIN + '/a/' + id;
   };
-  const swapCss = (css, base) => css.replace(URL_RE, (m, q, u) => `url("${swap(u, base)}")`);
+  const swapCss = (css, base) => css.replace(URL_RE, (m, q, u) => `url("${swap(u, base, report.refs)}")`);
   doc.querySelectorAll('img').forEach(e => {
     e.removeAttribute('srcset'); e.removeAttribute('loading');
     if (e.hasAttribute('src')) e.setAttribute('src', swap(e.getAttribute('src'), baseDir));
   });
   doc.querySelectorAll('image').forEach(e => {
-    for (const a of ['href', 'xlink:href']) if (e.hasAttribute(a)) { e.setAttribute(a, swap(e.getAttribute(a), baseDir)); report.svgImage++; }
+    for (const a of ['href', 'xlink:href']) if (e.hasAttribute(a)) { e.setAttribute(a, swap(e.getAttribute(a), baseDir, report.refs)); report.svgImage++; }
   });
   doc.querySelectorAll('[style]').forEach(e => e.setAttribute('style', swapCss(e.getAttribute('style'), baseDir)));
   // 打标记：转换时只认文章自己的样式表，浏览器扩展往 iframe 里注入的样式不算
@@ -213,8 +214,12 @@ function renderFaces() {
     const pick = opts.faces[f.key] || faceDefault(f.family);
     fs.classList.toggle('changed', f.key in opts.faces);
     for (const r of fs.querySelectorAll('input')) r.checked = r.value === pick;
-    const done = opts.fontMode === 'svg' && state.result.stats.outline ? `，已转 ${f.outlined} 字` : '';
-    fs.querySelector('.meta').textContent = `${f.family} ${f.weight}${f.italic ? ' 斜体' : ''} · ${f.chars} 字 · ${f.min === f.max ? f.min : f.min + '–' + f.max}px${done}。${f.note}`;
+    const svg = opts.fontMode === 'svg' && state.result.stats.outline;
+    const all = svg && f.outlined >= f.chars;
+    const done = all ? '，已全部转成轮廓' : svg && f.outlined ? `，其中 ${f.outlined} 字已转轮廓` : '';
+    const part = svg && f.outlined && !all;
+    const note = all ? '' : (part ? '；其余的字' : '。') + f.note;
+    fs.querySelector('.meta').textContent = `${f.family} ${f.weight}${f.italic ? ' 斜体' : ''} · ${f.chars} 字 · ${f.min === f.max ? f.min : f.min + '–' + f.max}px${done}${note}`;
   }
 }
 const debounce = (fn, ms) => { let t = 0; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
@@ -246,11 +251,12 @@ async function run() {
       label = entry; where = j.file;
     } else {
       entry = state.src.entry; html = await state.src.map.get(entry).text();
-      label = entry.split('/').pop(); where = '拖入的文件夹 ' + state.src.name + '（改了原文件要重新拖入）';
+      label = entry.split('/').pop();
+      where = (state.src.name ? `拖入的文件夹 ${state.src.name}` : `拖入的 ${state.src.map.size} 个文件`) + '（改了原文件要重新拖入）';
     }
     showCurrent(label, where);
     const prep = await prepare(html, entry);
-    banner(opts.fontMode === 'svg' ? '转换中…（大字转轮廓，第一次要启动字体服务，稍慢）' : '转换中…');
+    banner(opts.fontMode === 'svg' ? '转换中…（大字转轮廓第一次要启动字体服务，稍慢）' : '转换中…');
     const res = await convert(prep.html, { width: width(), frame: $('scratch'), verifyFrame: $('paneB'), opts, glyphs });
     state.result = { ...res, report: prep.report };
     for (const f of [$("paneA"), $("paneB")]) { f.style.width = width() + "px"; f.style.height = ""; }
@@ -278,21 +284,39 @@ function showCurrent(name, where) {
 function renderChecks() {
   const { findings, report, stats } = state.result;
   const items = [...findings];
-  if (report.missing.length) items.unshift({ level: 'error', title: '图片缺失', text: `${report.missing.length} 个文件找不到：${report.missing.slice(0, 4).join('、')}${report.missing.length > 4 ? ' 等' : ''}。粘贴后会变成错误卡片，草稿存不了`, ids: [] });
+  const few = a => a.slice(0, 4).join('、') + (a.length > 4 ? ' 等' : '');
+  const redo = state.src && state.src.kind === 'files' ? '重新拖入文件夹' : '点“重新转换”';
+  if (report.missing.length) items.unshift({ level: 'error', title: '图片缺失', text: `${report.missing.length} 张图片找不到：${few(report.missing)}。粘贴后会变成错误卡片，草稿存不了；把图片放回文章文件夹后${redo}`, ids: [] });
+  if (report.sheets.length) items.push({ level: 'warn', title: '样式表', text: `${report.sheets.length} 个样式表没有载入（站外的不会载入，本地的没找到）：${few(report.sheets)}。两边预览里都没有它的效果`, ids: [] });
+  if (report.refs.length) items.push({ level: 'warn', title: '引用的文件', text: `样式或 SVG 里引用的 ${report.refs.length} 个文件找不到（字体、背景图等）：${few(report.refs)}`, ids: [] });
   if (report.dataUri) items.push({ level: 'fixed', title: '内嵌图片', text: `${report.dataUri} 张 data: 图片转成了文件（微信不收 data: 图片）`, ids: [] });
-  if (report.svgImage) items.push({ level: 'warn', title: 'SVG 内图片', text: `${report.svgImage} 处 svg <image> 的图片地址会被微信删掉`, ids: [] });
-  if (report.remote) items.push({ level: 'info', title: '外链图片', text: `${report.remote} 张网络图片由微信直接去原地址抓取，对方防盗链时会失败`, ids: [] });
+  if (report.svgImage) items.push({ level: 'warn', title: 'SVG 里的图片', text: `${report.svgImage} 张放在 SVG 里的图片（<image>）粘贴后显示不出来，微信会删掉它们的地址；能改的话换成普通的 <img>`, ids: [] });
+  if (report.remote) items.push({ level: 'info', title: '网络图片', text: `${report.remote} 张网络图片由微信直接去原网址取，对方开了防盗链就取不到`, ids: [] });
   if (stats.visualBad.length) items.push({ level: 'warn', title: '和原稿不一致', text: `${stats.visualBad.length} 个元素粘贴后的位置或尺寸与原稿相差超过 1.5px`, ids: stats.visualBad });
-  else items.push({ level: 'info', title: '比对', text: `${stats.verified} 个元素的位置和尺寸与原稿一致（同一台电脑、同一套字体下）`, ids: [] });
-  items.push({ level: 'info', title: '体积', text: `正文 ${stats.chars.toLocaleString()} 字符`, ids: [] });
+  else {
+    // 排在"其他宽度"那条前面：先说当前宽度一致，再说其他宽度也一致
+    const at = items.findIndex(i => i.level === 'info');
+    items.splice(at < 0 ? items.length : at, 0, { level: 'info', title: '比对', text: `${stats.verified} 个元素粘贴后的位置、尺寸都和原稿一致。这是按这台电脑上的字体比的，手机上换成备用字体的地方，字形和换行仍可能不同`, ids: [] });
+  }
+  items.push({ level: 'info', title: '代码长度', text: `${stats.chars.toLocaleString()} 字符（含排版代码，不是正文字数）`, ids: [] });
 
   const groups = [['error', '必须处理'], ['warn', '需要留意'], ['fixed', '已自动处理'], ['info', '说明']];
   const box = $('checks');
   box.textContent = '';
+  const nErr = items.filter(i => i.level === 'error').length, nWarn = items.filter(i => i.level === 'warn').length;
+  const sum = document.createElement('p'); sum.className = 'verdict';
+  sum.textContent = nErr ? `有 ${nErr} 项必须处理，否则草稿可能存不了。` : nWarn ? `没有必须处理的问题，${nWarn} 项需要留意。` : '没有需要处理的问题。';
+  box.appendChild(sum);
   for (const [lv, name] of groups) {
     const list = items.filter(i => i.level === lv);
     if (!list.length) continue;
-    const h = document.createElement('h3'); h.textContent = name; box.appendChild(h);
+    // 已自动处理的不用读者动手，默认收起；懂的人点开能看到每一项改了什么
+    let host = box;
+    if (lv === 'fixed') {
+      host = document.createElement('details'); host.className = 'fixed-group';
+      const s = document.createElement('summary'); s.textContent = `${name} ${list.length} 项（点开查看）`;
+      host.appendChild(s); box.appendChild(host);
+    } else { const h = document.createElement('h3'); h.textContent = name; box.appendChild(h); }
     const ul = document.createElement('ul');
     for (const it of list) {
       const li = document.createElement('li'); li.className = lv;
@@ -305,7 +329,7 @@ function renderChecks() {
       }
       ul.appendChild(li);
     }
-    box.appendChild(ul);
+    host.appendChild(ul);
   }
 }
 
@@ -340,19 +364,20 @@ function renderHost() {
   if (!h) { line.className = 'status err'; line.textContent = '连不上本地服务，serve.cmd 的窗口还开着吗？'; $('hostPick').hidden = true; return; }
   const c = chosen();
   const opts = hostOptions(h);
+  $('imgPortHint').textContent = state.server.imgPort;
   if (!opts.length) {
     line.className = h.checking ? 'status' : 'status err';
-    line.textContent = h.checking ? '检测公网出口中…' : '查不到公网 IP';
-    help.hidden = h.checking; help.textContent = '本机可能没联网。也可以在下面填一个隧道地址。';
+    line.textContent = h.checking ? '正在检测取图地址…' : '查不到本机的公网 IP';
+    help.hidden = h.checking; help.textContent = '可能是本机没联网，或者查 IP 的网站都连不上。可以用下面的内网穿透地址。';
   } else if (c && c.ok) {
-    line.className = 'status ok'; line.textContent = '图片用 ' + c.base;
+    line.className = 'status ok'; line.textContent = '微信从 ' + c.base + ' 取图';
     help.hidden = true;
   } else {
-    line.className = 'status warn'; line.textContent = '图片用 ' + (c ? c.base : '—') + '（未确认可达）';
+    line.className = 'status warn'; line.textContent = '微信从 ' + (c ? c.base : '—') + ' 取图（没确认外网能连上）';
     help.hidden = false;
-    help.textContent = `从外网回连这个出口的 ${state.server.imgPort} 端口没通：可能这条线是运营商 NAT（没有真公网 IP）、路由器没把这条线的端口转发过来，或者路由器不支持回环。能选"外网可达"的就选它；都不通时粘贴后看抓取计数。`;
+    help.textContent = `自测时从外网连不上这个地址的 ${state.server.imgPort} 端口，微信可能取不到图。常见原因是宽带没有公网 IP（运营商 NAT），或者路由器没把这个端口转发到这台电脑；也可能只是路由器不支持这种自测（回环），实际能通。有标“外网可达”的就选它；都不通就先复制粘贴试一次，取图进度一直是 0 再改用内网穿透。`;
   }
-  $('hostWhen').textContent = h.checking ? '检测中…' : h.checkedAt ? `上次 ${new Date(h.checkedAt).toLocaleTimeString('zh-CN', { hour12: false })}，每 5 分钟自动检测` : '';
+  $('hostWhen').textContent = h.checking ? (h.checkedAt ? '检测中…' : '') : h.checkedAt ? `上次 ${new Date(h.checkedAt).toLocaleTimeString('zh-CN', { hour12: false })}，每 5 分钟自动检测` : '';
   $('recheck').disabled = h.checking;
 
   // 只在内容变化时重画，避免每次轮询抢走键盘焦点
@@ -369,18 +394,23 @@ function renderHost() {
     const ip = document.createElement('span'); ip.className = 'ip'; ip.textContent = x.custom ? x.base : x.ip;
     const tag = document.createElement('span');
     tag.className = 'tag ' + (x.stale ? 'stale' : x.ok ? 'ok' : 'no');
-    tag.textContent = x.stale ? '本轮没探到' : x.ok ? '外网可达' : '不通';
+    tag.textContent = x.stale ? '这轮没测到' : x.ok ? '外网可达' : '不通';
     lab.append(r, ip, tag);
-    if (!x.custom && !x.stale && h.probes) {
+    // 只有一条宽带时次数总是满的，不显示；多线时说明各条线分到多少流量
+    if (!x.custom && !x.stale && h.probes && opts.filter(o => !o.custom && !o.stale).length > 1) {
       const n = document.createElement('span'); n.className = 'n';
       n.textContent = `${x.seen}/${h.probes} 次`;
-      n.title = '本轮出口探测中有多少次连接走了这条线';
+      n.title = '这轮检测发出的连接里，有多少次从这条宽带出去（多条宽带按连接分流）';
       lab.appendChild(n);
     }
     box.appendChild(lab);
   }
 }
 
+// 实测：粘贴后第一次保存时编辑器还没给图片补上 data-ratio，存下的正文在预览页里图片不加载；保存后编辑器才补上
+const SAVE_TWICE = '保存草稿时点两次“保存为草稿”（提示已保存后再点一次）：第一次保存时编辑器还没给图片补上尺寸信息（data-ratio），存下的图片在预览里显示不出来。';
+const copiedNote = () => localImageIds().length ? '已复制。到公众号后台正文里 Ctrl+V，等下面的取图进度走完。'
+  : /<img\b/.test(state.result.payload) ? '已复制。到公众号后台正文里 Ctrl+V。' + SAVE_TWICE : '已复制。到公众号后台正文里 Ctrl+V。';
 function localImageIds() {
   if (!state.result) return [];
   return [...new Set([...state.result.payload.matchAll(/\/a\/([0-9a-f]{16}\.[a-z0-9]+)/g)].map(m => m[1]))];
@@ -390,10 +420,17 @@ function refreshCopy() {
   if (!state.result) { btn.disabled = true; note.textContent = '载入文章后可复制。'; return; }
   const imgs = localImageIds();
   const pick = chosen();
-  if (imgs.length && !pick) { btn.disabled = true; note.textContent = `有 ${imgs.length} 张本地图片，需要先有可用的图片外链才能复制。`; return; }
+  if (imgs.length && !pick) {
+    const checking = state.server && state.server.host.checking;
+    btn.disabled = true;
+    note.textContent = checking ? `文中有 ${imgs.length} 张本地图片，正在检测取图地址，检测完就能复制。` : `文中有 ${imgs.length} 张本地图片，还没有能用的取图地址，见下方“取图地址”。`;
+    return;
+  }
   btn.disabled = state.busy;
-  if (state.copiedAt) { note.textContent = '已复制。到公众号后台正文里 Ctrl+V。'; return; }
-  note.textContent = imgs.length ? `复制后到公众号后台正文里 Ctrl+V。${imgs.length} 张图片会由微信从本机抓取，抓完前别关 serve.cmd。` : '复制后到公众号后台正文里 Ctrl+V。';
+  if (state.copiedAt) { note.textContent = copiedNote(); return; }
+  const errs = state.result.findings.filter(f => f.level === 'error').length + (state.result.report.missing.length ? 1 : 0);
+  note.textContent = (errs ? `有 ${errs} 项必须处理（见下方检查结果），不处理的话草稿可能存不了。` : '')
+    + (imgs.length ? `复制后到公众号后台正文里 Ctrl+V。${imgs.length} 张图片要由微信从本机取走，取完前别关 serve.cmd 窗口。` : '复制后到公众号后台正文里 Ctrl+V。');
 }
 
 async function copy() {
@@ -413,7 +450,7 @@ async function copy() {
     if (!ok) { $('copyNote').textContent = '浏览器拒绝写入剪贴板，请再点一次。'; return; }
   }
   state.copiedAt = { hits: { ...(state.server.hits || {}) }, base: pick ? pick.base : '' };
-  $('copyNote').textContent = '已复制。到公众号后台正文里 Ctrl+V。';
+  $('copyNote').textContent = copiedNote();
   renderFetch();
 }
 
@@ -425,7 +462,7 @@ function renderFetch() {
   const got = ids.filter(id => (hits[id] || 0) > (state.copiedAt.hits[id] || 0)).length;
   el.hidden = false;
   el.className = 'status ' + (got === ids.length ? 'ok' : got ? 'warn' : '');
-  el.textContent = got === ids.length ? `图片已全部被抓取（${got}/${ids.length}），可以关掉 serve.cmd 了` : `等待微信抓图：${got}/${ids.length}（经 ${state.copiedAt.base}）。一直是 0 的话换一个出口重新复制粘贴`;
+  el.textContent = got === ids.length ? `${got} 张图片微信都已取走，可以关掉 serve.cmd 窗口了。${SAVE_TWICE}` : `等微信取图：${got}/${ids.length}（经 ${state.copiedAt.base}）。粘贴后过一会儿还是 0，说明微信连不上这个地址：换一个取图地址或改用内网穿透，再重新复制粘贴。`;
 }
 
 /* ---------- 轮询 ---------- */
@@ -495,7 +532,7 @@ document.body.addEventListener('drop', async e => {
   const out = [];
   for (const en of entries) await walk(en, '', out);
   if (out.length === 1) banner('只拖进了一个 HTML 文件，浏览器拿不到它旁边的图片。请拖整个文件夹，或在左边粘贴文件路径。', true);
-  else useFiles(out, '拖入的文件');
+  else useFiles(out, '');
 });
 
 $('pathForm').onsubmit = async e => {

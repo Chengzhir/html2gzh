@@ -13,7 +13,7 @@ const SELF_COLORED = 'a,mark';
 
 function collector() {
   const list = [];
-  const add = level => (title, text, els) => list.push({ level, title, text, ids: (els || []).map(e => e.getAttribute && e.getAttribute(ID)).filter(Boolean) });
+  const add = level => (title, text, els) => list.push({ level, title, text, ids: (els || []).map(e => typeof e === 'string' ? e : e.getAttribute && e.getAttribute(ID)).filter(Boolean) });
   return { list, fixed: add('fixed'), warn: add('warn'), info: add('info'), error: add('error') };
 }
 const FORCED = ['max-width', 'min-height', 'clear', 'box-sizing', 'height'];
@@ -55,7 +55,7 @@ export async function convert(html, { width, frame, verifyFrame, opts = {}, glyp
   const overIds = new Set();
   for (const w of CHECK_WIDTHS.filter(w => w > 460 || w === 375)) for (const id of overflowing(await loadFrame(verifyFrame, previewDoc(mergedRaw), w))) overIds.add(id);
   const { html: merged, n: ignored } = markIgnoreWidth(mergedRaw, [...overIds]);
-  if (ignored) F.fixed('溢出豁免', `${overIds.size} 处有意超出版心的元素（出血图、旋转色块等，原稿里被裁切）及其上级加了 data-ignore-width，避免被内容结构检测误判为溢出`);
+  if (ignored) F.fixed('超出版面', `${overIds.size} 处故意超出版面的元素（出血图、旋转色块等，原稿里被裁切）和它们的外层容器加了 data-ignore-width，免得粘贴后后台弹出的“内容结构检测”把它们报成溢出`, [...overIds]);
 
   const widths = [...new Set([...CHECK_WIDTHS.filter(w => w !== width), width])];
   const others = [];
@@ -69,12 +69,15 @@ export async function convert(html, { width, frame, verifyFrame, opts = {}, glyp
     if (w === width) { visualBad = bad; verified = V.size; } else if (bad.length) others.push([w, bad]);
   }
 
-  if (badRules.length) F.warn('备用字体规则', `第 ${badRules.join('、')} 行格式不对，已跳过（应为「原稿字体, … => 补上的字体, …」）`);
-  if (stat.cq) F.fixed('等比缩放', `${stat.cq} 个长度写成了 cqw，随手机宽度等比缩放` + (stat.split ? `，${stat.split} 处位移拆成固定 + 比例两段` : ''));
-  if (stat.approx) F.warn('缩放近似', `${stat.approx} 个长度既有固定部分又有比例部分，微信不支持 calc()，只能在 ${width}px 下精确、其他宽度近似`);
-  if (stat.diverged) F.warn('缩放近似', `${stat.diverged} 处在两个宽度下转换结果结构不同，按 ${width}px 的结果等比换算`);
-  if (others.length) F.list.push({ level: 'warn', title: '其他宽度', text: others.map(([w, b]) => `${w}px 下 ${b.length} 个元素偏差超过 1.5px`).join('；'), ids: [...new Set(others.flatMap(([, b]) => b))] });
-  else F.info('其他宽度', `正文宽 ${widths.filter(w => w !== width).join('/')}px 下也与原稿逐元素一致`);
+  if (badRules.length) F.warn('备用字体规则', `第 ${badRules.join('、')} 行格式不对，已跳过（应为“原稿字体, … => 备用字体, …”）`);
+  if (stat.cq) F.fixed('等比缩放', `${stat.cq} 个尺寸写成了 cqw（1cqw = 外层容器宽度的 1%，通常就是正文宽度），随手机屏宽等比缩放` + (stat.split ? `，${stat.split} 处位移拆成固定 + 比例两段` : ''));
+  // 多宽度比对都过了就只是说明，不必读者处理
+  if (stat.approx) (others.length ? F.warn : F.info)('缩放近似', `${stat.approx} 个尺寸由固定值和比例值合成，公众号不支持 calc()，只在 ${width}px 宽下完全精确，其他屏宽按比例近似` + (others.length ? '' : '；实测各种宽度下偏差都不超过 1.5px，不用处理'));
+  if (stat.diverged) F.warn('缩放近似', `${stat.diverged} 处换个屏宽排版结构就变了（比如换行位置不同），没法拟合等比缩放，按 ${width}px 的样子等比换算，其他屏宽下这几处可能和原稿不同`);
+  // 375/585/677 是内容结构检测直接用的正文宽，460 补在手机与电脑之间
+  const phones = widths.filter(w => w !== width && w < 375), rest = widths.filter(w => w !== width && w >= 375);
+  if (others.length) F.list.push({ level: 'warn', title: '其他宽度', text: others.map(([w, b]) => `正文 ${w}px 宽时 ${b.length} 个元素和原稿差了 1.5px 以上`).join('；'), ids: [...new Set(others.flatMap(([, b]) => b))] });
+  else F.info('其他宽度', `换成其他常见手机（正文 ${phones.join('/')}px）和更宽的屏幕（${rest.join('/')}px，含公众号内容结构检测用的宽度）也逐元素和原稿一致`);
 
   return {
     payload: stripTool(merged), preview: merged, original: A.original, findings: F.list, fonts: ctx.faces,
@@ -85,20 +88,30 @@ export async function convert(html, { width, frame, verifyFrame, opts = {}, glyp
   };
 }
 
+/** 没转成轮廓的原因，接在"N 段"后面读 */
 const WHY = {
-  font: '取不到原字体的字形', layout: '换成轮廓后周围元素会挪位', reflow: '换行或缩放方式随屏宽变化，轮廓没法跟着变',
-  shaping: '连字或上下文变体和浏览器的排法对不上', baseline: '量不准基线', server: '取字形失败', mismatch: '两个宽度下结构不同', missing: '两个宽度下结构不同', ineligible: '在另一个宽度下不再符合条件', empty: '没有可见的字',
+  font: '取不到原字体的字形', layout: '换成轮廓后周围的元素会挪位', reflow: '的换行或缩放方式随屏宽变化，轮廓没法跟着变',
+  shaping: '的连字或上下文字形和浏览器的排法对不上', baseline: '量不准文字基线', server: '取字形失败',
+  mismatch: '换个屏宽排版结构就变了', missing: '换个屏宽排版结构就变了', ineligible: '换个屏宽就不再符合转换条件（比如字号不够大了）',
 };
 function outlineFindings(F, s, ctx) {
-  if (s.kept) F.fixed('大字转轮廓', `${s.kept} 段大字（${s.chars} 个字）画成了 SVG 轮廓，手机上和原稿字形一致` + (ctx.o.svgCopy ? '，上面叠了透明文字，读者仍能选中复制' : '，不能选中复制') + `；正文多出约 ${Math.round(s.bytes / 1024)} KB`);
-  const why = new Map();
-  for (const v of s.verdicts) if (!v.keep) why.set(v.why, (why.get(v.why) || 0) + 1);
-  if (ctx.notes.server) F.warn('大字转轮廓', `取字形失败（${ctx.notes.server}），大字仍是文字，读者看到的是备用字体`);
+  if (s.kept) F.fixed('大字转轮廓', `${s.kept} 段大字（${s.chars} 个字）画成了 SVG 轮廓，手机上和原稿字形一致` + (ctx.o.svgCopy ? '，上面叠了透明文字，读者仍能选中复制' : '，读者不能选中复制') + `；代码多出约 ${Math.round(s.bytes / 1024)} KB`);
+  // 按显示出来的原因合并计数（几种内部原因说法相同）；没有可见字的段不算问题
+  const why = new Map(), left = [];
+  s.verdicts.forEach((v, i) => {
+    if (v.keep || v.why === 'empty') return;
+    const k = v.why === 'font' ? 'font' : WHY[v.why] || v.why;
+    why.set(k, (why.get(k) || 0) + 1); left.push(ctx.units[i].id);
+  });
+  if (ctx.notes.server) F.warn('大字转轮廓', `取字形失败（${ctx.notes.server}），大字仍是文字，手机上显示为备用字体`);
   else if (why.size) {
-    const fonts = ctx.notes.miss.size ? `（${[...ctx.notes.miss.keys()].slice(0, 3).join('；')}）` : '';
-    F.warn('大字转轮廓', `${s.units - s.kept} 段保留为文字：` + [...why].map(([k, n]) => `${n} 段${WHY[k] || k}${k === 'font' ? fonts : ''}`).join('；'));
+    const miss = [...ctx.notes.miss.keys()];
+    const fonts = miss.length ? `（${miss.slice(0, 3).join('；')}）` : '';
+    // 字由、Adobe Fonts 一类工具激活的字体不装进系统字体目录，浏览器能用，字形接口找不到文件
+    const hint = miss.some(k => k.includes('不在本机字体目录')) ? '；用 Adobe Fonts 等工具临时激活的字体要正式安装后才能转' : '';
+    F.warn('大字转轮廓', `${left.length} 段大字没能转成轮廓，手机上显示为备用字体：` + [...why].map(([k, n]) => `${n} 段${k === 'font' ? WHY.font + fonts : k}`).join('；') + hint, left);
   }
-  if (!s.units) F.info('大字转轮廓', `没有字号达到 ${ctx.o.svgMin}px（按 375 宽 iPhone 计）或使用指定字体的文字`);
+  if (!s.units) F.info('大字转轮廓', `没有要转的字：没有字号达到 ${ctx.o.svgMin}px（按 375 宽的 iPhone 算）的字，也没有设成“全部转轮廓”的字体`);
 }
 
 /** 与内容结构检测同一判据：盒子左右任一侧超出正文区 1px 以上、且不是左右对称居中 */
@@ -114,7 +127,7 @@ function overflowing(doc) {
   return out;
 }
 
-/** 读屏专用的隐藏文字（1px 裁切）：公众号自带标题栏，留着会被判"内容溢出容器" */
+/** 读屏专用的隐藏文字（1px 裁切）：公众号自带标题栏，这种写法留着会被判"内容溢出容器" */
 function dropVisuallyHidden(doc, F) {
   const win = doc.defaultView;
   let n = 0;
@@ -126,7 +139,7 @@ function dropVisuallyHidden(doc, F) {
     if (c.overflow === 'visible' && c.clipPath === 'none' && c.clip === 'auto') continue;
     el.remove(); n++;
   }
-  if (n) F.fixed('隐藏文字', `删掉 ${n} 处只给读屏软件看的隐藏文字（公众号有自己的标题栏，留着会被判为内容溢出）`);
+  if (n) F.fixed('隐藏文字', `删掉 ${n} 处只给读屏软件看的隐藏文字（多半是给页面补的标题，公众号有自己的标题栏；这种 1px 裁切的写法会被后台的“内容结构检测”报成溢出）`);
 }
 
 /** 微信给所有元素加 max-width:100%!important，作者的 max-width 会失效；块级自动宽度的元素改写成 width，效果等同 min(原上限, 100%) */
@@ -320,7 +333,7 @@ async function convertAt(html, width, frame, ctx) {
   let outlined = null;
   if (!ctx.faces) ctx.faces = listFaces(doc, root).map(f => {
     const web = !!webIn(f.stack, ctx.web);
-    return { ...f, web, note: web ? '网络字体：公众号加载不了，轮廓也只能画本机装的字体，所以留成文字，读者看到的是手机自带字体' : mobileNote(f.family, f.weight, ctx.fontRules) };
+    return { ...f, web, note: web ? '网页字体（用 @font-face 引用的字体文件）：公众号不支持，只能留成文字，手机上显示为备用字体。想转轮廓，把这款字体装到电脑上，并去掉原稿里的 @font-face' : mobileNote(f.family, f.weight, ctx.fontRules) };
   });
   if (ctx.o.fontMode === 'svg') {
     if (!ctx.units) ctx.units = selectUnits(doc, root, ctx.o, ctx.web);
@@ -333,21 +346,21 @@ async function convertAt(html, width, frame, ctx) {
   if (pn) F.fixed('伪元素', `${pn} 个 ::before/::after 改成了真实元素`);
   if (capped) F.fixed('最大宽度', `${capped} 处 max-width 改写成 width（微信会把所有 max-width 强制成 100%）`);
   if (bqFixed) F.fixed('文字颜色', `${bqFixed} 个链接/mark 补上了文字颜色（阅读页给这几种标签直接上色、不继承父级，深底浅字会变色）`);
-  if (pinned) F.fixed('图片尺寸', `${pinned} 张图片保住了原尺寸：阅读页会按原图宽高比重算图片高度，带边框/内边距、被拉伸或裁切的图会变形（已写 min-height = max-height，宽度不是定值的改成定宽）`, [...root.querySelectorAll('img')].filter(i => { const p = ctx.pins.get(i.getAttribute(ID)); return p && (p.w || p.h); }));
-  if (forcedN) F.fixed('微信默认样式', `${forcedN} 处被微信正文默认样式（max-width、段落最小高度等）顶掉的属性已补回`);
-  if (nw) F.fixed('不换行', `${nw} 处 nowrap 文字改用不换行空格和连接符禁止折行（公众号会删掉 white-space）`);
-  if (hit.font) F.fixed('手机字体', `${hit.font} 处字体栈补上了 iOS/安卓自带的近似字体（公众号用不了网络字体，读者手机上没有电脑字体）`);
-  if (ws > 200) F.fixed('空白', `清掉 ${ws} 个标签间空白字符（手机端会把它们渲染成额外的空行）`);
-  if (notes.fontface) F.warn('网络字体', `${notes.fontface} 个 @font-face 字体用不了，读者看到的是手机系统字体，字宽不同可能导致换行变化`);
-  if (notes.keyframes) F.warn('动画', `${notes.keyframes} 个 @keyframes 动画会丢失`);
+  if (pinned) F.fixed('图片尺寸', `${pinned} 张图片锁住了原尺寸：阅读页会按原图宽高比重算图片高度，带边框/内边距、被拉伸或裁切的图会变形（用相等的 min-height 和 max-height 锁住高度，原来宽度不是定值的改成定宽）`, [...root.querySelectorAll('img')].filter(i => { const p = ctx.pins.get(i.getAttribute(ID)); return p && (p.w || p.h); }));
+  if (forcedN) F.fixed('微信默认样式', `${forcedN} 处会被阅读页正文默认样式（max-width、段落最小高度等）覆盖的属性已写回元素上，其中 max-width、box-sizing 和图片高度要带 !important 才压得过`);
+  if (nw) F.fixed('不换行', `${nw} 处原稿不换行（white-space: nowrap，公众号会删掉）的文字改用不换行空格和看不见的单词连接符（U+2060）固定住；后台的“正文字数”会把连接符也算进去`);
+  if (hit.font) F.fixed('手机字体', `${hit.font} 处字体栈补上了 iOS/安卓自带的近似字体（公众号用不了网页字体，读者手机上也没有电脑上的字体）`);
+  if (ws > 200) F.fixed('空白', `清掉 ${ws} 个标签间的空白字符（手机端会把它们显示成多出来的空行）`);
+  if (notes.fontface) F.warn('网页字体', `${notes.fontface} 个 @font-face 字体用不了，读者看到的是手机自带字体；字宽不同，换行位置可能和原稿不一样`);
+  if (notes.keyframes) F.warn('动画', `${notes.keyframes} 个动画（@keyframes）在公众号里不会动，元素停在没有动画时的样子；原稿如果靠动画淡入，粘贴后可能直接看不见，在右边预览里核对一下`);
   if (notes.dynamic) F.warn('交互样式', `${notes.dynamic} 条 :hover/:focus 等交互样式没有效果，已忽略`);
   if (notes.otherPseudo) F.warn('伪元素', `${notes.otherPseudo} 条 ::marker/::first-line 等规则无法转换，已忽略`);
   if (notes.unreadable || notes.imports) F.warn('样式表', `${notes.unreadable + notes.imports} 个样式表或 @import 读不到，相关样式缺失`);
-  if (notes.container) F.warn('容器查询', `${notes.container} 条 @container 规则没有处理`);
-  if (hit.badVar) F.warn('CSS 变量', `${hit.badVar} 处 var() 找不到值，该声明已丢弃`);
-  if (cascadeBad.length) F.warn('样式内联', `${cascadeBad.length} 个元素内联后位置或尺寸和原稿不同`, cascadeBad.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean));
-  if (stuck.length) F.warn('位置偏差', `${stuck.length} 个行内元素没法用位移校正，位置可能有偏差`, stuck.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean));
-  if (notes.media) F.info('@media', `${notes.media} 条 @media 规则已按 ${width}px 手机宽度取值`);
+  if (notes.container) F.warn('容器查询', `${notes.container} 条 @container 规则没有套用，相关样式缺失`);
+  if (hit.badVar) F.warn('CSS 变量', `${hit.badVar} 处 var() 找不到值，这几条样式已忽略`);
+  if (cascadeBad.length) F.warn('样式内联', `${cascadeBad.length} 个元素把样式写进 style 属性（内联）后，位置或尺寸和原稿不同`, cascadeBad.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean));
+  if (stuck.length) F.warn('位置偏差', `${stuck.length} 个行内元素（文字片段等）没法用位移校正，位置可能和原稿有些偏差`, stuck.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean));
+  if (notes.media) F.info('屏宽适配', `${notes.media} 条按屏宽切换的样式（@media）取的是正文 ${width}px 宽时的值；成品靠等比缩放适配其他屏宽，不再随断点切换`);
 
   return { F, preview, original, targetV, n, moved, outlined };
 }

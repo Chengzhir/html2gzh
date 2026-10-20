@@ -65,7 +65,10 @@ function openArticle(input) {
   const p = path.resolve(cleanPath(input));
   if (!fs.existsSync(p)) throw new Error('找不到：' + p);
   const f = findHtml(p);
-  if (!f) throw new Error(fs.statSync(p).isDirectory() ? '文件夹里没有 index.html，也不止一个 HTML 文件' : '不是 HTML 文件');
+  if (!f && !fs.statSync(p).isDirectory()) throw new Error('不是 HTML 文件：' + p);
+  if (!f) throw new Error(fs.readdirSync(p).some(n => /\.html?$/i.test(n))
+    ? '文件夹里有好几个 HTML 文件，不知道打开哪个：把要用的那个改名为 index.html，或者直接粘贴它的完整路径'
+    : '这个文件夹里没有 HTML 文件：' + p);
   article.file = f; article.rev++;
   console.log(`${stamp()}  打开  ${f}`);
 }
@@ -257,7 +260,7 @@ async function handOver() {
     const s = await (await fetch(base + '/api/state', { signal: AbortSignal.timeout(2000) })).json();
     if (s.app !== 'wxpaste') throw new Error();
   } catch {
-    console.error(`端口 ${UI_PORT} 被别的程序占用。换一个：serve.cmd --port 端口号`);
+    console.error(`页面端口 ${UI_PORT} 被别的程序占用了。换一组端口再启动，例如 serve.cmd --port 40000（取图用 40000，页面用 40001）`);
     process.exit(1);
   }
   if (initialArg) {
@@ -273,14 +276,14 @@ const uiServer = http.createServer(wrap(uiRoute));
 const imgServer = http.createServer(wrap(imgRoute));
 uiServer.once('error', e => { if (e.code === 'EADDRINUSE') handOver(); else throw e; });
 imgServer.once('error', e => {
-  console.error(e.code === 'EADDRINUSE' ? `图床端口 ${IMG_PORT} 被占用。换一个：serve.cmd --port 端口号` : e.message);
+  console.error(e.code === 'EADDRINUSE' ? `取图端口 ${IMG_PORT} 被别的程序占用了。换一组端口再启动，例如 serve.cmd --port 40000（取图用 40000，页面用 40001）` : e.message);
   process.exit(1);
 });
 uiServer.listen(UI_PORT, '127.0.0.1', () => {
   if (initialArg) { try { openArticle(initialArg); } catch (e) { console.error(e.message); } }
   imgServer.listen(IMG_PORT, '0.0.0.0', () => {
     console.log(`\n  页面    http://127.0.0.1:${UI_PORT}/`);
-    console.log(`  图床    0.0.0.0:${IMG_PORT}（只出已载入文章引用的图片）`);
+    console.log(`  取图    0.0.0.0:${IMG_PORT}（对外网开放，只提供载入过的文章里的图片）`);
     console.log('  退出    Ctrl+C\n');
     checkHosts();
     setInterval(checkHosts, 5 * 60000).unref();

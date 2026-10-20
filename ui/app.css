@@ -58,6 +58,7 @@ summary{cursor:pointer;color:var(--muted);font-size:12px}
 .sub-opts{margin:8px 0 0 10px;padding-left:10px;border-left:2px solid var(--line)}
 .sub-opts[hidden]{display:none}
 .sub-opts input[type=number]{width:72px;flex:none}
+.sub-opts .row>label{flex:none;white-space:nowrap}
 .block{display:block;margin-top:8px}
 input.wide,textarea{width:100%;margin-top:4px}
 textarea{font:12px/1.5 ui-monospace,Consolas,monospace;padding:6px 8px;border:1px solid #cfc7b8;border-radius:6px;resize:vertical}
@@ -71,6 +72,9 @@ code{font:12px ui-monospace,Consolas,monospace;background:#f2eee6;padding:0 3px;
 .faces .changed{border-color:var(--ink)}
 .checks h3{font-size:12px;margin:10px 0 4px;font-weight:600}
 .checks h3:first-child{margin-top:0}
+.checks .verdict{margin:0 0 6px;font-size:13px;font-weight:600}
+.checks details.fixed-group{margin:10px 0 4px}
+.checks details.fixed-group summary{font-size:12px;font-weight:600;color:inherit}
 .checks ul{list-style:none;margin:0;padding:0}
 .checks li{padding:5px 0 5px 12px;border-left:3px solid var(--line);margin:4px 0;font-size:13px}
 .checks li.error{border-color:var(--err)}

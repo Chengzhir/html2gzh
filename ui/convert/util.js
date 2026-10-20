@@ -75,7 +75,7 @@ export function loadFrame(frame, html, width, height = 760) {
   return new Promise((resolve, reject) => {
     frame.style.width = width + 'px';
     frame.style.height = height + 'px';
-    const t = setTimeout(() => reject(new Error('预览加载超时')), 20000);
+    const t = setTimeout(() => reject(new Error('预览 20 秒内没加载完，可能是文中的网络图片太慢，点“重新转换”再试')), 20000);
     frame.onload = async () => {
       clearTimeout(t);
       const doc = frame.contentDocument;

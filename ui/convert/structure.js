@@ -51,7 +51,7 @@ export function cleanStructure(doc, root, findings) {
     rename(doc, a, 'span').removeAttribute('href');
   }
   if (anchors) findings.fixed('链接', `${anchors} 个页内锚点/相对链接改成了普通文字（否则后台拒绝保存）`);
-  if (outside) findings.warn('站外链接', `${outside} 个站外链接已改成普通文字，微信正文只允许公众号文章链接；需要的话放进"阅读原文"`, outEls);
+  if (outside) findings.warn('站外链接', `${outside} 个站外链接已改成普通文字，公众号正文只允许放公众号文章的链接；需要的话放进“阅读原文”`, outEls);
 
   let n = 0;
   for (const el of [...root.querySelectorAll('ul,ol')]) {

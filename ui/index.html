@@ -10,14 +10,14 @@
 <aside class="side">
   <header class="brand">
     <h1>wxpaste <span class="sub">公众号图文粘贴</span></h1>
-    <p>本地 HTML 文章 → 公众号编辑器原样保留的格式</p>
+    <p>把本地 HTML 排版原样粘进公众号后台</p>
   </header>
 
   <section class="card" id="srcCard" aria-labelledby="srcTitle">
     <h2 id="srcTitle">文章</h2>
     <div id="drop" class="drop" tabindex="0" role="button" aria-describedby="dropHint">
       <strong>把文章文件夹拖到这里</strong>
-      <span id="dropHint">文件夹里要有 index.html 和它用到的图片</span>
+      <span id="dropHint">文件夹里要有文章的 HTML（index.html）和它用到的图片</span>
     </div>
     <div class="row">
       <button type="button" id="pickDir">选择文件夹…</button>
@@ -43,39 +43,39 @@
     <div class="row small">
       <label for="width">预览宽度</label>
       <select id="width">
-        <option value="320">320px · 360 宽安卓机</option>
-        <option value="335">335px · 375 宽 iPhone</option>
-        <option value="353">353px · 393 宽 iPhone</option>
-        <option value="374">374px · 414 宽机型</option>
+        <option value="320">360 宽安卓机（正文 320px）</option>
+        <option value="335">375 宽 iPhone（正文 335px）</option>
+        <option value="353">393 宽 iPhone（正文 353px）</option>
+        <option value="374">414 宽机型（正文 374px）</option>
       </select>
     </div>
-    <p class="muted small">成品随手机宽度等比缩放，这里只决定预览用哪个宽度；其他常见宽度会自动比对。</p>
+    <p class="muted small">成品会随手机屏宽等比缩放。选的这个宽度用来预览，也是还原最精确的宽度（原稿里的 @media 按它取值）；其他常见宽度会自动比对。</p>
   </section>
 
   <section class="card" aria-labelledby="fontTitle">
     <h2 id="fontTitle">字体</h2>
     <fieldset class="modes">
       <legend class="sr-only">读者手机上没有原稿字体时怎么办</legend>
-      <label><input type="radio" name="fontMode" value="fallback"> <span><b>备用字体</b><span class="muted">全部保留为文字，换成手机自带的相近字体</span></span></label>
-      <label><input type="radio" name="fontMode" value="svg"> <span><b>大字转 SVG 轮廓</b><span class="muted">标题、编号等大字按原稿字形画出来，正文仍用备用字体</span></span></label>
+      <label><input type="radio" name="fontMode" value="fallback"> <span><b>备用字体</b><span class="muted">全部保留为文字，读者手机上换成自带的相近字体</span></span></label>
+      <label><input type="radio" name="fontMode" value="svg"> <span><b>大字转轮廓</b><span class="muted">标题、编号等大字按原稿字形画成 SVG 图形，手机上和原稿一样；这些字在公众号后台改不了，要改就改原稿再复制一次。正文仍用备用字体</span></span></label>
     </fieldset>
     <div id="svgOpts" class="sub-opts">
       <div class="row small">
         <label for="svgMin">字号不小于</label>
         <input id="svgMin" type="number" min="6" max="200" step="0.5" inputmode="decimal" aria-describedby="svgMinHint">
-        <span id="svgMinHint" class="muted">px（按 375 宽 iPhone）</span>
+        <span id="svgMinHint" class="muted">px 的算大字（按 375 宽的 iPhone 算）</span>
       </div>
       <div id="faceBox">
-        <p class="muted small">文中用到的每套字（字体 + 字重）分别怎么处理。选择会记住，下一篇用到同一套字时沿用。</p>
+        <p class="muted small">文中用到的字按字体、粗细（字重）、是否斜体分行列出，每行可以单独选怎么处理。选择会记住，下一篇用到同样的字时沿用。</p>
         <div id="faceList" class="faces"></div>
         <div class="row small"><button type="button" id="facesReset">全部恢复默认</button></div>
       </div>
       <label class="check small"><input type="checkbox" id="svgCopy"> 叠一层透明文字，读者能选中、复制、搜索</label>
     </div>
-    <label class="check small"><input type="checkbox" id="noWrap"> 原稿不换行的文字在手机上也不换行</label>
+    <label class="check small"><input type="checkbox" id="noWrap"> 原稿设了不换行（white-space: nowrap）的文字，手机上也不换行</label>
     <details id="rulesBox">
       <summary>备用字体规则</summary>
-      <p class="muted small">一行一条：<code>原稿字体, … =&gt; 补上的字体, …</code>。名字整名匹配、不分大小写，* 匹配任意字符，# 开头是注释。补上的字体插在通用族名（sans-serif 等）之前。</p>
+      <p class="muted small">一行一条：<code>原稿字体, … =&gt; 备用字体, …</code>。字体名要写全名，不分大小写，<code>*</code> 匹配任意字符，<code>#</code> 开头的行是注释。备用字体插在字体栈里 sans-serif 等通用字体名之前。</p>
       <label for="rules" class="sr-only">备用字体规则</label>
       <textarea id="rules" rows="9" spellcheck="false" autocomplete="off"></textarea>
       <div class="row small">
@@ -86,10 +86,11 @@
   </section>
 
   <section class="card" aria-labelledby="hostTitle">
-    <h2 id="hostTitle">图片外链</h2>
+    <h2 id="hostTitle">取图地址</h2>
+    <p class="muted small">粘贴后，微信服务器会按这个地址到你电脑上取图，所以它要能从外网访问。工具只对外提供载入过的文章里的图片，关掉 serve.cmd 窗口就停止。</p>
     <p id="hostLine" class="status">检测中…</p>
     <fieldset id="hostPick" class="hosts" hidden>
-      <legend class="sr-only">选择图片用哪个公网出口</legend>
+      <legend class="sr-only">选择微信从哪个地址取图</legend>
       <div id="hostList"></div>
     </fieldset>
     <p id="hostHelp" class="muted small" hidden></p>
@@ -98,10 +99,11 @@
       <span id="hostWhen" class="muted"></span>
     </div>
     <details>
-      <summary>用隧道等自定义地址</summary>
+      <summary>没有公网 IP？用内网穿透</summary>
+      <p class="muted small">用 frp、cpolar 等内网穿透工具，把本机的 <span id="imgPortHint">38960</span> 端口映射出去，再把得到的地址填在这里。</p>
       <form id="customForm" class="row">
-        <label for="customInput" class="sr-only">自定义图床地址</label>
-        <input id="customInput" placeholder="http(s)://主机:端口" autocomplete="off">
+        <label for="customInput" class="sr-only">自定义取图地址</label>
+        <input id="customInput" placeholder="如 https://abc.example.com" autocomplete="off">
         <button type="submit">使用</button>
       </form>
     </details>
@@ -122,7 +124,7 @@
       <div class="phone"><iframe id="paneA" title="原稿预览" sandbox="allow-same-origin"></iframe></div>
     </figure>
     <figure class="pane">
-      <figcaption>粘贴后（模拟微信正文样式）</figcaption>
+      <figcaption>粘贴后（模拟微信正文样式，字体按这台电脑显示）</figcaption>
       <div class="phone"><iframe id="paneB" title="粘贴后预览" sandbox="allow-same-origin"></iframe></div>
     </figure>
   </div>

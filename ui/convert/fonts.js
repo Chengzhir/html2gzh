@@ -1,8 +1,8 @@
 import { splitTop } from './util.js';
 
-// 公众号正文加载不了网络字体，读者只能用手机自带的字体。电脑字体在手机上没有时，
-// 按字形风格补上 iOS / 安卓自带的近似字体，插在通用族名之前。规则是可编辑的文本，一行一条：
-//   原稿字体1, 原稿字体2 => 补上的字体1, 补上的字体2
+// 公众号正文加载不了网页字体，读者只能用手机自带的字体。电脑字体在手机上没有时，
+// 按字形风格补上 iOS / 安卓自带的近似字体（备用字体），插在通用族名之前。规则是可编辑的文本，一行一条：
+//   原稿字体1, 原稿字体2 => 备用字体1, 备用字体2
 // 名字不分大小写、整名匹配，* 匹配任意字符。# 开头是注释。
 export const DEFAULT_RULES = `# 窄体英文数字：iPhone 用 DIN Condensed，安卓用 Roboto Condensed
 Bahnschrift*, DIN, DIN *, DINPro*, Arial Narrow, Roboto Condensed, Oswald, Barlow*Condensed => DIN Condensed, Roboto Condensed, sans-serif-condensed
@@ -73,11 +73,16 @@ export function faceKey(cs) {
 const ALWAYS = fontMatcher('Bahnschrift, Bahnschrift *, DIN, DIN *, DINPro*');
 export const faceDefault = family => ALWAYS(family) ? 'all' : 'big';
 
+const ZH_NAME = { 'pingfang sc': '苹方', 'noto sans cjk sc': '思源黑体', 'songti sc': '宋体-简', 'noto serif cjk sc': '思源宋体', 'kaiti sc': '楷体-简', stkaiti: '华文楷体' };
+const shown = f => ZH_NAME[f.toLowerCase()] ? `${ZH_NAME[f.toLowerCase()]}（${f}）` : f;
+
 /** 补上的备用字体里有苹方、而字重超过 600：iPhone 上会偏细（苹方最粗只有中粗） */
 export function mobileNote(family, weight, rules) {
   if (GENERIC.test(family)) return '手机上用系统默认字体';
   const added = mobileFonts(`"${family}"`, rules).split(',').slice(1).map(bare).filter(f => !GENERIC.test(f));
-  if (!added.length) return '手机上没有这款字体时，用手机自带字体';
-  const thin = added.includes('PingFang SC') && parseInt(weight, 10) > 600 ? '；iPhone 的苹方最粗只到 600，会偏细' : '';
-  return `手机上换成 ${added.slice(0, 2).join('、')}${added.length > 2 ? ' 等' : ''}${thin}`;
+  if (!added.length) return '手机上没有这款字体，读者看到的是手机自带的默认字体';
+  const w = parseInt(weight, 10);
+  const thin = added.includes('PingFang SC') && w > 600 ? `；苹方最粗只到 600（中粗），iPhone 上会比原稿的 ${w} 细一些` : '';
+  const names = added.slice(0, 2).map(shown).join('、');
+  return `手机上显示为${/^[A-Za-z]/.test(names) ? ' ' : ''}${names}${added.length > 2 ? ' 等' : ''}${thin}`;
 }

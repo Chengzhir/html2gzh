@@ -23,7 +23,7 @@ const glyphCache = new Map(), runCache = new Map();
 const isFloat = n => n.nodeType === 1 && n.hasAttribute('data-wxc-float');
 const f3 = n => String(Math.round(n * 1000) / 1000);
 const unq = s => s.trim().replace(/^["']|["']$/g, '');
-const MISS = { nofont: '浏览器没给出字体', webfont: '网络字体', notindexed: '不在本机字体目录', color: '彩色字体', shape: '排版出错', notdef: '字体里没有这个字', long: '组合符号过多' };
+const MISS = { nofont: '浏览器没给出字体', webfont: '网页字体', notindexed: '不在本机字体目录', color: '彩色字体', shape: '排版出错', notdef: '字体里没有这个字', long: '组合符号过多' };
 const noteMiss = (notes, kind, ps) => { const k = ps ? `${ps} ${MISS[kind] || kind}` : MISS[kind] || kind; notes.miss.set(k, (notes.miss.get(k) || 0) + 1); };
 
 /**

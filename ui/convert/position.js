@@ -46,12 +46,13 @@ export function convertPositions(doc, root, findings) {
       if (old) s.setProperty('width', old); else s.removeProperty('width');
     }
   }
-  let fixed = 0, clipped = 0, relocated = 0;
+  const fixed = [], clipped = [];
+  let relocated = 0;
   for (const p of plan) {
     const { el } = p, s = el.style;
     layers.add(el.getAttribute(ID));
     if (p.pos === 'relative' || p.pos === 'sticky') { stripInset(s); continue; }
-    if (p.pos === 'fixed') fixed++;
+    if (p.pos === 'fixed') fixed.push(el);
     stripInset(s);
     s.setProperty('float', p.side);
     s.setProperty('clear', 'none');
@@ -70,7 +71,7 @@ export function convertPositions(doc, root, findings) {
     let C = el.parentElement;
     if (C && FLEXISH.test(cs(C).display)) {
       while (C.parentElement && C.parentElement !== root.parentElement && FLEXISH.test(cs(C.parentElement).display)) C = C.parentElement;
-      for (let a = el.parentElement; a && a !== C.parentElement; a = a.parentElement) if (cs(a).overflow !== 'visible') { clipped++; break; }
+      for (let a = el.parentElement; a && a !== C.parentElement; a = a.parentElement) if (cs(a).overflow !== 'visible') { clipped.push(el); break; }
       const before = INHERITED.map(k => cs(el).getPropertyValue(k));
       C.after(el);
       INHERITED.forEach((k, i) => { if (cs(el).getPropertyValue(k) !== before[i]) s.setProperty(k, before[i]); });
@@ -78,7 +79,8 @@ export function convertPositions(doc, root, findings) {
     }
   }
   // z-index 只在 flex/grid 子项上还有效；正值的普通流元素尝试把父级改成纵向 flex
-  let zLost = 0, zKept = 0;
+  const zLost = [];
+  let zKept = 0;
   const flexified = new Set();
   // 去掉 z-index 后，E 只是按文档顺序画的一层；后面压在它上面的层若只是 position:relative 且没有 transform，
   // 让它退回普通流（不加 translate），E 就重新盖在它上面。还有别的层压着就算保不住。
@@ -104,13 +106,13 @@ export function convertPositions(doc, root, findings) {
     if (P && /flex|grid/.test(cs(P).display)) { zKept++; continue; }
     if (z > 0 && !el.hasAttribute('data-wxc-float') && P && (flexified.has(P) || flexify(doc, P))) { flexified.add(P); zKept++; continue; }
     el.style.removeProperty('z-index');
-    if (z < 0 || !yieldLaterLayers(el)) zLost++; else zKept++;
+    if (z < 0 || !yieldLaterLayers(el)) zLost.push(el); else zKept++;
   }
   if (plan.length) findings.fixed('定位改写', `${plan.length} 个定位元素已改成浮动 + 位移（微信会删掉 position）` + (relocated ? `，其中 ${relocated} 个移出了 flex/grid 容器` : ''));
   if (flexified.size) findings.fixed('层叠顺序', `${flexified.size} 个容器改成纵向 flex，以保住 z-index 层叠`);
-  if (zLost) findings.warn('层叠顺序', `${zLost} 个元素的 z-index 无法保留，重叠处的上下关系按文档顺序决定`);
-  if (fixed) findings.warn('固定定位', `${fixed} 个 position:fixed 元素会随正文滚动，不再固定在屏幕上`);
-  if (clipped) findings.warn('裁切', `${clipped} 个定位元素移出了 overflow 裁切容器，超出部分可能不再被裁掉`);
+  if (zLost.length) findings.warn('层叠顺序', `${zLost.length} 个重叠元素的上下顺序没能保留（z-index 丢失），现在代码里靠后的盖住靠前的；遮挡不对的话，在原稿里调整这些元素的先后顺序`, zLost);
+  if (fixed.length) findings.warn('固定定位', `${fixed.length} 个固定在屏幕上的元素（position: fixed）会跟着正文一起滚走`, fixed);
+  if (clipped.length) findings.warn('裁切', `${clipped.length} 个定位元素在改写定位时移出了原来裁切它的容器（overflow），原本被裁掉的部分可能会露出来；要保住裁切效果，可以在原稿里把图片或图形本身裁好`, clipped);
   return layers;
 }
 
