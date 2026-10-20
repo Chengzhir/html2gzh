@@ -1,8 +1,9 @@
 // 与公众号编辑器里量到的盒子比对：本地按同一正文宽度渲染成品，按文档顺序配对
-// 用法：node test/wxdiff.mjs [宽度] [boxes.txt]
+// 用法：node tools/wxdiff.mjs [宽度] [boxes.txt]
 // boxes.txt 第一行是编辑器里根容器的宽度，第二行是 "标签,x,y,w,h" 空格分隔，坐标为相对根容器左上角
 import fs from 'node:fs';
 import puppeteer from 'puppeteer-core';
+import { findChrome } from '../lib/chrome.mjs';
 
 const W = +(process.argv[2] || 578);
 const file = process.argv[3] || 'test/out/wxboxes.txt';
@@ -22,7 +23,7 @@ const READER = `.rich_media_content{color:rgba(0,0,0,.9);font-size:17px;overflow
 .rich_media_content img{height:auto!important}`;
 const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0}${READER}</style></head><body><div class="rich_media_content">${payload}</div></body></html>`;
 
-const b = await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
+const b = await puppeteer.launch({ executablePath: findChrome(), headless: true });
 const pg = await b.newPage();
 await pg.setViewport({ width: W, height: 900 });
 await pg.setContent(html, { waitUntil: 'networkidle0' });

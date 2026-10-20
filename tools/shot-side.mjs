@@ -1,8 +1,9 @@
-// 侧栏截图：看字体设置卡的排版。用法：node test/shot-side.mjs <文章> [svg|fallback]
+// 侧栏截图：看字体设置卡的排版。用法：node tools/shot-side.mjs <文章> [svg|fallback]
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
+import { findChrome } from '../lib/chrome.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const [ARTICLE, MODE = 'svg'] = process.argv.slice(2);
 const IMG = 48982, UI = 48983;
@@ -10,7 +11,7 @@ const srv = spawn(process.execPath, [path.join(HERE, '..', 'server.mjs'), ARTICL
 let log = '';
 srv.stdout.on('data', d => { log += d; }); srv.stderr.on('data', d => { log += d; });
 for (let i = 0; i < 50 && !log.includes('页面'); i++) await new Promise(r => setTimeout(r, 100));
-const browser = await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
+const browser = await puppeteer.launch({ executablePath: findChrome(), headless: true });
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 1000, deviceScaleFactor: 1 });
@@ -22,6 +23,6 @@ try {
   await page.setViewport({ width: 1400, height: h + 20 });
   await page.$eval('.side', e => { e.style.height = 'auto'; });
   const card = await page.$('section[aria-labelledby="fontTitle"]');
-  await card.screenshot({ path: path.join(HERE, 'out', `side-fonts-${MODE}.png`) });
+  await card.screenshot({ path: path.join(HERE, '..', 'test', 'out', `side-fonts-${MODE}.png`) });
   console.log('saved', `test/out/side-fonts-${MODE}.png`);
 } finally { await browser.close(); srv.kill(); }

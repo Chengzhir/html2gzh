@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
+import { findChrome } from '../lib/chrome.mjs';
 import { alignUnits } from './align.mjs';
 import { previewDoc, readerImages } from '../ui/convert/reader.js';
 
@@ -14,7 +15,7 @@ const args = process.argv.slice(2);
 const SVG_MODE = args.includes('--svg');
 const ARTICLE = path.resolve(args.find(a => !a.startsWith('--')) || path.join(HERE, 'fixture'));
 const IMG = 48960, UI = 48961;
-const CHROME = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(p => fs.existsSync(p));
+const CHROME = findChrome();
 const OUT = path.join(HERE, 'out');
 fs.mkdirSync(OUT, { recursive: true });
 

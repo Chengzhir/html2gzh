@@ -57,6 +57,7 @@ export async function convert(html, { width, frame, verifyFrame, opts = {}, glyp
   const { html: merged, n: ignored } = markIgnoreWidth(mergedRaw, [...overIds]);
   if (ignored) F.fixed('超出版面', `${overIds.size} 处故意超出版面的元素（出血图、旋转色块等，原稿里被裁切）和它们的外层容器加了 data-ignore-width，免得粘贴后后台弹出的“内容结构检测”把它们报成溢出`, [...overIds]);
 
+  // 主宽度排最后：verifyFrame 就是界面右边的预览窗，循环结束时它要停在用户选的宽度上
   const widths = [...new Set([...CHECK_WIDTHS.filter(w => w !== width), width])];
   const others = [];
   let visualBad = [], verified = 0, V = new Map();
@@ -161,8 +162,8 @@ function keepMaxWidth(doc, root) {
 /** 按一个固定正文宽度转换：所有长度量成 px，供 mergeWidths 拟合 */
 async function convertAt(html, width, frame, ctx) {
   const F = collector();
-  const src = html.replace(/<head([^>]*)>/i, `<head$1><style data-wxc-tool>${NEUTRAL}</style>`);
-  const doc = await loadFrame(frame, /<head/i.test(src) ? src : `<head><style data-wxc-tool>${NEUTRAL}</style></head>` + src, width);
+  const src = html.replace(/<head(\s[^>]*)?>/i, `<head$1><style data-wxc-tool>${NEUTRAL}</style>`);
+  const doc = await loadFrame(frame, /<head[\s>]/i.test(src) ? src : `<head><style data-wxc-tool>${NEUTRAL}</style></head>` + src, width);
   const win = doc.defaultView;
   const cs = el => win.getComputedStyle(el);
 
@@ -205,8 +206,8 @@ async function convertAt(html, width, frame, ctx) {
   });
   const forcedOf = c => Object.fromEntries(FORCED.map(k => [k, c.getPropertyValue(k)]));
   const want = new Map();
-  const bqColor = new Map();
-  for (const el of doc.body.querySelectorAll(SELF_COLORED)) bqColor.set(el, cs(el).color);
+  const selfColor = new Map();
+  for (const el of doc.body.querySelectorAll(SELF_COLORED)) selfColor.set(el, cs(el).color);
   const plans = [], pseudos = [];
   for (const el of doc.body.querySelectorAll('*')) {
     const b = matched.get(el);
@@ -262,10 +263,10 @@ async function convertAt(html, width, frame, ctx) {
     if (p.slot === 'before') p.el.prepend(s); else p.el.append(s);
     want.set(id, p.forced);
   }
-  let bqFixed = 0;
-  for (const [el, color] of bqColor) {
+  let colorFixed = 0;
+  for (const [el, color] of selfColor) {
     if (!el.isConnected || el.style.color) continue;
-    el.style.setProperty('color', color); bqFixed++;
+    el.style.setProperty('color', color); colorFixed++;
   }
   dropVisuallyHidden(doc, F);
   // 根容器自身是查询容器：原稿里没有容器祖先的 cqw 相对视口，成品里相对正文宽度，两者一致
@@ -345,7 +346,7 @@ async function convertAt(html, width, frame, ctx) {
 
   if (pn) F.fixed('伪元素', `${pn} 个 ::before/::after 改成了真实元素`);
   if (capped) F.fixed('最大宽度', `${capped} 处 max-width 改写成 width（微信会把所有 max-width 强制成 100%）`);
-  if (bqFixed) F.fixed('文字颜色', `${bqFixed} 个链接/mark 补上了文字颜色（阅读页给这几种标签直接上色、不继承父级，深底浅字会变色）`);
+  if (colorFixed) F.fixed('文字颜色', `${colorFixed} 个链接/mark 补上了文字颜色（阅读页给这几种标签直接上色、不继承父级，深底浅字会变色）`);
   if (pinned) F.fixed('图片尺寸', `${pinned} 张图片锁住了原尺寸：阅读页会按原图宽高比重算图片高度，带边框/内边距、被拉伸或裁切的图会变形（用相等的 min-height 和 max-height 锁住高度，原来宽度不是定值的改成定宽）`, [...root.querySelectorAll('img')].filter(i => { const p = ctx.pins.get(i.getAttribute(ID)); return p && (p.w || p.h); }));
   if (forcedN) F.fixed('微信默认样式', `${forcedN} 处会被阅读页正文默认样式（max-width、段落最小高度等）覆盖的属性已写回元素上，其中 max-width、box-sizing 和图片高度要带 !important 才压得过`);
   if (nw) F.fixed('不换行', `${nw} 处原稿不换行（white-space: nowrap，公众号会删掉）的文字改用不换行空格和看不见的单词连接符（U+2060）固定住；后台的“正文字数”会把连接符也算进去`);

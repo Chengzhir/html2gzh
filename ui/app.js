@@ -2,6 +2,11 @@ import { convert } from './convert/index.js';
 import { DEFAULT_OPTS, parseRules, faceDefault } from './convert/fonts.js';
 
 const $ = id => document.getElementById(id);
+// Windows 上用 serve.cmd 启动；别的系统在终端里跑 node server.mjs
+const WIN = /Windows/.test(navigator.userAgent);
+const SERVICE = WIN ? ' serve.cmd 窗口' : '运行 server.mjs 的终端';
+for (const e of document.querySelectorAll('.svcName')) e.textContent = SERVICE;
+if (!WIN) $('dropCmd').hidden = true;
 const ORIGIN = location.origin;
 const state = {
   src: null,        // { kind:'path', file, rev, mtime } | { kind:'files', name, map:Map(rel→File), entry }
@@ -21,7 +26,8 @@ function joinRel(base, ref) {
   return out.join('/');
 }
 const isLocalRef = r => r && !/^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(r.trim());
-const cleanRef = r => { try { return decodeURIComponent(r.trim().split(/[?#]/)[0]); } catch { return r.trim().split(/[?#]/)[0]; } };
+// Windows 上写出来的 HTML 常有 images\a.png 这种反斜杠路径，浏览器会当成 /，这里也一样
+const cleanRef = r => { const s = r.trim().split(/[?#]/)[0].replace(/\\/g, '/'); try { return decodeURIComponent(s); } catch { return s; } };
 const EXT_OF_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg', 'image/bmp': 'bmp', 'image/avif': 'avif' };
 
 async function api(path, body, raw) {
@@ -361,7 +367,7 @@ let hostSig = '';
 function renderHost() {
   const h = state.server && state.server.host;
   const line = $('hostLine'), help = $('hostHelp');
-  if (!h) { line.className = 'status err'; line.textContent = '连不上本地服务，serve.cmd 的窗口还开着吗？'; $('hostPick').hidden = true; return; }
+  if (!h) { line.className = 'status err'; line.textContent = `连不上本地服务，${SERVICE.trim()}还开着吗？`; $('hostPick').hidden = true; return; }
   const c = chosen();
   const opts = hostOptions(h);
   $('imgPortHint').textContent = state.server.imgPort;
@@ -430,7 +436,7 @@ function refreshCopy() {
   if (state.copiedAt) { note.textContent = copiedNote(); return; }
   const errs = state.result.findings.filter(f => f.level === 'error').length + (state.result.report.missing.length ? 1 : 0);
   note.textContent = (errs ? `有 ${errs} 项必须处理（见下方检查结果），不处理的话草稿可能存不了。` : '')
-    + (imgs.length ? `复制后到公众号后台正文里 Ctrl+V。${imgs.length} 张图片要由微信从本机取走，取完前别关 serve.cmd 窗口。` : '复制后到公众号后台正文里 Ctrl+V。');
+    + (imgs.length ? `复制后到公众号后台正文里 Ctrl+V。${imgs.length} 张图片要由微信从本机取走，取完前别关${SERVICE}。` : '复制后到公众号后台正文里 Ctrl+V。');
 }
 
 async function copy() {
@@ -462,7 +468,7 @@ function renderFetch() {
   const got = ids.filter(id => (hits[id] || 0) > (state.copiedAt.hits[id] || 0)).length;
   el.hidden = false;
   el.className = 'status ' + (got === ids.length ? 'ok' : got ? 'warn' : '');
-  el.textContent = got === ids.length ? `${got} 张图片微信都已取走，可以关掉 serve.cmd 窗口了。${SAVE_TWICE}` : `等微信取图：${got}/${ids.length}（经 ${state.copiedAt.base}）。粘贴后过一会儿还是 0，说明微信连不上这个地址：换一个取图地址或改用内网穿透，再重新复制粘贴。`;
+  el.textContent = got === ids.length ? `${got} 张图片微信都已取走，可以关掉${SERVICE}了。${SAVE_TWICE}` : `等微信取图：${got}/${ids.length}（经 ${state.copiedAt.base}）。粘贴后过一会儿还是 0，说明微信连不上这个地址：换一个取图地址或改用内网穿透，再重新复制粘贴。`;
 }
 
 /* ---------- 轮询 ---------- */

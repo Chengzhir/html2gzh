@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
+import { findChrome } from '../lib/chrome.mjs';
 import { previewDoc, readerImages } from '../ui/convert/reader.js';
 
 const VIEW_H = 900;
@@ -77,7 +78,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   let log = '';
   srv.stdout.on('data', d => { log += d; }); srv.stderr.on('data', d => { log += d; });
   for (let i = 0; i < 50 && !log.includes('页面'); i++) await new Promise(r => setTimeout(r, 100));
-  const browser = await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
+  const browser = await puppeteer.launch({ executablePath: findChrome(), headless: true });
   try {
     const ui = await browser.newPage();
     await ui.evaluateOnNewDocument(() => { if (window === window.top) localStorage.setItem('wxc.opts', JSON.stringify({ fontMode: 'svg' })); });

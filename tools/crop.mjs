@@ -1,6 +1,8 @@
+// e2e 逐像素比对没过时，从 test/out/diff*.png 里挑差异最多的几段，原稿 | 成品 | 差异并排裁出来存 test/out/crop*.png。用法：node tools/crop.mjs [宽度后缀，如 320]
 import fs from 'node:fs';
 import puppeteer from 'puppeteer-core';
-const b = await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
+import { findChrome } from '../lib/chrome.mjs';
+const b = await puppeteer.launch({ executablePath: findChrome(), headless: true });
 const p = await b.newPage();
 const res = await p.evaluate(async (d, o, c) => {
   const load = s => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = 'data:image/png;base64,' + s; });

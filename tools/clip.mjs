@@ -1,5 +1,5 @@
-// 把 test/out/payload.html 按 CF_HTML 放进剪贴板，供手工粘进公众号编辑器
-// 用法：node test/clip.mjs [图床地址]   默认 http://127.0.0.1:38960
+// 把 test/out/payload.html（e2e 跑完留下的成品）按 CF_HTML 放进剪贴板，供手工粘进公众号编辑器（只支持 Windows）
+// 用法：node tools/clip.mjs [取图地址]   默认 http://127.0.0.1:38960
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';

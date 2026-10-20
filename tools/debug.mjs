@@ -1,9 +1,11 @@
+// 原稿与成品逐元素偏差超过 0.2px 的列出来，附两边的 HTML 片段。用法：node tools/debug.mjs [文章路径]   默认用 test/fixture
 import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer-core';
+import { findChrome } from '../lib/chrome.mjs';
 const ART = process.argv[2] || 'test/fixture';
 const srv = spawn(process.execPath, ['server.mjs', ART, '--port', '48970', '--ui', '48971', '--no-open'], { stdio: 'ignore' });
 await new Promise(r => setTimeout(r, 1200));
-const b = await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
+const b = await puppeteer.launch({ executablePath: findChrome(), headless: true });
 const p = await b.newPage();
 await p.goto('http://127.0.0.1:48971/');
 await p.waitForFunction(() => window.__wxc.result, { timeout: 90000 });

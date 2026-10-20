@@ -97,7 +97,8 @@ function topComma(s) {
 }
 /** var() 用该元素的计算值展开；无值且无回退则整条声明无效 */
 export function substVars(v, cs) {
-  for (let guard = 0; guard < 30; guard++) {
+  // 每轮展开一个 var()：计算值里不会再有 var()，回退值是原串的子串，所以总轮数不超过原串里 var( 的个数
+  for (let guard = 0; guard < 1000; guard++) {
     const i = v.search(/var\(/i);
     if (i < 0) return v;
     let depth = 0, j = i + 4;
@@ -112,7 +113,7 @@ export function substVars(v, cs) {
     if (!val) { if (c < 0) return null; val = inner.slice(c + 1).trim(); }
     v = v.slice(0, i) + val + v.slice(j + 1);
   }
-  return v;
+  return /var\(/i.test(v) ? null : v;
 }
 
 const PCT_PROPS = /^(width|min-width|max-width|margin(-left|-right|-top|-bottom)?|padding(-left|-right|-top|-bottom)?|gap|column-gap|flex-basis)$/;

@@ -1,5 +1,5 @@
 // 原稿 vs 公众号预览页：逐像素叠图
-// 用法：node test/wxshot.mjs <预览链接> <文章目录> [屏宽=375] [--swap]
+// 用法：node tools/wxshot.mjs <预览链接> <文章目录> [屏宽=375] [--swap]
 // 原稿按正文宽（屏宽 - 40）渲染；预览页按手机屏宽打开，只截正文根容器。产物在 test/out/wx-*.png
 // --swap：把预览页正文换成 test/out/payload.html（图片按顺序沿用页面里的 mmbiz 地址），
 //         用真实阅读页样式验证还没贴进草稿的新版本
@@ -7,16 +7,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import puppeteer from 'puppeteer-core';
+import { findChrome } from '../lib/chrome.mjs';
 
 const SWAP = process.argv.includes('--swap');
 const [url, dir, sw = '375'] = process.argv.slice(2).filter(a => a !== '--swap');
-if (!url || !dir) { console.error('用法：node test/wxshot.mjs <预览链接> <文章目录> [屏宽]'); process.exit(1); }
+if (!url || !dir) { console.error('用法：node tools/wxshot.mjs <预览链接> <文章目录> [屏宽]'); process.exit(1); }
 const SW = +sw, CW = SW - 40;
 const OUT = 'test/out';
 fs.mkdirSync(OUT, { recursive: true });
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.50(0x1800322d) NetType/WIFI Language/zh_CN';
 
-const b = await puppeteer.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
+const b = await puppeteer.launch({ executablePath: findChrome(), headless: true });
 try {
   // 预览页：滚到底触发懒加载图片，再截正文根容器
   const pv = await b.newPage();
