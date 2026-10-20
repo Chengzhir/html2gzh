@@ -17,6 +17,7 @@ const flag = k => argv.includes('--' + k);
 const IMG_PORT = +opt('port', 38960);
 const UI_PORT = +opt('ui', IMG_PORT + 1);
 const NO_OPEN = flag('no-open');
+const LAUNCH = process.platform === 'win32' ? 'serve.cmd' : 'node server.mjs';
 const initialArg = argv.find((a, i) => !a.startsWith('--') && !['--port', '--ui'].includes(argv[i - 1]));
 
 const TOKEN = crypto.randomBytes(8).toString('hex');
@@ -89,6 +90,8 @@ function getText(u, ms) {
       r.setEncoding('utf8');
       r.on('data', c => { if (b.length < 4096) b += c; });
       r.on('end', () => resolve(r.statusCode === 200 ? b : null));
+      // 读到一半连接断开或超时被掐断时没有 end，只有 close；不 resolve 的话这一轮检测永远结束不了
+      r.on('close', () => resolve(null));
     });
     req.on('timeout', () => req.destroy());
     req.on('error', () => resolve(null));
@@ -97,6 +100,14 @@ function getText(u, ms) {
 async function ping(base) {
   const t = await getText(base.replace(/\/+$/, '') + '/__ping', 6000);
   return t != null && t.trim() === TOKEN;
+}
+// 内网和保留地址微信永远连不上；查 IP 的网站被劫持（如校园网认证页）时回的可能就是本机内网地址，回连自测照样能通
+function isPublicIPv4(ip) {
+  const o = ip.split('.').map(Number);
+  if (o.some(n => n > 255)) return false;
+  const [a, b] = o;
+  return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b < 128) || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)));
 }
 /** 自测回连也会被分到不同出口，一个出口试三次，有一次通就算通 */
 async function pingN(base, n = 3) {
@@ -112,7 +123,7 @@ async function checkHosts() {
     const seen = new Map();
     for (const t of await Promise.all(jobs)) {
       const ip = t && (t.match(/\b\d{1,3}(\.\d{1,3}){3}\b/) || [])[0];
-      if (ip) seen.set(ip, (seen.get(ip) || 0) + 1);
+      if (ip && isPublicIPv4(ip)) seen.set(ip, (seen.get(ip) || 0) + 1);
     }
     const fresh = await Promise.all([...seen].map(async ([ip, n]) => {
       const base = `http://${ip}:${IMG_PORT}`;
@@ -153,23 +164,28 @@ function serveAsset(req, res, id, countHit) {
   if (!a || (countHit && !PUBLIC_EXT.has(a.ext))) return send(res, 404, 'not found');
   if (countHit) {
     a.hits++; a.lastUA = String(req.headers['user-agent'] || '');
-    console.log(`${stamp()}  抓图  ${a.name}  经 ${req.headers.host || '?'}  ← ${req.socket.remoteAddress}  ${a.lastUA.slice(0, 50)}`);
+    // 取图口对外网开放，请求头里的控制字符（终端转义序列等）不原样打进日志
+    const safe = s => String(s).replace(/[\x00-\x1f\x7f]/g, '');
+    console.log(`${stamp()}  取图  ${a.name}  经 ${safe(req.headers.host || '?')}  ← ${req.socket.remoteAddress}  ${safe(a.lastUA).slice(0, 50)}`);
   }
-  res.writeHead(200, { 'Content-Type': MIME[a.ext] || 'application/octet-stream', 'Content-Length': a.buf.length, 'Cache-Control': 'no-store' });
+  // 文章里的 SVG 可能带脚本：直接打开这个地址时不让它在本页同源下运行（内嵌的字体和图片照常显示）
+  res.writeHead(200, { 'Content-Type': MIME[a.ext] || 'application/octet-stream', 'Content-Length': a.buf.length, 'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; sandbox" });
   res.end(req.method === 'HEAD' ? undefined : a.buf);
 }
 
-let lastPoll = 0;
 const LOCAL_HOSTS = new Set([`127.0.0.1:${UI_PORT}`, `localhost:${UI_PORT}`]);
+const HOST_TTL = 5 * 60000;
 async function uiRoute(req, res) {
-  // 防 DNS rebinding 与跨站请求：Host 必须是本机，POST 的 Origin 必须是本页
+  // 防 DNS rebinding 与跨站请求：Host 必须是本机；POST 必须带本页的 Origin（浏览器发 POST 都会带）
   if (!LOCAL_HOSTS.has(req.headers.host || '')) return send(res, 403, 'forbidden');
-  if (req.method === 'POST' && req.headers.origin && !LOCAL_HOSTS.has(req.headers.origin.replace(/^https?:\/\//, ''))) return send(res, 403, 'forbidden');
+  if (req.method === 'POST' && !LOCAL_HOSTS.has(String(req.headers.origin || '').replace(/^https?:\/\//, ''))) return send(res, 403, 'forbidden');
   const url = new URL(req.url, 'http://x');
   const p = decodeURIComponent(url.pathname);
 
   if (p === '/api/state') {
-    lastPoll = Date.now();
+    // 页面开着（每 1.5 秒来问一次）才定期重测取图地址；没人看时不去打扰查 IP 的网站
+    if (!host.checking && Date.now() - host.checkedAt > HOST_TTL) checkHosts();
     let mtime = 0;
     try { if (article.file) mtime = fs.statSync(article.file).mtimeMs; } catch { /* 文件被删 */ }
     const hits = {};
@@ -203,10 +219,13 @@ async function uiRoute(req, res) {
     const dir = path.dirname(article.file);
     const out = {};
     for (const ref of j().refs || []) {
-      const abs = path.resolve(dir, ref);
+      const abs = path.resolve(dir, String(ref));
       const ext = path.extname(abs).toLowerCase();
+      // 只认文章所在文件夹里的文件（和拖入文件夹时一样）：别处的 HTML 不能借相对路径把电脑上其他文件放到取图口上
+      const rel = path.relative(dir, abs);
+      const inside = rel && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
       try {
-        if (!ASSET_EXT.has(ext) || !fs.statSync(abs).isFile()) { out[ref] = null; continue; }
+        if (!inside || !ASSET_EXT.has(ext) || !fs.statSync(abs).isFile()) { out[ref] = null; continue; }
         out[ref] = registerFile(abs);
       } catch { out[ref] = null; }
     }
@@ -260,11 +279,11 @@ async function handOver() {
     const s = await (await fetch(base + '/api/state', { signal: AbortSignal.timeout(2000) })).json();
     if (s.app !== 'wxpaste') throw new Error();
   } catch {
-    console.error(`页面端口 ${UI_PORT} 被别的程序占用了。换一组端口再启动，例如 serve.cmd --port 40000（取图用 40000，页面用 40001）`);
+    console.error(`页面端口 ${UI_PORT} 被别的程序占用了。换一组端口再启动，例如 ${LAUNCH} --port 40000（取图用 40000，页面用 40001）`);
     process.exit(1);
   }
   if (initialArg) {
-    const r = await fetch(base + '/api/open', { method: 'POST', body: JSON.stringify({ path: initialArg }) });
+    const r = await fetch(base + '/api/open', { method: 'POST', headers: { origin: base }, body: JSON.stringify({ path: initialArg }) });
     const j = await r.json();
     console.log(r.ok ? '已交给正在运行的工具：' + j.file : '打开失败：' + j.error);
   } else console.log('工具已在运行。');
@@ -276,7 +295,7 @@ const uiServer = http.createServer(wrap(uiRoute));
 const imgServer = http.createServer(wrap(imgRoute));
 uiServer.once('error', e => { if (e.code === 'EADDRINUSE') handOver(); else throw e; });
 imgServer.once('error', e => {
-  console.error(e.code === 'EADDRINUSE' ? `取图端口 ${IMG_PORT} 被别的程序占用了。换一组端口再启动，例如 serve.cmd --port 40000（取图用 40000，页面用 40001）` : e.message);
+  console.error(e.code === 'EADDRINUSE' ? `取图端口 ${IMG_PORT} 被别的程序占用了。换一组端口再启动，例如 ${LAUNCH} --port 40000（取图用 40000，页面用 40001）` : e.message);
   process.exit(1);
 });
 uiServer.listen(UI_PORT, '127.0.0.1', () => {
@@ -286,7 +305,6 @@ uiServer.listen(UI_PORT, '127.0.0.1', () => {
     console.log(`  取图    0.0.0.0:${IMG_PORT}（对外网开放，只提供载入过的文章里的图片）`);
     console.log('  退出    Ctrl+C\n');
     checkHosts();
-    setInterval(checkHosts, 5 * 60000).unref();
     openBrowser(`http://127.0.0.1:${UI_PORT}/`);
   });
 });

@@ -23,7 +23,7 @@ let fails = 0;
 const check = (ok, label, extra = '') => { console.log(`${ok ? '  ✓' : '  ✗'} ${label}${extra ? '  ' + extra : ''}`); if (!ok) fails++; };
 const raw = (port, p, opts = {}) => new Promise(res => {
   const req = http.request({ host: '127.0.0.1', port, path: p, method: opts.method || 'GET', headers: opts.headers || {} }, r => {
-    let b = ''; r.on('data', c => { b += c; }); r.on('end', () => res({ status: r.statusCode, body: b }));
+    let b = ''; r.on('data', c => { b += c; }); r.on('end', () => res({ status: r.statusCode, body: b, headers: r.headers }));
   });
   req.on('error', () => res({ status: 0, body: '' }));
   req.end(opts.body);
@@ -261,6 +261,18 @@ try {
   if (css.length) check((await raw(IMG, '/a/' + css[0][1])).status === 404, '图床口不出非图片文件');
   check((await raw(UI, '/api/state', { headers: { host: 'evil.example:' + UI } })).status === 403, 'UI 口拒绝陌生 Host');
   check((await raw(UI, '/api/open', { method: 'POST', headers: { host: '127.0.0.1:' + UI, origin: 'http://evil.example' }, body: '{"path":"C:/"}' })).status === 403, 'UI 口拒绝跨站 POST');
+  check((await raw(UI, '/api/open', { method: 'POST', headers: { host: '127.0.0.1:' + UI }, body: '{"path":"C:/"}' })).status === 403, 'UI 口拒绝不带 Origin 的 POST');
+  if (ids.length) {
+    const h = (await raw(IMG, '/a/' + ids[0])).headers;
+    check(/sandbox/.test(h['content-security-policy'] || '') && h['x-content-type-options'] === 'nosniff', '取图口的文件带 CSP sandbox 与 nosniff（文章里的 SVG 脚本跑不起来）');
+  }
+  {
+    // 文章文件夹外的文件不登记：用相对路径指向仓库里的 ui/app.css
+    const dir = fs.statSync(ARTICLE).isDirectory() ? ARTICLE : path.dirname(ARTICLE);
+    const outside = path.relative(dir, path.join(HERE, '..', 'ui', 'app.css')).split(path.sep).join('/');
+    const r2 = await raw(UI, '/api/assets', { method: 'POST', headers: { host: '127.0.0.1:' + UI, origin: 'http://127.0.0.1:' + UI }, body: JSON.stringify({ refs: [outside] }) });
+    check(r2.status === 200 && JSON.parse(r2.body)[outside] === null, '不登记文章文件夹以外的文件', outside);
+  }
 } catch (e) {
   if (e.message !== 'stop') { console.error(e); fails++; }
 } finally {
