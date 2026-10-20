@@ -5,7 +5,7 @@ body{display:flex;font:14px/1.6 system-ui,-apple-system,"PingFang SC","Microsoft
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 
-.side{width:380px;flex:none;height:100%;overflow:auto;padding:20px 18px 28px;border-right:1px solid var(--line)}
+.side{width:380px;flex:none;height:100%;overflow:auto;padding:20px 18px 28px;border-right:1px solid var(--line);position:relative}
 .brand h1{font-size:18px;margin:0}
 .brand h1 .sub{font-size:13px;font-weight:500;color:var(--muted);margin-left:4px}
 .brand p{margin:2px 0 14px;color:var(--muted)}

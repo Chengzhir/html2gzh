@@ -62,6 +62,15 @@ try {
   console.log('\n文章 ' + ARTICLE);
   if (r.error) { check(false, '转换', r.error); throw new Error('stop'); }
   check(!errors.length, '页面无脚本错误', errors.slice(0, 3).join(' | '));
+  // 两栏各自滚动，整页不该能滚（侧栏里的绝对定位元素曾把页面撑出一截空白）
+  const pageScroll = [];
+  for (const [w, h] of [[1400, 900], [1920, 1080], [1280, 640]]) {
+    await page.setViewport({ width: w, height: h });
+    const d = await page.evaluate(() => document.scrollingElement.scrollHeight - innerHeight);
+    if (d > 0) pageScroll.push(`${w}×${h} 多出 ${d}px`);
+  }
+  await page.setViewport({ width: 1400, height: 900 });
+  check(!pageScroll.length, '整页不能滚动，只有两栏各自滚动', pageScroll.join(' | '));
   for (const f of [...r.findings].sort((a, b) => a.level.localeCompare(b.level))) console.log(`    [${f.level}] ${f.title}：${f.text}`);
   console.log(`    图片 本地 ${r.report.local} · 缺失 ${r.report.missing.length} · data: ${r.report.dataUri} · 外链 ${r.report.remote}`);
 
