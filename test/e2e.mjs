@@ -264,7 +264,10 @@ try {
   if (e.message !== 'stop') { console.error(e); fails++; }
 } finally {
   await browser.close();
+  // 等服务真正退出、端口释放，紧接着再跑一轮时才不会撞上旧进程
+  const exited = new Promise(r => srv.once('exit', r));
   srv.kill();
+  await Promise.race([exited, new Promise(r => setTimeout(r, 5000))]);
 }
 console.log(fails ? `\n${fails} 项失败` : '\n全部通过');
 process.exit(fails ? 1 : 0);
