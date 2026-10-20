@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "把本地 HTML 文章转成公众号编辑器能原样保留的格式，并临时提供图片外链",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "engines": {
     "node": ">=22.12.0"
