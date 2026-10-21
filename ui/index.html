@@ -41,15 +41,16 @@
     <p id="copyNote" class="muted" aria-live="polite">载入文章后可复制。</p>
     <p id="fetchLine" class="status" aria-live="polite" hidden></p>
     <div class="row small">
-      <label for="width">预览宽度</label>
+      <label for="width">预览屏宽</label>
       <select id="width">
-        <option value="320">360 宽安卓机（正文 320px）</option>
+        <option value="320">360 宽安卓（正文 320px）</option>
         <option value="335">375 宽 iPhone（正文 335px）</option>
         <option value="353">393 宽 iPhone（正文 353px）</option>
-        <option value="374">414 宽机型（正文 374px）</option>
+        <option value="372">412 宽安卓（正文 372px）</option>
+        <option value="374">414 宽 iPhone（正文 374px）</option>
       </select>
+      <button type="button" class="help" data-tip="成品随手机屏宽等比缩放。选的屏宽用于预览，也是还原最精确的宽度：原稿里的 @media 按它取值。其他常见屏宽会自动比对，结果见检查结果">?</button>
     </div>
-    <p class="muted small">成品会随手机屏宽等比缩放。选的这个宽度用来预览，也是还原最精确的宽度（原稿里的 @media 按它取值）；其他常见宽度会自动比对。</p>
   </section>
 
   <section class="card" aria-labelledby="fontTitle">
@@ -127,11 +128,21 @@
   <div class="panes" id="panes" hidden>
     <figure class="pane">
       <figcaption>原稿</figcaption>
-      <div class="phone"><iframe id="paneA" title="原稿预览" sandbox="allow-same-origin"></iframe></div>
+      <div class="sheet"><iframe id="paneA" title="原稿预览" sandbox="allow-same-origin"></iframe></div>
     </figure>
     <figure class="pane">
-      <figcaption>粘贴后（模拟微信正文样式，字体按这台电脑显示）</figcaption>
-      <div class="phone"><iframe id="paneB" title="粘贴后预览" sandbox="allow-same-origin"></iframe></div>
+      <figcaption>
+        <span>公众号阅读页（模拟）</span>
+        <button type="button" class="help" data-tip="正文套上阅读页的框架：标题、作者与时间是占位，正文区左右各留 20px。字体按这台电脑显示。深色模式用微信公开的转换算法 mp-darkmode 生成">?</button>
+        <label class="dark-toggle"><input type="checkbox" id="dark"> 深色模式</label>
+      </figcaption>
+      <div class="device" id="device">
+        <div class="screen">
+          <div class="sbar" aria-hidden="true"><span>9:41</span><svg viewBox="0 0 26 12"><rect x=".5" y=".5" width="21" height="11" rx="3" fill="none" stroke="currentColor"/><rect x="2" y="2" width="14" height="8" rx="1.5" fill="currentColor"/><rect x="23" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></div>
+          <div class="nbar" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg></div>
+          <iframe id="paneB" title="公众号阅读页预览" sandbox="allow-same-origin"></iframe>
+        </div>
+      </div>
     </figure>
   </div>
   <div id="empty" class="empty">
@@ -139,6 +150,8 @@
     <p class="muted">把文章文件夹拖进左边<span id="dropCmd">，或者直接把文件夹拖到 serve.cmd 上启动</span>。</p>
   </div>
   <iframe id="scratch" class="scratch" title="转换用" aria-hidden="true" tabindex="-1" sandbox="allow-same-origin"></iframe>
+  <iframe id="verify" class="scratch" title="比对用" aria-hidden="true" tabindex="-1" sandbox="allow-same-origin"></iframe>
+  <iframe id="darkFrame" class="scratch" title="深色转换用" aria-hidden="true" tabindex="-1" sandbox="allow-scripts"></iframe>
 </main>
 <script type="module" src="app.js"></script>
 </body>

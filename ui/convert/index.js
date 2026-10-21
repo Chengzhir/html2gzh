@@ -22,7 +22,7 @@ const FORCED = ['max-width', 'min-height', 'clear', 'box-sizing', 'height'];
 // 微信正文样式里这几项带 !important，只有它们补回时也得带；其余内联声明本来就压得过（规范不建议用 !important）
 const READER_IMPORTANT = new Set(['max-width', 'box-sizing', 'height']);
 /** 比对用的正文宽度：常见手机，加上内容结构检测用的 375/585/677 屏宽（它直接把这些宽度设成正文区宽） */
-const CHECK_WIDTHS = [320, 335, 353, 374, 375, 460, 585, 677];
+const CHECK_WIDTHS = [320, 335, 353, 372, 374, 375, 460, 585, 677];
 const FLOW = /^(block|flow-root|list-item)$/;
 
 /**
@@ -80,6 +80,7 @@ export async function convert(html, { width, frame, verifyFrame, opts = {}, glyp
     if (w === width) { visualBad = bad; verified = V.size; } else if (bad.length) others.push([w, bad]);
   }
 
+  if (A.pageBg && !/^rgb(255, 255, 255)$/.test(A.pageBg)) F.warn('页面底色', `原稿有页面底色（${A.pageBg}），粘贴后底色和色块只铺满正文区。阅读页正文区左右各留 20px，显示阅读页自己的底色（浅色模式白色，深色模式 #191919），去不掉；效果见右边的预览`);
   if (badRules.length) F.warn('备用字体规则', `第 ${badRules.join('、')} 行格式不对，已跳过（应为“原稿字体, … => 备用字体, …”）`);
   if (stat.cq) F.fixed('等比缩放', `${stat.cq} 个尺寸写成了 cqw（1cqw = 外层容器宽度的 1%，通常就是正文宽度），随手机屏宽等比缩放` + (stat.split ? `，${stat.split} 处位移拆成固定 + 比例两段` : ''));
   // 多宽度比对都过了就只是说明，不必读者处理
@@ -419,7 +420,7 @@ async function convertAt(html, width, frame, ctx) {
   if (stuck.length) F.warn('位置偏差', `${stuck.length} 个行内元素（文字片段等）没法用位移校正，位置可能和原稿有些偏差`, stuck.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean));
   if (notes.media) F.info('屏宽适配', `${notes.media} 条按屏宽切换的样式（@media）取的是正文 ${width}px 宽时的值；成品靠等比缩放适配其他屏宽，不再随断点切换`);
 
-  return { F, preview, original, targetV, n, moved, outlined };
+  return { F, preview, original, targetV, n, moved, outlined, pageBg };
 }
 
 /** 伪元素 content 计算值 → 文本；counter()/url() 无法转换返回 null */

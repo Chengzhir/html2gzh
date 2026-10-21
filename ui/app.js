@@ -2,6 +2,8 @@ import { convert } from './convert/index.js';
 import { DEFAULT_OPTS, parseRules } from './convert/fonts.js';
 import { WHY_TEXT } from './convert/outline.js';
 import { setTip } from './tip.js';
+import { readerDoc, darkHtml, SIDE } from './phone.js';
+import { readerImages } from './convert/reader.js';
 
 const $ = id => document.getElementById(id);
 // Windows 上用 serve.cmd 启动；别的系统在终端里跑 node server.mjs
@@ -351,13 +353,14 @@ async function run() {
     showCurrent(label, where);
     const prep = await prepare(html, entry);
     banner(o.paths.length ? '转换中…（第一次转 SVG 路径要读取本机字体目录，稍慢）' : '转换中…');
-    const res = await convert(prep.html, { width: w, frame: $('scratch'), verifyFrame: $('paneB'), opts: o, glyphs, raster });
+    const res = await convert(prep.html, { width: w, frame: $('scratch'), verifyFrame: $('verify'), opts: o, glyphs, raster });
     state.result = { ...res, report: prep.report, paths: o.paths, width: w };
-    for (const f of [$('paneA'), $('paneB')]) { f.style.width = w + 'px'; f.style.height = ''; }
+    $('paneA').style.width = w + 'px';
     $('paneA').srcdoc = res.original;
     $('panes').hidden = false; $('empty').hidden = true;
     renderChecks();
     renderFaces();
+    await renderReader();
     banner('');
   } catch (e) {
     console.error(e);
@@ -427,16 +430,17 @@ function renderChecks() {
   }
 }
 
+/** 两边都标出这些元素；滚动原稿那边，阅读页跟着同步滚动 */
 function highlight(ids) {
   for (const f of [$('paneA'), $('paneB')]) {
     const d = f.contentDocument;
-    if (!d) continue;
+    if (!d || !d.head) continue;
     let st = d.getElementById('__wxc_hl');
     if (!st) { st = d.createElement('style'); st.id = '__wxc_hl'; d.head.appendChild(st); }
     st.textContent = ids.map(i => `[data-wxc="${i}"]`).join(',') + '{outline:2px solid #e8590c!important;outline-offset:1px}';
-    const el = d.querySelector(`[data-wxc="${ids[0]}"]`);
-    if (el) el.scrollIntoView({ block: 'center' });
   }
+  const el = $('paneA').contentDocument && $('paneA').contentDocument.querySelector(`[data-wxc="${ids[0]}"]`);
+  if (el) el.scrollIntoView({ block: 'center' });
 }
 
 /* ---------- 图床状态 ---------- */
@@ -530,7 +534,7 @@ function refreshCopy() {
 async function copy() {
   const pick = chosen();
   const html = pick ? state.result.payload.split(ORIGIN + '/a/').join(pick.base + '/a/') : state.result.payload;
-  const text = $('paneB').contentDocument.body.innerText;
+  const text = $('verify').contentDocument.querySelector('.rich_media_content').innerText;
   try {
     await navigator.clipboard.write([new ClipboardItem({
       'text/html': new Blob([html], { type: 'text/html' }),
@@ -655,15 +659,50 @@ const W_KEY = 'wxc.width';
 $('width').value = localStorage.getItem(W_KEY) || '335';
 $('width').onchange = () => { localStorage.setItem(W_KEY, $('width').value); rerun(); };
 
-// 两个预览同步滚动（按比例）
+/* ---------- 阅读页模拟 ---------- */
+const DARK_KEY = 'wxc.dark';
+$('dark').checked = localStorage.getItem(DARK_KEY) === '1';
+let readerSeq = 0;
+/** 右栏：成品套上阅读页框架。深色模式先在隐藏 iframe 里跑转换算法 */
+async function renderReader() {
+  const r = state.result;
+  if (!r) return;
+  const dark = $('dark').checked, seq = ++readerSeq;
+  const pb = $('paneB'), w = r.width + 2 * SIDE;
+  pb.style.width = w + 'px';
+  $('device').classList.toggle('dark', dark);
+  const doc = readerDoc(r.preview, dark);
+  if (!dark) { pb.dataset.dark = ''; pb.srcdoc = doc; return; }
+  banner('生成深色模式…');
+  try {
+    const html = await darkHtml($('darkFrame'), doc, w, pb.clientHeight);
+    if (html == null || seq !== readerSeq) return;
+    pb.dataset.dark = '1';
+    pb.srcdoc = html;
+    banner('');
+  } catch (e) { if (seq === readerSeq) banner(e.message, true); }
+}
+$('dark').onchange = () => {
+  localStorage.setItem(DARK_KEY, $('dark').checked ? '1' : '');
+  if (!state.busy) renderReader();
+};
+
+// 两栏同步滚动。阅读页的正文在标题和作者行下面（高 T）：开头一屏（高 H）内阅读页滚得快些，追平 T，之后两边差一个固定的 T
+const readerTop = () => { const d = $('paneB').contentDocument, c = d && d.getElementById('js_content'); return c ? c.getBoundingClientRect().top + d.defaultView.scrollY : 0; };
+const toReader = (y, T, H) => y >= H ? y + T : y * (1 + T / H);
+const toOriginal = (y, T, H) => y >= H + T ? y - T : y / (1 + T / H);
 let syncing = false;
-for (const [a, b] of [['paneA', 'paneB'], ['paneB', 'paneA']]) {
-  $(a).addEventListener('load', () => {
-    $(a).contentWindow.addEventListener('scroll', () => {
-      if (syncing) return; syncing = true;
-      const wa = $(a).contentWindow, wb = $(b).contentWindow;
-      const ra = wa.scrollY / Math.max(1, wa.document.documentElement.scrollHeight - wa.innerHeight);
-      wb.scrollTo(0, ra * (wb.document.documentElement.scrollHeight - wb.innerHeight));
+for (const id of ['paneA', 'paneB']) {
+  $(id).addEventListener('load', () => {
+    const f = $(id);
+    // 深色的在隐藏 iframe 里已经照阅读页脚本改过图片尺寸
+    if (id === 'paneB' && !f.dataset.dark) readerImages(f.contentDocument);
+    f.contentWindow.addEventListener('scroll', () => {
+      const other = $(id === 'paneA' ? 'paneB' : 'paneA');
+      if (syncing || !other.contentWindow) return;
+      syncing = true;
+      const T = readerTop(), H = Math.max(1, $('paneA').clientHeight), y = f.contentWindow.scrollY;
+      other.contentWindow.scrollTo(0, id === 'paneA' ? toReader(y, T, H) : toOriginal(y, T, H));
       requestAnimationFrame(() => { syncing = false; });
     });
   });

@@ -330,6 +330,47 @@ try {
     }
   }
 
+  // 阅读页模拟：右栏是成品套上阅读页框架（浅色、深色），比对与复制用的是隐藏的 #verify
+  console.log('\n阅读页模拟');
+  {
+    const errs0 = errors.length;
+    const frameOk = () => page.waitForFunction(() => { const d = document.getElementById('paneB').contentDocument; return d && d.getElementById('js_content') && d.readyState === 'complete'; }, { timeout: 30000 });
+    await frameOk();
+    const light = await page.evaluate(() => {
+      const f = document.getElementById('paneB'), d = f.contentDocument, c = d.getElementById('js_content').getBoundingClientRect();
+      return { title: !!d.querySelector('.rich_media_title'), bar: !!d.querySelector('.wx_bar'), left: c.left, right: f.clientWidth - c.right, n: d.querySelectorAll('#js_content [data-wxc]').length,
+        bg: getComputedStyle(d.body).backgroundColor, verify: document.getElementById('verify').contentDocument.querySelector('.rich_media_content').innerText.trim().length };
+    });
+    check(light.title && light.bar && light.left === 20 && light.right === 20 && light.n > 0 && light.bg === 'rgb(255, 255, 255)', '浅色：标题、底栏、正文左右各 20px',
+      `左 ${light.left} 右 ${light.right}，${light.n} 个元素，底色 ${light.bg}`);
+    check(light.verify > 0, '比对用的隐藏 iframe 里有正文（复制时的纯文本取自这里）', `${light.verify} 字`);
+    await page.screenshot({ path: path.join(OUT, `stage-light${SVG_MODE ? '-svg' : ''}.png`) });
+    await page.click('#dark');
+    await page.waitForFunction(() => { const d = document.getElementById('paneB').contentDocument; return d && d.documentElement.classList.contains('data_color_scheme_dark') && d.readyState === 'complete'; }, { timeout: 60000 }).catch(() => {});
+    const dark = await page.evaluate(() => {
+      const d = document.getElementById('paneB').contentDocument;
+      return { cls: d.documentElement.classList.contains('data_color_scheme_dark'), bg: getComputedStyle(d.body).backgroundColor, scripts: d.querySelectorAll('script').length,
+        n: d.querySelectorAll('#js_content [data-wxc]').length, rules: [...d.querySelectorAll('style')].some(s => /data_color_scheme_dark/.test(s.textContent)) };
+    });
+    check(dark.cls && dark.bg === 'rgb(25, 25, 25)' && !dark.scripts && dark.n === light.n, '深色：转换算法跑过、页面底色 #191919、不带脚本、元素一个不少',
+      `${dark.cls ? '有' : '无'} data_color_scheme_dark，${dark.rules ? '有' : '无'}转换规则，底色 ${dark.bg}，脚本 ${dark.scripts}，${dark.n}/${light.n} 个元素`);
+    await page.screenshot({ path: path.join(OUT, `stage-dark${SVG_MODE ? '-svg' : ''}.png`) });
+    await page.click('#dark');
+    await frameOk();
+    // 同步滚动：原稿滚 200px，阅读页按"开头一屏内追平标题区高度"的规则跟着滚
+    const sync = await page.evaluate(async () => {
+      const a = document.getElementById('paneA'), b = document.getElementById('paneB');
+      const T = b.contentDocument.getElementById('js_content').getBoundingClientRect().top + b.contentWindow.scrollY, H = a.clientHeight;
+      a.contentWindow.scrollTo(0, 200);
+      await new Promise(r => setTimeout(r, 300));
+      const maxB = b.contentDocument.documentElement.scrollHeight - b.contentWindow.innerHeight;
+      const want = Math.min(maxB, a.contentWindow.scrollY >= H ? a.contentWindow.scrollY + T : a.contentWindow.scrollY * (1 + T / H));
+      return { a: a.contentWindow.scrollY, b: b.contentWindow.scrollY, want };
+    });
+    check(Math.abs(sync.b - sync.want) <= 1, '两栏同步滚动', `原稿 ${sync.a}px → 阅读页 ${sync.b}px（应为 ${sync.want.toFixed(1)}）`);
+    check(errors.length === errs0, '切换深色、同步滚动时页面无脚本错误', errors.slice(errs0, errs0 + 3).join(' | '));
+  }
+
   console.log('\n端口安全');
   const ids = [...p.matchAll(/\/a\/([0-9a-f]{16}\.(png|jpe?g|gif|webp|svg))/g)].map(m => m[1]);
   if (ids.length) check((await raw(IMG, '/a/' + ids[0])).status === 200, '图床口能取到已登记图片');
