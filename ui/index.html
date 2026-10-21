@@ -15,8 +15,8 @@
   <section class="card" id="srcCard" aria-labelledby="srcTitle">
     <h2 id="srcTitle">文章</h2>
     <div id="drop" class="drop" tabindex="0" role="button" aria-describedby="dropHint">
-      <strong>把文章文件夹拖到这里</strong>
-      <span id="dropHint">文件夹内含文章的 HTML（index.html）及其图片</span>
+      <strong>将文章文件夹拖放到此处</strong>
+      <span id="dropHint">文件夹中应包含文章的 HTML 文件及其引用的图片、样式表等文件</span>
     </div>
     <div class="row">
       <button type="button" id="pickDir">选择文件夹…</button>
@@ -24,9 +24,10 @@
     </div>
     <form id="pathForm" class="row">
       <label for="pathInput" class="sr-only">文件或文件夹路径</label>
-      <input id="pathInput" placeholder="或粘贴路径，如 D:\推送\index.html" autocomplete="off">
+      <input id="pathInput" placeholder="或粘贴路径，例如 D:\推送\index.html" autocomplete="off">
       <button type="submit">打开</button>
     </form>
+    <p id="srcNote" class="note small" role="status" aria-live="polite" hidden></p>
     <div id="current" class="current" hidden>
       <div class="file" id="curName"></div>
       <div class="muted" id="curWhere"></div>
@@ -42,45 +43,45 @@
     <div class="row small">
       <label for="width">预览屏宽</label>
       <select id="width">
-        <option value="320">360 宽安卓（正文 320px）</option>
-        <option value="335">375 宽 iPhone（正文 335px）</option>
-        <option value="353">393 宽 iPhone（正文 353px）</option>
-        <option value="372">412 宽安卓（正文 372px）</option>
-        <option value="374">414 宽 iPhone（正文 374px）</option>
+        <option value="320">安卓 360（正文 320px）</option>
+        <option value="335">iPhone 375（正文 335px）</option>
+        <option value="353">iPhone 393（正文 353px）</option>
+        <option value="372">安卓 412（正文 372px）</option>
+        <option value="374">iPhone 414（正文 374px）</option>
       </select>
-      <button type="button" class="help" data-tip="成品随手机屏宽等比缩放。选的屏宽用于预览，也是还原最精确的宽度：原稿里的 @media 按它取值。其他常见屏宽会自动比对，结果见检查结果">?</button>
+      <button type="button" class="help" data-tip="两侧预览按所选屏宽显示。原稿中的 @media 规则按这个屏宽对应的正文宽度判断是否生效，因此成品在这个屏宽下与原稿最接近；在其他屏宽下，成品随屏宽等比缩放。其他常见屏宽也会自动与原稿比对，结果列在检查结果中。">?</button>
     </div>
   </section>
 
   <section class="card" aria-labelledby="fontTitle">
     <h2 id="fontTitle">字体</h2>
     <dl class="legend small">
-      <dt>勾选</dt><dd>转为 SVG 路径：手机上字形与原稿一致，在公众号后台不能编辑</dd>
-      <dt>不勾选</dt><dd>保留为文字：手机上显示为备用字体</dd>
+      <dt>勾选</dt><dd>转为 SVG 路径（类似设计软件中的“转曲”）：手机上的字形与原稿相同，但在公众号后台无法再编辑这些字</dd>
+      <dt>不勾选</dt><dd>保留为文字：手机上没有原稿字体时，显示为备用字体</dd>
     </dl>
-    <p class="muted small">字号单位 px，按 375 宽的 iPhone（正文 335px）折算。</p>
+    <p class="muted small">字号随屏宽等比缩放，表中的字号（px）是在 iPhone 375（正文宽度 335px）上的大小。</p>
     <div class="row small face-tools">
       <label for="svgMin">字号 ≥</label>
       <input id="svgMin" type="number" min="1" max="400" step="0.5" inputmode="decimal">
       <span>px</span>
-      <button type="button" id="pickBig" data-tip="勾选字号不小于这个值的行，其余的行取消勾选">按字号勾选</button>
+      <button type="button" id="pickBig" data-tip="勾选字号不小于这个值的行，取消其余各行的勾选。">按字号勾选</button>
     </div>
     <div id="faceList" class="faces"><p class="muted small">载入文章后列出。</p></div>
     <div class="check small">
-      <label><input type="checkbox" id="svgCopy"> 路径上叠透明文字</label>
-      <button type="button" class="help" data-tip="读者长按能选中、复制这些字。不叠则只能看">?</button>
+      <label><input type="checkbox" id="svgCopy"> 转为路径的字仍可选中、复制</label>
+      <button type="button" class="help" data-tip="转为 SVG 路径的字只是图形，正文中不再有这些文字：读者无法选中、复制这些字，也无法搜索到它们。勾选后，路径上方会放置一层位置相同的透明文字，这些字便仍以文字形式保留在正文中，可以选中、复制。代码会略微变长。">?</button>
     </div>
     <div class="check small">
       <label><input type="checkbox" id="noWrap"> 保留不换行（white-space: nowrap）</label>
-      <button type="button" class="help" data-tip="公众号会删掉 white-space: nowrap。勾选后，这些文字里的空格换成不换行空格，字与字之间插入 U+2060（单词连接符），手机上照样不换行。后台的“正文字数”会把 U+2060 也算进去">?</button>
+      <button type="button" class="help" data-tip="公众号会删除 white-space: nowrap，原稿中不换行的文字在手机上可能自动换行。勾选后，这些文字中的空格改为不换行空格，字与字之间插入 U+2060（单词连接符），手机上同样不会自动换行。后台统计的正文字数会把 U+2060 也计算在内。">?</button>
     </div>
     <details id="rulesBox">
       <summary>备用字体规则</summary>
-      <p class="muted small">一行一条：<code>原稿字体, … =&gt; 备用字体, …</code></p>
+      <p class="muted small">每行一条规则，格式为 <code>原稿字体, … =&gt; 备用字体, …</code></p>
       <ul class="muted small notes">
-        <li>字体名写全名，不分大小写</li>
-        <li><code>*</code> 匹配任意字符，<code>#</code> 开头的行是注释</li>
-        <li>备用字体插在字体栈里 sans-serif 等通用字体名之前</li>
+        <li>字体名须写全称，不区分大小写</li>
+        <li><code>*</code> 匹配任意数量的字符；以 <code>#</code> 开头的行是注释</li>
+        <li>备用字体插入字体栈中 sans-serif 等通用字体名之前</li>
       </ul>
       <label for="rules" class="sr-only">备用字体规则</label>
       <textarea id="rules" rows="9" spellcheck="false" autocomplete="off"></textarea>
@@ -93,34 +94,38 @@
 
   <section class="card" aria-labelledby="hostTitle">
     <h2 id="hostTitle">取图地址</h2>
-    <div class="row small host-intro">
-      <span class="muted">微信服务器从这个地址取走本机的图片，须外网可达</span>
-      <button type="button" class="help" data-tip="粘贴后，公众号后台把正文里的图片地址交给微信服务器，由它下载并转存到微信的图床。取图端口只对外提供载入过的文章里的图片，关闭本工具即停止。">?</button>
-    </div>
-    <p id="hostLine" class="status">检测中…</p>
-    <fieldset id="hostPick" class="hosts" hidden>
-      <legend class="sr-only">选择微信从哪个地址取图</legend>
-      <div id="hostList"></div>
-    </fieldset>
-    <p id="hostHelp" class="muted small" hidden></p>
-    <div class="row small">
-      <button type="button" id="recheck">重新检测</button>
-      <span id="hostWhen" class="muted"></span>
-    </div>
-    <form id="portForm" class="row small port-row">
-      <label for="portInput">本机取图端口</label>
-      <input id="portInput" type="number" min="1024" max="65535" step="1" inputmode="numeric">
-      <button type="submit">更改</button>
-      <button type="button" class="help" data-tip="微信从这个端口取图，外网要能连上：路由器端口转发或内网穿透都要对准它。改后立即生效，重启后沿用（存在工具目录的 settings.json）">?</button>
+    <p class="muted small host-intro">粘贴后，微信服务器从这个地址下载文中的本地图片，转存到微信的图床。文中只有网络图片时，无需设置。</p>
+    <form id="hostForm" class="host-form small" novalidate>
+      <label for="hfPort">本机端口</label>
+      <input id="hfPort" inputmode="numeric" autocomplete="off" spellcheck="false">
+      <label for="hfHost">公网地址</label>
+      <input id="hfHost" placeholder="留空则自动检测公网 IP" autocomplete="off" spellcheck="false">
+      <label for="hfPubPort">公网端口</label>
+      <input id="hfPubPort" inputmode="numeric" autocomplete="off" spellcheck="false">
+      <label for="hfProto">协议</label>
+      <select id="hfProto"><option value="http">http</option><option value="https">https</option></select>
+      <div class="host-actions"><button type="submit">保存</button><span id="hostNote" class="note" role="status" aria-live="polite"></span></div>
     </form>
-    <details>
-      <summary>没有公网 IP：使用内网穿透</summary>
-      <p class="muted small">用 frp、cpolar 等内网穿透工具把本机的 <span id="imgPortHint">38960</span> 端口映射到外网，再把得到的地址填在下面。</p>
-      <form id="customForm" class="row">
-        <label for="customInput" class="sr-only">自定义取图地址</label>
-        <input id="customInput" placeholder="如 https://abc.example.com" autocomplete="off">
-        <button type="submit">使用</button>
-      </form>
+    <div class="host-result">
+      <p id="hostLine" class="status">正在检测…</p>
+      <div id="hostHelp" class="host-help muted small" hidden></div>
+      <div class="row small"><button type="button" id="recheck">重新检测</button><span id="hostWhen" class="muted"></span></div>
+      <details id="exitBox" hidden><summary id="exitSum">检测到的公网 IP</summary><ul id="exitList" class="exits small"></ul></details>
+    </div>
+    <details class="host-guide">
+      <summary>填写说明</summary>
+      <dl class="guide small">
+        <dt>有公网 IP</dt>
+        <dd>在路由器上添加端口转发：外部端口填写“公网端口”的值（留空时与本机端口相同），内部 IP 填写这台电脑的局域网 IP，内部端口填写“本机端口”的值（当前为 <span class="guide-port">38960</span>）。“公网地址”可以留空，由本工具自动检测；有域名时也可以填写域名。Windows 防火墙弹出提示时，请允许 Node.js 在当前网络中通信。</dd>
+        <dt>没有公网 IP</dt>
+        <dd>校园网和多数移动宽带属于这种情况：检测到的公网 IP 是学校或运营商的出口 IP，外网无法通过它访问这台电脑。请使用 frp、cpolar 等内网穿透工具，把本机的 <span class="guide-port">38960</span> 端口映射到外网，再将内网穿透工具提供的地址、端口与协议分别填入对应的输入框。以 http:// 或 https:// 开头的完整地址（如 https://abc.example.com）可以整体粘贴到“公网地址”中，将自动拆分为协议、公网地址与公网端口。</dd>
+        <dt>公网端口</dt>
+        <dd>留空时，协议为 http 则与本机端口相同，为 https 则使用 443。本工具只提供 http；选择 https 时，由内网穿透工具或反向代理负责加密。</dd>
+        <dt>自测</dt>
+        <dd>保存后，本工具从这台电脑访问一次取图地址，检查能否连通；页面打开期间每 5 分钟重新检测。内网穿透的地址通过自测，一般说明外网也能访问。端口转发的地址需要路由器把这台电脑发出的请求转回本机，部分路由器不支持这一功能，此时自测不会通过，但外网仍可能正常访问；可以先复制、粘贴一次，观察“复制到剪贴板”下方显示的已下载图片数是否增加。</dd>
+        <dt>安全</dt>
+        <dd>无论使用端口转发还是内网穿透，本机端口都会对外网开放。这个端口不设认证，只提供已载入文章中引用的图片；文件名为内容的哈希值，外部难以猜测。关闭本工具后即停止提供。</dd>
+      </dl>
     </details>
   </section>
 
@@ -132,8 +137,8 @@
 </aside>
 
 <main class="stage">
-  <div id="status" class="banner" role="status" aria-live="polite" hidden></div>
   <div class="panes" id="panes" hidden>
+    <div id="toastAll" class="toast toast-all" role="status" aria-live="polite"><span class="toast-text"></span><button type="button" class="toast-x" aria-label="关闭提示" hidden>×</button></div>
     <figure class="pane">
       <figcaption>原稿</figcaption>
       <div class="sheet"><iframe id="paneA" title="原稿预览" sandbox="allow-same-origin"></iframe></div>
@@ -141,11 +146,12 @@
     <figure class="pane">
       <figcaption>
         <span>公众号阅读页（模拟）</span>
-        <button type="button" class="help" data-tip="正文套上阅读页的框架：标题、作者与时间是占位，正文区左右各留 20px。字体按这台电脑显示。深色模式用微信公开的转换算法 mp-darkmode 生成">?</button>
+        <button type="button" class="help" data-tip="模拟公众号文章的阅读页：标题、公众号名称与时间为占位内容，正文区左右各留 20px 页边距。预览使用这台电脑上的字体，而电脑与手机自带的字体不同：手机上没有原稿字体时显示为备用字体，字形可能与预览不同。深色模式由微信开源的转换算法 mp-darkmode 生成。">?</button>
         <label class="dark-toggle"><input type="checkbox" id="dark"> 深色模式</label>
       </figcaption>
       <div class="device" id="device">
-        <div class="screen">
+        <div class="screen" id="screen">
+          <div id="toastReader" class="toast toast-reader" role="status" aria-live="polite"><span class="toast-text"></span><button type="button" class="toast-x" aria-label="关闭提示" hidden>×</button></div>
           <div class="sbar" aria-hidden="true"><span>9:41</span><svg viewBox="0 0 26 12"><rect x=".5" y=".5" width="21" height="11" rx="3" fill="none" stroke="currentColor"/><rect x="2" y="2" width="14" height="8" rx="1.5" fill="currentColor"/><rect x="23" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg></div>
           <div class="nbar" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M15 4l-8 8 8 8" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg></div>
           <iframe id="paneB" title="公众号阅读页预览" sandbox="allow-same-origin"></iframe>
@@ -154,8 +160,11 @@
     </figure>
   </div>
   <div id="empty" class="empty">
-    <p>尚未载入文章</p>
-    <p class="muted">把文章文件夹拖到左侧<span id="dropCmd">，或拖到 serve.cmd 上启动</span>。</p>
+    <div id="emptyIdle">
+      <p>尚未载入文章</p>
+      <p class="muted">将文章文件夹拖放到左侧<span id="dropCmd">，或拖放到 serve.cmd 上启动</span>。</p>
+    </div>
+    <p id="emptyMsg" role="status" aria-live="polite" hidden></p>
   </div>
   <iframe id="scratch" class="scratch" title="转换用" aria-hidden="true" tabindex="-1" sandbox="allow-same-origin"></iframe>
   <iframe id="verify" class="scratch" title="比对用" aria-hidden="true" tabindex="-1" sandbox="allow-same-origin"></iframe>

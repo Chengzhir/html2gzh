@@ -1,6 +1,7 @@
 import { ID, isHtmlEl, measure, diffBoxes, splitTop } from './util.js';
 import { faceKey } from './fonts.js';
 import { annotateContainerWidths } from './responsive.js';
+import { resolveWebFonts, usesMissing } from './webfonts.js';
 
 // 字体表里勾选的字转为 SVG 路径：字形取自本机字体文件（服务端 /api/glyphs），摆在转换帧里实测的逐字位置上；同位叠一层透明 <text> 供选中复制。
 // 单元 = 一个块元素的全部内容，或块容器/弹性容器里的一段行内内容（包进一个块级 span 后整体替换）。
@@ -22,13 +23,15 @@ const glyphCache = new Map(), runCache = new Map();
 const isFloat = n => n.nodeType === 1 && n.hasAttribute('data-wxc-float');
 const f3 = n => String(Math.round(n * 1000) / 1000);
 const unq = s => s.trim().replace(/^["']|["']$/g, '');
-const MISS = { nofont: '浏览器没给出字体', webfont: '网页字体', notindexed: '不在本机字体目录', color: '彩色字体', shape: '排版出错', notdef: '字体里没有这个字', long: '组合符号过多' };
-const noteMiss = (notes, kind, ps) => { const k = ps ? `${ps} ${MISS[kind] || kind}` : MISS[kind] || kind; notes.miss.set(k, (notes.miss.get(k) || 0) + 1); };
+const MISS = { nofont: '无法确定实际使用的字体', webfont: '网页字体的声明与字体文件不匹配', webfile: '无法获取网页字体的文件', notindexed: '这台电脑的字体目录中没有这个字体',
+  color: '是彩色字体', shape: '字形排版失败', notdef: '字体中没有这个字', long: '组合符号过多' };
+/** 拼成"字体名：原因"计数，同一原因在不同字体上分开记 */
+const noteMiss = (notes, kind, ps) => { const k = ps ? `${ps}：${MISS[kind] || kind}` : MISS[kind] || kind; notes.miss.set(k, (notes.miss.get(k) || 0) + 1); };
 
 /**
- * 原稿真正用上的网络字体（@font-face）。轮廓只能画本机字体，用了网络字体的字画出来是回落字体，不是原设计，留成文字。
- * 要在摘掉样式表之前调用（之后它们就从 document.fonts 里消失了）。排在前面的本机字体已经覆盖了所有字时，
- * 网络字体不会被加载，状态停在 unloaded；加载失败的是 error，原稿里显示的也是回落字体，都不算
+ * 原稿真正用上的网页字体（@font-face）的字体名。用到它们的字转为路径时，字形取自文章引用的字体文件（见 webfonts.js）。
+ * 要在摘掉样式表之前调用。排在前面的本机字体已经覆盖了所有字时，网页字体不会被加载，状态停在 unloaded；
+ * 加载失败的是 error，原稿里显示的也是回落字体，都不算
  */
 export function webFamilies(doc) {
   const out = new Set();
@@ -114,21 +117,21 @@ function ineligible(win, box, nodes, root) {
 }
 /** 字没转为路径的原因：选单元时的原因代码，加上 outline/decide 的结论代码 */
 export const WHY_TEXT = {
-  vote: '所在段落多数字没勾选（一段整体转或整体不转）',
-  inline: '所在段落里有带背景、边框或上下标的行内元素',
-  deco: '所在段落里有下划线、删除线等装饰线',
-  effect: '所在段落里有描边、阴影或背景裁切文字（background-clip: text）',
-  case: '所在段落里有大小写变换或小型大写（text-transform、font-variant）',
-  dir: '所在段落是竖排或从右到左排',
-  clip: '所在的块用省略号截断（text-overflow、line-clamp）',
-  other: '排版结构不支持', empty: '排版结构不支持',
-  font: '取不到原字体的字形', server: '取字形失败',
-  layout: '换成路径后周围的元素会挪位',
-  reflow: '换行位置或缩放方式随屏宽变化，路径没法跟着变',
-  shaping: '连字或上下文字形和浏览器的排法对不上',
-  baseline: '量不准文字基线',
-  mismatch: '换个屏宽排版结构就变了', missing: '换个屏宽排版结构就变了',
-  ineligible: '换个屏宽就不再符合转换条件',
+  vote: '所在段落中的大部分文字属于没有勾选的行（一个段落整体转换或整体不转换）',
+  inline: '所在段落中有带背景、边框或上下标的行内元素',
+  deco: '所在段落中有下划线、删除线等装饰线',
+  effect: '所在段落中有描边、阴影或背景裁切文字（background-clip: text）',
+  case: '所在段落中有大小写变换或小型大写字母（text-transform、font-variant）',
+  dir: '所在段落为竖排或从右到左排列',
+  clip: '所在的块用省略号截断文字（text-overflow、line-clamp）',
+  other: '不支持这种排版结构', empty: '不支持这种排版结构',
+  font: '无法获取原稿字体的字形', server: '获取字形失败',
+  layout: '转为路径后周围的元素会移位',
+  reflow: '换行位置或缩放方式随屏宽变化，路径无法随之调整',
+  shaping: '连字或随上下文变化的字形与浏览器的排版结果不一致',
+  baseline: '无法准确测量文字基线',
+  mismatch: '在其他屏宽下排版结构不同', missing: '在其他屏宽下排版结构不同',
+  ineligible: '在其他屏宽下不再符合转换条件',
 };
 
 /**
@@ -154,7 +157,7 @@ export function planFonts(doc, root, { picked, web, sizeAt }) {
     const f = faceKey(c), size = Math.round(sizeAt(el) * 2) / 2;
     const key = `${f.key}|${size}`;
     let r = rows.get(key);
-    if (!r) rows.set(key, r = { ...f, face: f.key, key, size, stack: c.fontFamily, stretch: c.fontStretch, web: !!webIn(c.fontFamily, web), chars: 0, sample: '', last: null });
+    if (!r) rows.set(key, r = { ...f, face: f.key, key, size, stack: c.fontFamily, stretch: c.fontStretch, web: webIn(c.fontFamily, web), chars: 0, sample: '', last: null });
     r.chars += n; rowOf.set(t, r); cnt.set(t, n);
     // 同一个块里被行内元素切开的几段直接接上（保留原文的空格），换了块才加空格；样例多取一些，显示时由 CSS 省略号截断
     if (r.sample.length < 40) {
@@ -164,7 +167,7 @@ export function planFonts(doc, root, { picked, web, sizeAt }) {
       r.last = blk;
     }
   }
-  const isPicked = r => picked.has(r.key) && !r.web;
+  const isPicked = r => picked.has(r.key);
   const list = [...rows.values()].map(({ last, ...r }) => r);
   if (!list.some(isPicked)) return { rows: list, units: [], skip: new Map() };
 
@@ -293,8 +296,8 @@ function exactContentBox(doc, el) {
   return { x: r.left, y: r.top, w: r.width, h: contentBox(doc.defaultView, el).h };
 }
 
-/** 逐字（字素簇）量位置与样式，坐标相对单元内容盒左上角 */
-function measureChars(doc, u, web) {
+/** 逐字（字素簇）量位置与样式，坐标相对单元内容盒左上角。web：原稿用上的网页字体名；sig：这组网页字体的签名 */
+function measureChars(doc, u, { web, sig }) {
   const win = doc.defaultView;
   const cb = exactContentBox(doc, u.box);
   u.w = cb.w; u.h = cb.h;
@@ -312,6 +315,8 @@ function measureChars(doc, u, web) {
       lang, synthW: c.fontSynthesisWeight !== 'none', synthS: c.fontSynthesisStyle !== 'none',
       ligatures: c.fontVariantLigatures, spaced: (parseFloat(c.letterSpacing) || 0) !== 0,
       web: webIn(c.fontFamily, web) };
+    // 网页字体：可变字体的 opsz 轴随字号变，字形要按字号取；签名区分同名字体的不同文件
+    if (s.web) { s.opsz = c.fontOpticalSizing === 'none' ? 0 : s.size; s.wsig = sig; }
     styleOf.set(el, s);
     return s;
   };
@@ -363,7 +368,7 @@ function baselines(doc, u, cb) {
   return u.chars.some(c => !c.space && c.base == null) ? 'baseline' : null;
 }
 
-const keyOf = s => JSON.stringify([s.family, s.weight, s.style, s.stretch, s.features, s.variations, s.ligatures, s.lang, s.spaced]);
+const keyOf = s => JSON.stringify([s.family, s.weight, s.style, s.stretch, s.features, s.variations, s.ligatures, s.lang, s.spaced, ...(s.web ? [s.opsz, s.wsig] : [])]);
 // 每次请求的上限，比服务端（lib/glyphs.mjs 的 LIMITS）略紧
 const BATCH = { items: 250, chars: 4000, char: 16, runs: 1200, run: 200, runChars: 16000 };
 /**
@@ -392,18 +397,28 @@ function wordsOf(u) {
     return parts.filter(q => q.chars.length > 1).map(q => ({ ...q, text: q.chars.map(c => c.s).join('') }));
   });
 }
-/** 把各单元缺的字形分批问齐；没装 Chrome、字体找不到之类在 notes 里记原因 */
-async function fetchGlyphs(units, glyphs, notes) {
-  for (const u of units) if (!u.fail) {
-    const c = u.chars.find(c => !c.space && c.st.web);
-    if (c) { u.fail = 'font'; noteMiss(notes, 'webfont', c.st.web); }
+/**
+ * 把各单元缺的字形分批问齐；没装 Chrome、字体找不到之类在 notes 里记原因。
+ * 用到网页字体时先取字体文件（只取一次）；文件取不到的字体，用到它的单元不转
+ */
+async function fetchGlyphs(units, ctx, notes) {
+  const glyphs = ctx.glyphs;
+  let fonts = [];
+  if (units.some(u => !u.fail && u.chars.some(c => !c.space && c.st.web))) {
+    ctx.webResolved ??= resolveWebFonts(ctx.webUsed, ctx.fontBytes);
+    const r = await ctx.webResolved;
+    fonts = r.fonts;
+    for (const u of units) if (!u.fail) {
+      const c = u.chars.find(c => !c.space && c.st.web && usesMissing(c.st.family, r.missing));
+      if (c) { u.fail = 'font'; noteMiss(notes, 'webfile', c.st.web); }
+    }
   }
   const want = new Map();
   const item = st => {
     const k = keyOf(st);
     let it = want.get(k);
-    if (!it) want.set(k, it = { family: st.family, weight: st.weight, style: st.style, stretch: st.stretch, features: st.features, variations: st.variations,
-      ligatures: st.ligatures, lang: st.lang, spaced: st.spaced, chars: new Set(), runs: new Set() });
+    if (!it) want.set(k, it = { k, family: st.family, weight: st.weight, style: st.style, stretch: st.stretch, features: st.features, variations: st.variations,
+      ligatures: st.ligatures, lang: st.lang, spaced: st.spaced, opsz: st.opsz || 0, chars: new Set(), runs: new Set() });
     return it;
   };
   for (const u of units) if (!u.fail) {
@@ -434,9 +449,9 @@ async function fetchGlyphs(units, glyphs, notes) {
       && r + parts[i].runs.length <= BATCH.runs && rc + (parts[i].len || 0) <= BATCH.runChars); i++) {
       batch.push(parts[i]); n += parts[i].chars.length; r += parts[i].runs.length; rc += parts[i].len || 0;
     }
-    const res = await glyphs({ items: batch.map(({ len, ...it }) => it) });
+    const res = await glyphs({ items: batch.map(({ len, k, ...it }) => it), fonts });
     batch.forEach((it, j) => {
-      const k = keyOf(it);
+      const k = it.k;
       it.chars.forEach((ch, q) => {
         const g = res.items[j].chars[q];
         glyphCache.set(k + '\u0000' + ch, g.miss ? { miss: g.miss, ps: g.ps } : {
@@ -466,10 +481,22 @@ async function fetchGlyphs(units, glyphs, notes) {
     }
   }
 }
-// Windows 上 Chrome 的假粗体（实测 SimSun 26–100px）：笔画横向加粗约 2.4% 字号、纵向约 1.9%，描边只能取一个值，用两者平均。
-// 12px 及以下 SimSun 用内嵌点阵，不加粗
+// Windows 上 Chrome 的假粗体分两种。本机字体由 DirectWrite 模拟（实测 SimSun 26–100px）：笔画横向加粗约 2.4% 字号、纵向约 1.9%，
+// 描边只能取一个值，用两者平均；12px 及以下 SimSun 用内嵌点阵，不加粗。网页字体由 Skia 描边加粗：描边宽 = 字号 × 比例，
+// 比例在 9px 时 1/24、36px 起 1/32，中间线性插值（实测 Arial 200px 与 size/32 的 SVG 描边相同）
 const fakeBold = size => size <= 12 ? 0 : size * 0.0215;
+const webBold = size => size * (size <= 9 ? 1 / 24 : size >= 36 ? 1 / 32 : 1 / 24 + (size - 9) / 27 * (1 / 32 - 1 / 24));
 const ITALIC_SKEW = 0.25;
+/**
+ * 合成粗体、斜体：本机字体按字形面的字重差超过 200 判断；网页字体照 Blink 的规则，要求字重 ≥ 600 而 @font-face 的字重上限低于 600、
+ * 要求斜体而声明的不是斜体才合成。返回描边宽（px，0 为不加粗）与是否倾斜
+ */
+function synth(st, face) {
+  const w = parseInt(st.weight, 10);
+  const bold = !st.synthW ? 0 : face.web ? (w >= 600 && face.weight < 600 ? webBold(st.size) : 0)
+    : w - face.weight > 200 ? fakeBold(st.size) : 0;
+  return { bold, ital: st.synthS && st.style !== 'normal' && !face.italic };
+}
 
 /** 单元 → <svg>：同色同字号的字拼成一条 path（变换只写一次，各字首点按字位偏移），外加透明复制层 */
 function buildSvg(doc, u, o) {
@@ -477,12 +504,12 @@ function buildSvg(doc, u, o) {
   for (const c of u.chars) {
     // 连字的后续字没有字形（画在簇首那个字上）
     if (c.space || !c.g.g.length) continue;
-    const g = c.g, s = c.st.size / g.face.upem;
+    // scale：@font-face 的 size-adjust，字形按它缩放
+    const g = c.g, s = c.st.size * (g.face.scale || 1) / g.face.upem;
     // 全角标点被挤压成半宽时用 halt 字形：看实测宽度更接近哪个步进
     const full = g.adv * s + c.st.ls;
     const v = g.halt && Math.abs(c.w - (g.halt.adv * s + c.st.ls)) + 0.2 < Math.abs(c.w - full) ? g.halt : g;
-    const bold = c.st.synthW && parseInt(c.st.weight, 10) - g.face.weight > 200 && fakeBold(c.st.size) > 0;
-    const ital = c.st.synthS && c.st.style !== 'normal' && !g.face.italic;
+    const { bold, ital } = synth(c.st, g.face);
     const key = [c.st.fill, f3(c.st.alpha), s, bold, ital].join('|');
     let grp = groups.get(key);
     if (!grp) groups.set(key, grp = { st: c.st, s, bold, ital, x0: c.x, y0: c.base, d: '' });
@@ -515,7 +542,7 @@ function buildSvg(doc, u, o) {
     if (grp.st.alpha < 0.999) p.setAttribute('fill-opacity', f3(grp.st.alpha));
     if (grp.bold) {
       p.setAttribute('stroke', grp.st.fill);
-      p.setAttribute('stroke-width', f3(fakeBold(grp.st.size) / grp.s));
+      p.setAttribute('stroke-width', f3(grp.bold / grp.s));
       if (grp.st.alpha < 0.999) p.setAttribute('stroke-opacity', f3(grp.st.alpha));
     }
     p.setAttribute('d', grp.d);
@@ -570,10 +597,10 @@ export async function outline(doc, root, descs, ctx, notes) {
   noTf.setAttribute('data-wxc-tool', ''); noTf.textContent = NO_TF;
   doc.head.appendChild(noTf);
   const units = descs.map(d => locate(doc, root, d));
-  const web = ctx.web || new Set();
-  for (const u of units) if (!u.fail) { u.html = originalHtml(u); u.orig = [...u.nodes]; wrapRun(doc, u); measureChars(doc, u, web); u.cw = nearestCw(win, u.box, root); }
+  const fonts = { web: ctx.web || new Set(), sig: ctx.webSig || '' };
+  for (const u of units) if (!u.fail) { u.html = originalHtml(u); u.orig = [...u.nodes]; wrapRun(doc, u); measureChars(doc, u, fonts); u.cw = nearestCw(win, u.box, root); }
   if (units.some(u => !u.fail)) {
-    try { await fetchGlyphs(units, ctx.glyphs, notes); } catch (e) { notes.server = e.message; for (const u of units) if (!u.fail) u.fail = 'server'; }
+    try { await fetchGlyphs(units, ctx, notes); } catch (e) { notes.server = e.message; for (const u of units) if (!u.fail) u.fail = 'server'; }
   }
   const apply = u => {
     if (u.d.from != null && u.box === u.outer) wrapRun(doc, u);

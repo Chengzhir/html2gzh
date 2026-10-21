@@ -11,6 +11,7 @@ import { alignUnits } from './align.mjs';
 import { previewDoc, readerImages } from '../ui/convert/reader.js';
 import { WX_ANIM_OK } from '../ui/convert/svg/dom.js';
 import { settled, pickDefault } from './ui.mjs';
+import { buildWebfontFixture, serveRemote } from './webfonts.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -31,6 +32,10 @@ const raw = (port, p, opts = {}) => new Promise(res => {
   req.end(opts.body);
 });
 
+// 网页字体测试稿：先生成字体文件，再起模拟字体网站的跨域服务
+const WEBFONT = ARTICLE === path.join(HERE, 'fixture-webfont');
+let remote = null;
+if (WEBFONT) { await buildWebfontFixture(ARTICLE); remote = await serveRemote(ARTICLE); }
 // 设置文件放 test/out：测试里改端口不碰用户的 settings.json
 const SETTINGS = path.join(OUT, 'e2e-settings.json');
 fs.rmSync(SETTINGS, { force: true });
@@ -55,13 +60,13 @@ try {
     });
   });
   await page.goto(`http://127.0.0.1:${UI}/`);
-  await page.waitForFunction(() => window.__wxc.result || document.querySelector('.banner.err:not([hidden])'), { timeout: 90000 });
+  await page.waitForFunction(() => window.__wxc.result || window.__wxc.error, { timeout: 90000 });
   // --svg：在字体表里勾选测试用的行，等重新转换完
   if (SVG_MODE && await page.evaluate(() => !!window.__wxc.result)) await pickDefault(page);
   const r = await page.evaluate(() => {
     const s = window.__wxc;
     return s.result ? { findings: s.result.findings, report: s.result.report, stats: s.result.stats, payload: s.result.payload, preview: s.result.preview, original: s.result.original, approx: s.result.debug.approx, verdicts: s.result.debug.verdicts, tv: s.result.debug.tv, v: s.result.debug.v }
-      : { error: document.getElementById('status').textContent };
+      : { error: s.error };
   });
   console.log('\n文章 ' + ARTICLE);
   if (r.error) { check(false, '转换', r.error); throw new Error('stop'); }
@@ -75,6 +80,21 @@ try {
   }
   await page.setViewport({ width: 1400, height: 900 });
   check(!pageScroll.length, '整页不能滚动，只有两栏各自滚动', pageScroll.join(' | '));
+  // 进度与错误提示浮在预览上方，不改变两栏的位置
+  const toastMoves = await page.evaluate(async () => {
+    const pos = () => ['paneA', 'paneB'].map(id => document.getElementById(id).getBoundingClientRect()).map(r => [r.left, r.top].join(','));
+    const before = JSON.stringify(pos()), out = [];
+    for (const [scope, kind] of [['all', 'busy'], ['all', 'err'], ['reader', 'busy']]) {
+      window.__wxcNotice(scope, '测试提示', kind);
+      await new Promise(r => setTimeout(r, 400));
+      const t = document.getElementById(scope === 'all' ? 'toastAll' : 'toastReader');
+      if (!t.classList.contains('on')) out.push(`${scope}/${kind} 没显示`);
+      if (JSON.stringify(pos()) !== before) out.push(`${scope}/${kind} 挤动了预览`);
+      window.__wxcNotice(scope, '');
+    }
+    return out;
+  });
+  check(!toastMoves.length, '提示浮在预览上方，两栏位置不变', toastMoves.join(' | '));
   for (const f of [...r.findings].sort((a, b) => a.level.localeCompare(b.level))) console.log(`    [${f.level}] ${f.title}：${f.text}`);
   console.log(`    图片 本地 ${r.report.local} · 缺失 ${r.report.missing.length} · data: ${r.report.dataUri} · 外链 ${r.report.remote}`);
 
@@ -146,7 +166,7 @@ try {
   check(count(/>\s*\n\s*</g) === 0, '没有标签间换行');
   check(r.stats.visualBad.length === 0, '成品与原稿逐元素一致', `${r.stats.verified} 个元素，偏差 ${r.stats.visualBad.length}：${r.stats.visualBad.slice(0, 8).join(',')}`);
   const otherIds = new Set(r.stats.others.flatMap(([, b]) => b));
-  const listed = new Set(r.findings.filter(f => f.title === '其他宽度').flatMap(f => f.ids));
+  const listed = new Set(r.findings.filter(f => f.title === '其他屏宽').flatMap(f => f.ids));
   check([...otherIds].every(id => listed.has(id)), '其他宽度下逐元素一致，或偏差已列入检查结果', r.stats.others.map(([w, b]) => `${w}px:${b.length}(${b.slice(0, 5).join(',')})`).join(' ') || '无偏差');
   if (SVG_MODE) {
     const o = r.stats.outline;
@@ -199,6 +219,8 @@ try {
   const shot = async (html, w, masks, t = 0, clicks = null) => {
     const pg = await browser.newPage();
     await pg.setViewport({ width: w, height: 800 });
+    // 在本机服务的源下写入内容：原稿引用的本地字体（/a/…）同源，不用跨域
+    await pg.goto(`http://127.0.0.1:${UI}/__blank`);
     const cdp = await pg.createCDPSession();
     await cdp.send('Animation.enable').then(() => cdp.send('Animation.setPlaybackRate', { playbackRate: 0 })).catch(() => {});
     await pg.setContent(html, { waitUntil: 'networkidle0' });
@@ -251,7 +273,7 @@ try {
     // 轮廓区域单独量：逐个单元的亚像素偏移与墨量（3 倍像素密度，接近手机）。
     // 偏移门槛：Chrome 把 svg 盒子对齐到整 CSS 像素而字形保留小数位置，横向差最多 0.5px；纵向文字基线也取整，两次取整最多差 1px
     console.log('\n轮廓对位（3x）');
-    const al = await alignUnits(browser, r.original, prevHtml, width, 3);
+    const al = await alignUnits(browser, r.original, prevHtml, width, 3, `http://127.0.0.1:${UI}`);
     const off = al.filter(a => Math.abs(a.dx) > 0.55 || Math.abs(a.dy) > 1.1 || a.ink < 0.85 || a.ink > 1.15);
     if (al.length) check(!off.length, '每个轮廓与原稿字形对齐（横向 ≤0.55px、纵向 ≤1.1px、墨量差 ≤15%）',
       off.length ? off.slice(0, 4).map(a => `#${a.unit} dx${a.dx} dy${a.dy} ink${a.ink}`).join(' | ')
@@ -300,7 +322,7 @@ try {
       `${rows.length} 行：` + fonts.slice(0, 8).map(f => `${f.family} ${f.weight} ${f.size}px（${f.chars} 字${f.done ? `，已转 ${f.done}` : ''}）`).join('、') + (fonts.length > 8 ? ' …' : ''));
     const keyed = sel => `#faceList tr[data-key="${sel.replace(/["\\]/g, '\\$&')}"] input`;
     if (SVG_MODE) {
-      const t = fonts.find(f => f.done > 0 && !f.web);
+      const t = fonts.find(f => f.done > 0);
       if (t) {
         const before = r.stats.outline.chars;
         await page.click(keyed(t.key));
@@ -325,7 +347,7 @@ try {
       await page.click(all);
       await settled(page);
       if (!await page.$eval(all, c => c.checked)) { await page.click(all); await settled(page); }
-      const on = await page.evaluate(() => { const s = window.__wxc.result; return { paths: s.paths.length, rows: s.fonts.filter(f => !f.web).length, units: s.stats.outline ? s.stats.outline.units : 0 }; });
+      const on = await page.evaluate(() => { const s = window.__wxc.result; return { paths: s.paths.length, rows: s.fonts.length, units: s.stats.outline ? s.stats.outline.units : 0 }; });
       await page.click(all);
       await settled(page);
       const off = await page.evaluate(() => ({ paths: window.__wxc.result.paths.length, outline: window.__wxc.result.stats.outline }));
@@ -397,33 +419,91 @@ try {
     check(r2.status === 200 && JSON.parse(r2.body)[outside] === null, '不登记文章文件夹以外的文件', outside);
   }
 
-  // 在页面里改取图端口：立即换绑并存进设置文件；新端口被占时保持原端口（放在最后：之后图床口不在 IMG 上了）
-  console.log('\n取图端口');
+  // 下载进度：照微信服务器的请求规律模拟——下载成功只来一次；超时（约 0.5 秒）隔 0.5 秒重试，三次后放弃
+  console.log('\n下载进度');
   {
-    const post = body => raw(UI, '/api/port', { method: 'POST', headers: { host: '127.0.0.1:' + UI, origin: 'http://127.0.0.1:' + UI }, body: JSON.stringify(body) });
+    const uniq = [...new Set(ids)];
+    if (uniq.length) {
+      // 上面的端口检查刚请求过这几张图，隔开一段（超过判断"同一串"的 1.5 秒），免得算进复制之后的请求
+      await new Promise(r => setTimeout(r, 1600));
+      // 复制时刻取页面的时钟、请求时刻取服务进程的时钟，两者相差可达 1–2 毫秒：紧跟着发的请求可能被记在复制之前。
+      // 真实的取图在粘贴之后，至少晚几秒，所以这里也隔开一点
+      const markCopied = async () => { await page.evaluate(() => { window.__wxc.copiedAt = { t: Date.now(), base: 'http://test.invalid' }; }); await new Promise(r => setTimeout(r, 100)); };
+      await markCopied();
+      const [first, ...rest] = uniq;
+      const bad = rest.length ? rest[0] : first;
+      if (rest.length) await raw(IMG, '/a/' + first);
+      for (let k = 0; k < 3; k++) { await raw(IMG, '/a/' + bad); await new Promise(r => setTimeout(r, 500)); }
+      // 只请求一次的图要过 2 秒没有重试才算下载完成，等两个条件同时成立
+      const want = `已下载 ${rest.length ? 1 : 0}/${uniq.length}`;
+      await page.waitForFunction(w => { const t = document.getElementById('fetchLine').textContent; return /连续三次/.test(t) && t.includes(w); }, { timeout: 15000 }, want).catch(() => {});
+      const fl = await page.evaluate(() => { const e = document.getElementById('fetchLine'); return { text: e.textContent, cls: e.className, hidden: e.hidden }; });
+      check(!fl.hidden && /连续三次下载超时/.test(fl.text) && /err/.test(fl.cls) && fl.text.includes(want),
+        '同一张图 0.5 秒间隔连续请求三次：报为下载超时，其余按成功计', fl.text.slice(0, 90));
+      await new Promise(r => setTimeout(r, 1600));
+      await markCopied();
+      for (const id of uniq) await raw(IMG, '/a/' + id);
+      await page.waitForFunction(() => /已下载全部/.test(document.getElementById('fetchLine').textContent), { timeout: 15000 }).catch(() => {});
+      const all = await page.evaluate(ids => ({ text: document.getElementById('fetchLine').textContent, now: window.__wxc.result ? (window.__wxc.result.payload.match(/\/a\/[0-9a-f]{16}\.[a-z0-9]+/g) || []).length : -1,
+        missing: [...new Set((window.__wxc.result.payload.match(/\/a\/([0-9a-f]{16}\.[a-z0-9]+)/g) || []).map(s => s.slice(3)))].filter(id => !ids.includes(id)) }), uniq);
+      check(/已下载全部/.test(all.text), '每张图各请求一次、2 秒内不再请求：报为全部下载完成', /已下载全部/.test(all.text) ? '' : `${all.text.slice(0, 60)}；成品里不在测试列表中的图：${all.missing.join(',') || '无'}`);
+      await page.evaluate(() => { window.__wxc.copiedAt = null; });
+    }
+    // 超过 1 MB 的本地图片列进检查结果（大小取自本机服务的 HEAD 响应）
+    const big = await raw(UI, '/api/blob?ext=png&name=big.png', { method: 'POST', headers: { host: '127.0.0.1:' + UI, origin: 'http://127.0.0.1:' + UI }, body: Buffer.alloc(1100000) });
+    const bid = JSON.parse(big.body).id;
+    const found = await page.evaluate(id => window.__wxcBig(`<img src="/a/${id}"><img src="/a/${id}">`, new Map([[id, 'img/big.png']])), bid);
+    check(found.length === 1 && found[0].name === 'img/big.png' && found[0].size === 1100000, '超过 1 MB 的图片按名字和大小列出（同一张只算一次）', JSON.stringify(found));
+  }
+
+  // 取图地址：本机端口立即换绑并存进设置文件，被占时保持原端口；公网地址、端口、协议拼成取图地址（放在最后：之后图床口不在 IMG 上了）
+  console.log('\n取图地址');
+  {
+    const post = body => raw(UI, '/api/host', { method: 'POST', headers: { host: '127.0.0.1:' + UI, origin: 'http://127.0.0.1:' + UI }, body: JSON.stringify(body) });
     const NEW = IMG + 2;
     const busy = http.createServer().listen(IMG + 3, '0.0.0.0');
     await new Promise(r => busy.once('listening', r));
-    await page.$eval('#portInput', (e, v) => { e.value = String(v); }, NEW);
-    await page.click('#portForm button[type="submit"]');
-    await page.waitForFunction(p => window.__wxc.server && window.__wxc.server.imgPort === p, { timeout: 10000 }, NEW).catch(() => {});
+    const submit = async (fields, until) => {
+      await page.evaluate(f => { for (const [id, v] of Object.entries(f)) { const e = document.getElementById(id); e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); } }, fields);
+      await page.click('#hostForm button[type="submit"]');
+      await page.waitForFunction(until, { timeout: 10000 }).catch(() => {});
+    };
+    const settingsNow = () => { try { return JSON.parse(fs.readFileSync(SETTINGS, 'utf8')); } catch { return {}; } };
+    await submit({ hfPort: String(NEW), hfHost: '', hfPubPort: '' }, `window.__wxc.server && window.__wxc.server.imgPort === ${NEW}`);
     const imgNow = await page.evaluate(() => window.__wxc.server && window.__wxc.server.imgPort);
     const id = ids[0];
     const onNew = id ? (await raw(NEW, '/a/' + id)).status : 0, onOld = id ? (await raw(IMG, '/a/' + id)).status : 0;
-    const saved = (() => { try { return JSON.parse(fs.readFileSync(SETTINGS, 'utf8')).imgPort; } catch { return null; } })();
-    check(imgNow === NEW && saved === NEW && (!id || onNew === 200 && onOld === 0), '页面里改取图端口：立即换绑、旧端口关闭、存进设置文件',
-      `端口 ${imgNow}，设置文件 ${saved}` + (id ? `，新端口取图 ${onNew}，旧端口 ${onOld || '连不上'}` : ''));
-    const taken = await post({ port: IMG + 3 });
+    check(imgNow === NEW && settingsNow().imgPort === NEW && (!id || onNew === 200 && onOld === 0), '改本机端口：立即换绑、旧端口关闭、存进设置文件',
+      `端口 ${imgNow}，设置文件 ${settingsNow().imgPort}` + (id ? `，新端口取图 ${onNew}，旧端口 ${onOld || '连不上'}` : ''));
+    // 粘贴完整地址拆进三格；默认端口不写进地址。.invalid 域名按规范解析不到，自测必然不通过
+    await submit({ hfHost: 'https://tunnel.example.invalid' }, `(window.__wxc.server.host.pick || {}).base === 'https://tunnel.example.invalid'`);
+    const form = await page.evaluate(() => ({ host: hfHost.value, port: hfPubPort.value, proto: hfProto.value, pick: window.__wxc.server.host.pick, list: window.__wxc.server.host.list.length }));
+    check(form.host === 'tunnel.example.invalid' && form.port === '443' && form.proto === 'https' && form.pick && form.pick.base === 'https://tunnel.example.invalid' && !form.list,
+      '粘贴完整地址：拆成协议、地址、端口，取图地址不带默认端口，不再自动检测', JSON.stringify(form));
+    await submit({ hfHost: 'pic.example.invalid', hfPubPort: '', hfProto: 'http' }, `(window.__wxc.server.host.pick || {}).base === 'http://pic.example.invalid:${NEW}'`);
+    const p2 = await page.evaluate(() => window.__wxc.server.host);
+    check(p2.pick.base === `http://pic.example.invalid:${NEW}` && p2.config.proto === 'http' && settingsNow().host === 'pic.example.invalid', 'http 时公网端口留空与本机端口相同',
+      `${p2.pick.base}，协议 ${p2.config.proto}`);
+    await submit({ hfHost: 'pic.example.invalid', hfProto: 'https', hfPubPort: '' }, `(window.__wxc.server.host.pick || {}).base === 'https://pic.example.invalid'`);
+    const p3 = await page.evaluate(() => ({ base: window.__wxc.server.host.pick.base, ph: hfPubPort.placeholder }));
+    check(p3.base === 'https://pic.example.invalid' && /443/.test(p3.ph), 'https 时公网端口留空使用 443', JSON.stringify(p3));
+    await page.waitForFunction(() => window.__wxc.server.host.pick.ok === false, { timeout: 30000 }).catch(() => {});
+    check(await page.evaluate(() => window.__wxc.server.host.pick.ok === false && /自测未通过/.test(document.getElementById('hostLine').textContent)), '连不通的地址显示“自测未通过”');
+    const helpNow = await page.evaluate(() => { const h = document.getElementById('hostHelp'); return { shown: !h.hidden, items: h.querySelectorAll('li').length, text: h.textContent }; });
+    check(helpNow.shown && helpNow.items >= 2 && /内网穿透/.test(helpNow.text) && helpNow.text.includes(String(NEW)), '自测未通过时列出可能的原因（含本机端口）', JSON.stringify(helpNow).slice(0, 160));
+    const taken = await post({ imgPort: IMG + 3, host: '', port: '', proto: 'http' });
     const stay = id ? (await raw(NEW, '/a/' + id)).status : 200;
-    check(taken.status === 409 && stay === 200, '新端口被占用时报错并保持原端口', `${taken.status} ${JSON.parse(taken.body).error || ''}`);
-    const bad = await Promise.all([{ port: 80 }, { port: UI }, { port: 'x' }].map(post));
-    check(bad.every(r => r.status === 400), '端口不合法（<1024、与页面端口相同、不是数字）时拒绝', bad.map(r => r.status).join(','));
+    check(taken.status === 409 && stay === 200, '本机端口被占用时报错并保持原端口', `${taken.status} ${JSON.parse(taken.body).error || ''}`);
+    const bad = await Promise.all([{ imgPort: 80 }, { imgPort: UI }, { imgPort: 'x' }, { imgPort: NEW, port: 70000 }, { imgPort: NEW, port: 'x' },
+      { imgPort: NEW, host: '192.168.1.10' }, { imgPort: NEW, host: 'localhost' }, { imgPort: NEW, host: 'a.com/path' }, { imgPort: NEW, host: 'fd00::1' }].map(post));
+    check(bad.every(r => r.status === 400), '不合法的设置被拒绝（端口越界、与页面端口相同、内网地址、带路径）', bad.map(r => r.status).join(','));
     busy.close();
   }
 } catch (e) {
   if (e.message !== 'stop') { console.error(e); fails++; }
 } finally {
   await browser.close();
+  if (remote) remote.close();
   // 等服务真正退出、端口释放，紧接着再跑一轮时才不会撞上旧进程
   const exited = new Promise(r => srv.once('exit', r));
   srv.kill();

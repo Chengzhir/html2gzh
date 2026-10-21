@@ -39,7 +39,7 @@ export function cleanStructure(doc, root, findings) {
   root.querySelectorAll('picture').forEach(p => { const im = p.querySelector('img'); if (im) p.replaceWith(im); else p.remove(); });
   root.querySelectorAll('source,track').forEach(e => e.remove());
   const lost = root.querySelectorAll('form,input,button,select,textarea,iframe,video,audio,canvas,object,embed');
-  if (lost.length) findings.warn('互动元素', `${lost.length} 个表单、音视频、iframe 或 canvas 元素会被公众号删掉`, '要用公众号后台自带的组件重新插入。', [...lost]);
+  if (lost.length) findings.warn('互动元素', `${lost.length} 个表单、音视频、iframe 或 canvas 元素会被公众号删除`, '需要用公众号后台自带的组件重新插入。', [...lost]);
 
   // 链接：只有 mp.weixin.qq.com 能留；页内锚点会让草稿存不下去，站外链接保存后变纯文字
   let anchors = 0, outside = 0;
@@ -50,8 +50,8 @@ export function cleanStructure(doc, root, findings) {
     if (/^https?:/i.test(href)) { outside++; outEls.push(a); } else if (href) anchors++;
     rename(doc, a, 'span').removeAttribute('href');
   }
-  if (anchors) findings.fixed('链接', `${anchors} 个页内锚点、相对链接改成普通文字`, '否则后台拒绝保存。');
-  if (outside) findings.warn('站外链接', `${outside} 个站外链接改成普通文字`, '公众号正文只允许链接公众号文章。站外地址可以放进“阅读原文”。', outEls);
+  if (anchors) findings.fixed('链接', `${anchors} 个页内锚点与相对链接改为普通文字`, '正文中保留这类链接时，公众号后台会拒绝保存草稿。');
+  if (outside) findings.warn('站外链接', `${outside} 个站外链接改为普通文字`, '公众号正文只允许链接公众号文章。站外地址可以填入编辑器中的“原文链接”，读者在文末点击“阅读原文”访问。', outEls);
 
   let n = 0;
   for (const el of [...root.querySelectorAll('ul,ol')]) {
@@ -66,7 +66,7 @@ export function cleanStructure(doc, root, findings) {
     const t = el.localName;
     if (TO_SECTION.has(t)) { rename(doc, el, 'section'); n++; } else if (MARKS.has(t) && el.hasAttribute('style')) { rename(doc, el, 'span'); n++; }
   }
-  if (n) findings.fixed('容器', `${n} 个 div、blockquote 等容器改成 section`, '编辑器会把 div 重建成段落；blockquote 在阅读页会被强制成灰字。');
+  if (n) findings.fixed('容器', `${n} 个 div、blockquote 等容器改为 section`, '编辑器会把 div 重建为段落并丢弃其样式；阅读页会删除 blockquote 上的文字颜色，并加上竖线与固定字号，其中的文字显示为灰色。');
 }
 
 const isTextContext = (win, el) => {
@@ -110,7 +110,7 @@ export function keepShapes(doc, root, findings) {
     }
     shapes++;
   }
-  if (shapes) findings.fixed('装饰块', `${shapes} 个空的色块、线条加了占位`, '没有内容的元素粘贴时会被编辑器删掉。');
+  if (shapes) findings.fixed('装饰块', `${shapes} 个空的色块与线条添加了占位内容`, '没有内容的元素在粘贴时会被编辑器删除。');
   return dropped;
 }
 

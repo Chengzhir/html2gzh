@@ -9,9 +9,11 @@ import { findChrome } from '../lib/chrome.mjs';
 import { previewDoc, readerImages } from '../ui/convert/reader.js';
 
 const VIEW_H = 900;
-const load = async (browser, html, width, dpr, reader) => {
+// origin：先打开本机服务的一个页面再写入内容，原稿引用的本地字体（/a/…）与页面同源，不用跨域
+const load = async (browser, html, width, dpr, reader, origin) => {
   const pg = await browser.newPage();
   await pg.setViewport({ width, height: VIEW_H, deviceScaleFactor: dpr });
+  if (origin) await pg.goto(origin + '/__blank');
   await pg.setContent(html, { waitUntil: 'networkidle0' });
   await pg.evaluate(() => document.fonts.ready);
   if (reader) await pg.evaluate(`(${readerImages})(document, true)`);
@@ -26,14 +28,14 @@ async function grab(pg, b) {
 }
 
 /** → [{ unit, dx, dy, ink }]，dx/dy 是成品相对原稿的偏移（CSS px），ink 是成品墨量 / 原稿墨量 */
-export async function alignUnits(browser, original, preview, width, dpr) {
-  const pc = await load(browser, preview, width, dpr, true);
+export async function alignUnits(browser, original, preview, width, dpr, origin) {
+  const pc = await load(browser, preview, width, dpr, true, origin);
   // svg 只占第一行，后面几行的字画在它的溢出区：取它所在块的框（文档坐标）
   const boxes = await pc.evaluate(() => [...document.querySelectorAll('svg[data-wxc-unit]')].map(s => { const b = s.parentElement.getBoundingClientRect(); return { i: +s.dataset.wxcUnit, x: b.left + scrollX, y: b.top + scrollY, w: b.width, h: b.height }; }));
   const C = [];
   for (const b of boxes) C.push(await grab(pc, b));
   await pc.close();
-  const po = await load(browser, original, width, dpr);
+  const po = await load(browser, original, width, dpr, false, origin);
   const O = [];
   for (const b of boxes) O.push(await grab(po, b));
   if (process.env.WXC_ALIGN_DUMP) boxes.forEach((b, n) => {
@@ -88,7 +90,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const r = await ui.evaluate(() => ({ original: window.__wxc.result.original, preview: window.__wxc.result.preview, verdicts: window.__wxc.result.debug.verdicts }));
     r.preview = previewDoc(r.preview);
     const rows = [];
-    for (const dpr of DPRS.length ? DPRS : [1, 3]) for (const a of await alignUnits(browser, r.original, r.preview, 335, dpr)) rows.push({ dpr, ...a, text: (r.verdicts[a.unit] || {}).text });
+    for (const dpr of DPRS.length ? DPRS : [1, 3]) for (const a of await alignUnits(browser, r.original, r.preview, 335, dpr, `http://127.0.0.1:${UI}`)) rows.push({ dpr, ...a, text: (r.verdicts[a.unit] || {}).text });
     console.table(rows);
   } finally { await browser.close(); srv.kill(); }
 }

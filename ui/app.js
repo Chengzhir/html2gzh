@@ -13,7 +13,7 @@ if (!WIN) $('dropCmd').hidden = true;
 const ORIGIN = location.origin;
 const state = {
   src: null,        // { kind:'path', file, rev, mtime } | { kind:'files', name, map:Map(rel→File), entry }
-  result: null, server: null, busy: false, copiedAt: null, seenRev: 0,
+  result: null, error: '', server: null, busy: false, copiedAt: null, seenRev: 0,
 };
 const uploaded = new WeakMap();   // File → asset id
 
@@ -82,53 +82,118 @@ async function readLocalText(rel) {
 async function prepare(html, entryRel) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const baseDir = dirOf(entryRel);
-  // missing 只放 <img> 的图（粘贴后变错误卡片、草稿存不了）；样式表、CSS 与 svg <image> 引用的文件缺了只影响效果
-  const report = { missing: [], sheets: [], refs: [], remote: 0, dataUri: 0, local: 0 };
+  // missing 只放 <img> 的图（粘贴后变错误卡片、草稿存不了）；样式表、CSS 与 svg <image> 引用的文件缺了只影响效果。
+  // names：图片 id → 文章文件夹里的相对路径，提示图片过大、下载超时时用
+  const report = { missing: [], sheets: [], refs: [], remote: 0, dataUri: 0, badData: 0, local: 0, names: new Map() };
 
-  const sheets = [];
-  for (const link of [...doc.querySelectorAll('link[rel~="stylesheet"][href]')]) {
-    const href = link.getAttribute('href');
-    if (!isLocalRef(href)) { link.remove(); report.sheets.push(href); continue; }
-    const rel = joinRel(baseDir, cleanRef(href));
+  // 外链样式表与 @import 读进来，内联成 <style>，各自记下自己的基准（本地是相对文章根的目录，站外是绝对地址）。
+  // 站外的要对方允许跨域读取（Google Fonts 等字体服务都允许），读不了的列进检查结果
+  const absUrl = s => /^[a-z][a-z0-9+.-]*:/i.test(s) || s.startsWith('//');
+  const loadSheet = async (href, base) => {
+    href = href.trim();
+    if (absUrl(href) || absUrl(base)) {
+      let u;
+      try { u = new URL(href, absUrl(base) ? base : location.href); } catch { return null; }
+      if (!/^https?:$/.test(u.protocol)) return null;
+      const r = await fetch(u.href, { mode: 'cors', credentials: 'omit' }).catch(() => null);
+      return r && r.ok ? { text: await r.text(), base: r.url || u.href } : null;
+    }
+    const rel = joinRel(base, cleanRef(href));
     const text = await readLocalText(rel).catch(() => null);
-    if (text == null) { report.sheets.push(href); link.remove(); continue; }
+    return text == null ? null : { text, base: dirOf(rel) };
+  };
+  const IMPORT_RE = /@import\s+(?:url\(\s*(['"]?)([^'")]+)\1\s*\)|(['"])([^'"]+)\3)\s*([^;]*);/gi;
+  /** 样式表文本 → 依次排列的若干段 { text, base, media, supports }：@import 就地展开（最多四层），条件跟着它那一段 */
+  const expand = async (text, base, media, depth = 0) => {
+    const out = [];
+    let rest = text;
+    if (depth < 4) {
+      for (const m of [...text.matchAll(IMPORT_RE)]) {
+        const cond = m[5].trim().replace(/\blayer(\([^)]*\))?/i, '').trim();
+        const sup = cond.match(/^supports\(((?:[^()]|\([^()]*\))*)\)\s*/i);
+        const mq = (sup ? cond.slice(sup[0].length) : cond).trim();
+        const sub = await loadSheet(m[2] || m[4], base);
+        if (!sub) { report.sheets.push(m[2] || m[4]); continue; }
+        for (const c of await expand(sub.text, sub.base, mq || media, depth + 1)) out.push(sup ? { ...c, supports: sup[1] } : c);
+      }
+      rest = text.replace(IMPORT_RE, '');
+    }
+    out.push({ text: rest, base, media });
+    return out;
+  };
+  const styleEls = chunks => chunks.map(c => {
     const st = doc.createElement('style');
-    st.textContent = text; st.dataset.base = dirOf(rel);
-    link.replaceWith(st); sheets.push(st);
+    st.textContent = c.supports ? `@supports (${c.supports}){${c.text}}` : c.text;
+    st.dataset.base = c.base;
+    if (c.media) st.media = c.media;
+    return st;
+  });
+  for (const link of [...doc.querySelectorAll('link[rel~="stylesheet"][href]')]) {
+    const href = link.getAttribute('href'), media = link.getAttribute('media') || '';
+    const sheet = await loadSheet(href, baseDir);
+    if (!sheet) { report.sheets.push(href); link.remove(); continue; }
+    link.replaceWith(...styleEls(await expand(sheet.text, sheet.base, media === 'all' ? '' : media)));
+  }
+  for (const st of [...doc.querySelectorAll('style')]) {
+    if (st.dataset.base != null || !/@import/i.test(st.textContent)) continue;
+    st.replaceWith(...styleEls(await expand(st.textContent, baseDir, st.media || '')));
   }
 
-  // 第一遍：收集
+  // 第一遍：收集。@font-face 里的地址是字体文件，不是图片：本地的登记成文件，data: 与站外的原样保留，都不计入图片数
   const wanted = new Set();
   const datas = new Set();
   const note = (ref, base) => {
     if (!ref) return;
     ref = ref.trim();
     if (/^data:/i.test(ref)) { datas.add(ref); return; }
-    if (isLocalRef(ref)) wanted.add(joinRel(base, cleanRef(ref)));
+    if (isLocalRef(ref) && !absUrl(base)) wanted.add(joinRel(base, cleanRef(ref)));
   };
+  const noteFont = (ref, base) => { if (isLocalRef(ref) && !absUrl(base)) wanted.add(joinRel(base, cleanRef(ref.trim()))); };
   const URL_RE = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+  const FACE_RE = /@font-face\s*\{[^}]*\}/gi;
+  /** 样式文本按 @font-face 块切开：[[文本, 是不是 @font-face], …] */
+  const segments = css => {
+    const out = [];
+    let at = 0;
+    for (const m of css.matchAll(FACE_RE)) { out.push([css.slice(at, m.index), false], [m[0], true]); at = m.index + m[0].length; }
+    out.push([css.slice(at), false]);
+    return out;
+  };
   doc.querySelectorAll('img[src]').forEach(e => note(e.getAttribute('src'), baseDir));
   doc.querySelectorAll('image').forEach(e => note(e.getAttribute('href') || e.getAttribute('xlink:href'), baseDir));
   doc.querySelectorAll('[style]').forEach(e => { for (const m of e.getAttribute('style').matchAll(URL_RE)) note(m[2], baseDir); });
-  doc.querySelectorAll('style').forEach(st => { for (const m of st.textContent.matchAll(URL_RE)) note(m[2], st.dataset.base ?? baseDir); });
+  doc.querySelectorAll('style').forEach(st => {
+    const base = st.dataset.base ?? baseDir;
+    for (const [text, face] of segments(st.textContent)) for (const m of text.matchAll(URL_RE)) (face ? noteFont : note)(m[2], base);
+  });
 
   const ids = await resolveRefs([...wanted]);
   const dataIds = new Map();
   for (const d of datas) dataIds.set(d, await uploadDataUri(d).catch(() => null));
 
-  // 第二遍：改写
+  // 第二遍：改写。站外样式表里的相对地址按样式表自己的地址补全
   const swap = (ref, base, lost = report.missing) => {
     const t = (ref || '').trim();
-    if (/^data:/i.test(t)) { const id = dataIds.get(t); if (id) { report.dataUri++; return ORIGIN + '/a/' + id; } lost.push('无法识别的 data: 图片'); return t; }
-    if (/^https?:/i.test(t)) { report.remote++; return t; }
+    if (/^data:/i.test(t)) { const id = dataIds.get(t); if (id) { report.dataUri++; report.names.set(id, '内嵌图片（data:）'); return ORIGIN + '/a/' + id; } report.badData++; return t; }
+    if (isLocalRef(t) && absUrl(base)) { try { report.remote++; return new URL(t, base).href; } catch { return t; } }
+    if (/^(https?:)?\/\//i.test(t)) { report.remote++; return t; }
     if (!isLocalRef(t)) return t;
     const rel = joinRel(base, cleanRef(t));
     const id = ids.get(rel);
     if (!id) { lost.push(rel); return t; }
     report.local++;
+    report.names.set(id, rel);
     return ORIGIN + '/a/' + id;
   };
-  const swapCss = (css, base) => css.replace(URL_RE, (m, q, u) => `url("${swap(u, base, report.refs)}")`);
+  const swapFont = (ref, base) => {
+    const t = (ref || '').trim();
+    if (!isLocalRef(t)) return t;
+    if (absUrl(base)) { try { return new URL(t, base).href; } catch { return t; } }
+    const rel = joinRel(base, cleanRef(t)), id = ids.get(rel);
+    if (!id) { report.refs.push(rel); return t; }
+    return ORIGIN + '/a/' + id;
+  };
+  const swapCss = (css, base) => segments(css).map(([text, face]) => text.replace(URL_RE, (m, q, u) => `url("${face ? swapFont(u, base) : swap(u, base, report.refs)}")`)).join('');
   doc.querySelectorAll('img').forEach(e => {
     e.removeAttribute('srcset'); e.removeAttribute('loading');
     if (e.hasAttribute('src')) e.setAttribute('src', swap(e.getAttribute('src'), baseDir));
@@ -142,11 +207,36 @@ async function prepare(html, entryRel) {
   doc.querySelectorAll('script').forEach(e => e.remove());
   return { html: '<!DOCTYPE html>' + doc.documentElement.outerHTML, report };
 }
-/* ---------- 载入与转换 ---------- */
-function banner(text, err) {
-  const b = $('status');
-  b.hidden = !text; b.textContent = text || ''; b.className = 'banner' + (err ? ' err' : '');
+/* ---------- 提示 ---------- */
+// 浮在预览上方，不占位置。all：两栏都受影响（转换）；reader：只影响阅读页（深色模式）。
+// 进度提示延迟一会儿才出现，很快结束的操作不闪一下；错误立即显示，点 × 关闭。还没有预览时写在空白区里
+const NOTICE_DELAY = 300;
+const notices = { all: { el: $('toastAll'), dim: $('panes'), timer: 0 }, reader: { el: $('toastReader'), dim: $('screen'), timer: 0 } };
+function notice(scope, text, kind = 'busy') {
+  const n = notices[scope];
+  clearTimeout(n.timer);
+  if (scope === 'all' && $('panes').hidden) {
+    $('emptyIdle').hidden = !!text;
+    const m = $('emptyMsg');
+    m.hidden = !text; m.textContent = text || ''; m.className = kind === 'err' ? 'err' : '';
+    return;
+  }
+  const show = () => {
+    n.el.className = `toast toast-${scope}` + (text ? ` on ${kind}` : '');
+    n.el.querySelector('.toast-text').textContent = text || '';
+    n.el.querySelector('.toast-x').hidden = !text || kind !== 'err';
+    n.dim.classList.toggle('dim', !!text && kind === 'busy');
+  };
+  if (text && kind === 'busy') n.timer = setTimeout(show, NOTICE_DELAY); else show();
 }
+for (const scope of Object.keys(notices)) notices[scope].el.querySelector('.toast-x').onclick = () => notice(scope, '');
+/** 文章卡片里的一行提示：打开失败、拖入的内容不对等 */
+function srcNote(text, kind = '') {
+  const n = $('srcNote');
+  n.hidden = !text; n.textContent = text || ''; n.className = 'note small' + (kind ? ' ' + kind : '');
+}
+
+/* ---------- 载入与转换 ---------- */
 const width = () => +$('width').value;
 
 /* ---------- 字体设置 ---------- */
@@ -178,7 +268,7 @@ function renderOpts() {
   $('noWrap').checked = opts.noWrap;
   if (document.activeElement !== $('rules')) $('rules').value = opts.rules;
   const { rules, bad } = parseRules(opts.rules);
-  $('rulesNote').textContent = (opts.rules === DEFAULT_OPTS.rules ? '默认规则' : '已修改') + `，${rules.length} 条` + (bad.length ? `；第 ${bad.join('、')} 行格式不对，已跳过` : '');
+  $('rulesNote').textContent = (opts.rules === DEFAULT_OPTS.rules ? '默认规则' : '已修改') + `，共 ${rules.length} 条` + (bad.length ? `；第 ${bad.join('、')} 行格式有误，已跳过` : '');
   renderFaces();
 }
 
@@ -216,10 +306,10 @@ function checkbox(scope, label) {
 function phoneLine(f) {
   const p = elem('div', 'mob');
   const { names, stack, thin } = f.phone;
-  const tip = (names.length ? '' : '备用字体规则里没有对应项。\n') + `手机上的 font-family（按顺序取第一个已安装的字体）：\n${stack}`;
+  const tip = (names.length ? '' : '没有匹配的备用字体规则，手机上按下列字体栈显示。\n') + `手机上的 font-family（按顺序使用第一个已安装的字体）：\n${stack}`;
   p.append(tipButton('', '备用字体', tip), '：' + (names.length ? names.slice(0, 2).join('、') + (names.length > 2 ? ' 等' : '') : '无'));
-  if (thin) p.append(tipButton('tag', '偏细', `iPhone 上的 PingFang SC 最粗为 600（Semibold），比原稿的 ${f.weight} 细`));
-  if (f.web) p.append(tipButton('tag', '网页字体', '原稿用 @font-face 引用的字体。公众号正文加载不了网页字体；字形服务只读本机装了的字体文件，也转不了路径。要转，把这款字体装到电脑上，并去掉原稿里的 @font-face'));
+  if (thin) p.append(tipButton('tag', '偏细', `iPhone 上的 PingFang SC 最粗为 600（Semibold），比原稿的 ${f.weight} 细。如需保留原稿的粗细，请勾选这一组的行，转为 SVG 路径。`));
+  if (f.web) p.append(tipButton('tag', '网页字体', `原稿通过 @font-face 引用的字体（${f.web}）。公众号正文无法加载网页字体，保留为文字时显示为备用字体或手机的默认字体。转为 SVG 路径时，字形取自原稿引用的字体文件。`));
   return p;
 }
 function renderFaces() {
@@ -269,15 +359,15 @@ function syncFaces() {
   };
   for (const c of t.querySelectorAll('input[data-scope]')) {
     const s = c.dataset.scope;
-    if (s === 'all') tri(c, fonts.filter(f => !f.web));
-    else if (s.startsWith('face:')) tri(c, fonts.filter(f => f.face === s.slice(5) && !f.web));
+    if (s === 'all') tri(c, fonts);
+    else if (s.startsWith('face:')) tri(c, fonts.filter(f => f.face === s.slice(5)));
   }
   const ran = new Set(state.result.paths);
   for (const tr of t.querySelectorAll('tr[data-key]')) {
     const f = byKey.get(tr.dataset.key), c = tr.querySelector('input');
-    c.disabled = f.web; c.checked = !f.web && on.has(f.key);
+    c.checked = on.has(f.key);
     tr.classList.toggle('on', c.checked);
-    statusCell(tr.querySelector('.st'), f, ran.has(f.key) && !f.web);
+    statusCell(tr.querySelector('.st'), f, ran.has(f.key));
   }
   const ranStr = JSON.stringify([...ran].filter(k => byKey.has(k)).sort()), nowStr = JSON.stringify(opts.paths.filter(k => byKey.has(k)).sort());
   box.classList.toggle('stale', state.busy || ranStr !== nowStr);
@@ -287,10 +377,10 @@ function statusCell(td, f, picked) {
   let text = '', tip = '', cls = '';
   const left = f.chars - f.done;
   const why = Object.entries(f.why).filter(([, n]) => n > 0).map(([k, n]) => `${n} 字：${WHY_TEXT[k] || k}`).join('\n');
-  const along = '这一行没勾选。所在段落多数字勾选了，随段落一起转（一段整体转或整体不转）';
-  if (f.done && !left) { text = '已转'; cls = 'ok'; tip = picked ? '' : along; }
-  else if (f.done) { text = `已转 ${f.done}/${f.chars}`; cls = 'part'; tip = picked ? `其余 ${left} 字没转：\n` + why : along; }
-  else if (picked) { text = '未转'; cls = 'no'; tip = '没转为路径：\n' + why; }
+  const along = '这一行没有勾选，但所在段落中的大部分文字属于已勾选的行，因此随段落一起转为 SVG 路径（同一段落的文字全部转为 SVG 路径，或全部保留为文字）。';
+  if (f.done && !left) { text = '已转为路径'; cls = 'ok'; tip = picked ? '' : along; }
+  else if (f.done) { text = '部分转为路径'; cls = 'part'; tip = `${f.done} 字已转为 SVG 路径，其余 ${left} 字保留为文字。` + (picked ? '原因：\n' + why : '\n' + along); }
+  else if (picked) { text = '保留为文字'; cls = 'no'; tip = '未能转为 SVG 路径，原因：\n' + why; }
   const want = tip ? 'BUTTON' : 'SPAN';
   let s = td.firstElementChild;
   if (!s || s.tagName !== want) { s = want === 'BUTTON' ? tipButton('', '', '') : elem('span'); td.replaceChildren(s); }
@@ -302,7 +392,7 @@ function statusCell(td, f, picked) {
 $('faceList').addEventListener('change', e => {
   const c = e.target;
   if (!(c instanceof HTMLInputElement) || !c.dataset.scope) return;
-  const fonts = fontsOf().filter(f => !f.web);
+  const fonts = fontsOf();
   const s = c.dataset.scope;
   const keys = s === 'all' ? fonts.map(f => f.key) : s.startsWith('face:') ? fonts.filter(f => f.face === s.slice(5)).map(f => f.key) : [c.closest('tr').dataset.key];
   const set = new Set(opts.paths);
@@ -310,7 +400,7 @@ $('faceList').addEventListener('change', e => {
   saveOpts({ paths: [...set] }, 'soon');
 });
 $('pickBig').onclick = () => {
-  const fonts = fontsOf().filter(f => !f.web);
+  const fonts = fontsOf();
   const set = new Set(opts.paths);
   for (const f of fonts) { if (f.size >= opts.svgMin - 0.01) set.add(f.key); else set.delete(f.key); }
   saveOpts({ paths: [...set] });
@@ -327,6 +417,44 @@ renderOpts();
 const glyphs = body => api('/api/glyphs', body);
 /** SVG 里依赖 id 的部分画成的位图：登记到图床口，返回地址（复制时和其他图片一起换成取图地址） */
 const raster = async uri => { const id = await uploadDataUri(uri); if (!id) throw new Error('位图登记失败'); return ORIGIN + '/a/' + id; };
+/** 网页字体文件 → 本机服务里的文件 id。本地文件已经登记过；站外的、data: 的下载下来按文件头认格式再登记。按地址缓存 */
+const fontIds = new Map();
+const FONT_MAGIC = [['wOF2', 'woff2'], ['wOFF', 'woff'], ['OTTO', 'otf'], ['true', 'ttf'], ['ttcf', 'ttc'], ['\u0000\u0001\u0000\u0000', 'ttf']];
+function fontBytes(url) {
+  const local = url.startsWith(ORIGIN + '/a/') ? url.slice(ORIGIN.length + 3) : '';
+  if (/^[0-9a-f]{16}\.[a-z0-9]+$/.test(local)) return Promise.resolve(local);
+  if (!fontIds.has(url)) {
+    const job = (async () => {
+      const r = await fetch(url, { mode: 'cors', credentials: 'omit' });
+      if (!r.ok) return null;
+      const buf = await r.arrayBuffer();
+      const head = String.fromCharCode(...new Uint8Array(buf, 0, Math.min(4, buf.byteLength)));
+      const hit = FONT_MAGIC.find(([m]) => m === head);
+      if (!hit) return null;
+      return (await api(`/api/blob?ext=${hit[1]}&name=font.${hit[1]}`, buf, true)).id;
+    })().catch(() => null);
+    // 失败的不缓存，下次转换再试
+    job.then(id => { if (!id) fontIds.delete(url); });
+    fontIds.set(url, job);
+  }
+  return fontIds.get(url);
+}
+/** 正文里由本机提供的图片 id（去重） */
+const imageIdsIn = html => [...new Set([...html.matchAll(/\/a\/([0-9a-f]{16}\.[a-z0-9]+)/g)].map(m => m[1]))];
+// 微信服务器下载一张图最多等约 0.5 秒，超时隔 0.5 秒再试，三次都超时就放弃（2026-10-21 实测）。
+// 能否下完取决于这台电脑的上传速度和同时下载的张数，1 MB 是按常见宽带估的界线，不是平台规定
+const BIG_IMAGE = 1 << 20;
+/** 超过 BIG_IMAGE 的本地图片：[{ name, size }]。大小取自本机服务的 HEAD 响应 */
+async function bigImages(payload, names) {
+  const out = [];
+  await Promise.all(imageIdsIn(payload).map(async id => {
+    const r = await fetch('/a/' + id, { method: 'HEAD', cache: 'no-store' }).catch(() => null);
+    const size = r && r.ok ? +r.headers.get('content-length') : 0;
+    if (size > BIG_IMAGE) out.push({ name: names.get(id) || '转换生成的位图', size });
+  }));
+  return out.sort((a, b) => b.size - a.size);
+}
+const mb = n => (n / (1 << 20)).toFixed(1) + ' MB';
 let again = false;
 /** 转换进行中又改了设置：等这一轮结束再按新设置转一次 */
 function rerun() { if (state.busy) again = true; else run(); }
@@ -335,7 +463,8 @@ async function run() {
   if (!state.src || state.busy) return;
   state.busy = true; state.copiedAt = null; again = false;
   $('copy').disabled = true; $('fetchLine').hidden = true;
-  banner('转换中…');
+  srcNote('');
+  notice('all', '正在转换…');
   syncFaces();
   const o = opts, w = width();
   try {
@@ -347,23 +476,26 @@ async function run() {
     } else {
       entry = state.src.entry; html = await state.src.map.get(entry).text();
       label = entry.split('/').pop();
-      where = (state.src.name ? `拖入的文件夹 ${state.src.name}` : `拖入的 ${state.src.map.size} 个文件`) + '（改了原文件要重新拖入）';
+      where = (state.src.name ? `拖入的文件夹 ${state.src.name}` : `拖入的 ${state.src.map.size} 个文件`) + '（修改原文件后需重新拖入）';
     }
     showCurrent(label, where);
     const prep = await prepare(html, entry);
-    banner(o.paths.length ? '转换中…（第一次转 SVG 路径要读取本机字体目录，稍慢）' : '转换中…');
-    const res = await convert(prep.html, { width: w, frame: $('scratch'), verifyFrame: $('verify'), opts: o, glyphs, raster });
+    if (o.paths.length) notice('all', '正在转换…（首次转为 SVG 路径时需要读取本机的字体目录，耗时较长）');
+    const res = await convert(prep.html, { width: w, frame: $('scratch'), verifyFrame: $('verify'), opts: o, glyphs, raster, fontBytes });
+    prep.report.big = await bigImages(res.payload, prep.report.names);
     state.result = { ...res, report: prep.report, paths: o.paths, width: w };
+    state.error = '';
     $('paneA').style.width = w + 'px';
     $('paneA').srcdoc = res.original;
     $('panes').hidden = false; $('empty').hidden = true;
+    notice('all', '');
     renderChecks();
     renderFaces();
     await renderReader();
-    banner('');
   } catch (e) {
     console.error(e);
-    banner('转换失败：' + e.message, true);
+    state.error = e.message;
+    notice('all', '转换失败：' + e.message, 'err');
   } finally {
     state.busy = false;
     refreshCopy();
@@ -382,26 +514,29 @@ function renderChecks() {
   const { findings, report, stats } = state.result;
   const items = [...findings];
   const few = a => a.slice(0, 4).join('、') + (a.length > 4 ? ' 等' : '');
-  const redo = state.src && state.src.kind === 'files' ? '重新拖入文件夹' : '点“重新转换”';
+  const redo = redoHint();
   const add = (level, title, text, detail = '', ids = []) => ({ level, title, text, detail, ids });
-  if (report.missing.length) items.unshift(add('error', '图片缺失', `${report.missing.length} 张图片找不到：${few(report.missing)}`, `粘贴后这些图片会变成错误卡片，草稿存不了。把图片放回文章文件夹后${redo}。`));
-  if (report.sheets.length) items.push(add('warn', '样式表', `${report.sheets.length} 个样式表没有载入：${few(report.sheets)}`, '站外的样式表不会载入，本地的没找到。两边的预览里都没有它们的效果。'));
-  if (report.refs.length) items.push(add('warn', '引用的文件', `样式或 SVG 引用的 ${report.refs.length} 个文件找不到：${few(report.refs)}`, '多为字体、背景图。'));
-  if (report.dataUri) items.push(add('fixed', '内嵌图片', `${report.dataUri} 张 data: 图片转成了文件`, '公众号不接受 data: 地址的图片。'));
-  if (report.remote) items.push(add('info', '网络图片', `${report.remote} 张网络图片由微信从原网址取`, '对方网站开了防盗链时取不到。'));
-  if (stats.visualBad.length) items.push(add('warn', '和原稿不一致', `${stats.visualBad.length} 个元素的位置或尺寸与原稿相差超过 1.5px`, '', stats.visualBad));
+  if (report.missing.length) items.unshift(add('error', '图片缺失', `${report.missing.length} 张图片不存在：${few(report.missing)}`, `粘贴后，这些图片的位置会显示粘贴失败的提示，草稿无法保存。请将图片放入文章文件夹中的对应位置，然后${redo}。`));
+  if (report.badData) items.push(add('warn', '内嵌图片', `${report.badData} 张 data: 图片的格式无法识别，没有转为文件`, `公众号不接受 data: 地址的图片，粘贴后这些图片无法显示。请把它们另存为 PNG 或 JPEG 文件放入文章文件夹，在原稿中改为引用文件，然后${redo}。`));
+  if (report.big.length) items.push(add('warn', '图片过大', `${report.big.length} 张图片超过 1 MB：${few(report.big.map(b => `${b.name}（${mb(b.size)}）`))}`,
+    `粘贴后，微信服务器从本机下载图片，每次最多等待约 0.5 秒，连续三次超时即放弃。图片较大或这台电脑的上传速度较慢时，这些图片的位置会显示“系统繁忙”，草稿无法保存。请把这些图片压缩到 1 MB 以内（通过内网穿透提供图片时，下载速度通常更慢，需要压缩得更小），然后${redo}。`));
+  if (report.sheets.length) items.push(add('warn', '样式表', `${report.sheets.length} 个样式表无法读取：${few(report.sheets)}`, '可能的原因：本地样式表的文件不存在；站外样式表所在的网站不允许跨域读取，或者无法访问。两侧预览中都没有这些样式表的效果。'));
+  if (report.refs.length) items.push(add('warn', '引用的文件', `样式或 SVG 引用的 ${report.refs.length} 个文件不存在：${few(report.refs)}`, `这些文件多为字体与背景图，两侧预览中均未加载。请将文件放入文章文件夹中的对应位置，然后${redo}。`));
+  if (report.dataUri) items.push(add('fixed', '内嵌图片', `${report.dataUri} 张 data: 图片转为了文件`, '公众号不接受 data: 地址的图片。这些图片与文章文件夹中的图片一样，通过取图地址提供给微信服务器。'));
+  if (report.remote) items.push(add('info', '网络图片', `${report.remote} 张网络图片由微信服务器从原网址下载`, '原网站设有防盗链时，微信服务器无法下载这些图片。遇到这种情况，请把图片下载到文章文件夹中，改为引用本地文件。'));
+  if (stats.visualBad.length) items.push(add('warn', '与原稿不一致', `${stats.visualBad.length} 个元素的位置或尺寸与原稿相差超过 1.5px`, '', stats.visualBad));
   else {
     // 排在"其他宽度"那条前面：先说当前宽度一致，再说其他宽度也一致
     const at = items.findIndex(i => i.level === 'info');
-    items.splice(at < 0 ? items.length : at, 0, add('info', '比对', `${stats.verified} 个元素的位置、尺寸与原稿一致`, '按这台电脑上的字体比对。不转为 SVG 路径的字在手机上显示为备用字体，字形和换行仍可能不同。'));
+    items.splice(at < 0 ? items.length : at, 0, add('info', '比对', `${stats.verified} 个元素的位置、尺寸与原稿一致`, '比对使用这台电脑上的字体。没有转为 SVG 路径的字，在手机上没有原稿字体时显示为备用字体，字形与换行可能与原稿不同。'));
   }
-  items.push(add('info', '代码长度', `${stats.chars.toLocaleString()} 字符`, '含排版代码，不是正文字数。'));
+  items.push(add('info', '代码长度', `${stats.chars.toLocaleString()} 个字符`, '包括排版代码，不是正文字数。'));
 
   const groups = [['error', '必须处理'], ['warn', '需要留意'], ['fixed', '已自动处理'], ['info', '说明']];
   const box = $('checks');
   box.textContent = '';
   const nErr = items.filter(i => i.level === 'error').length, nWarn = items.filter(i => i.level === 'warn').length;
-  const sum = elem('p', 'verdict', nErr ? `${nErr} 项必须处理，否则草稿可能存不了` : nWarn ? `没有必须处理的问题，${nWarn} 项需要留意` : '没有需要处理的问题');
+  const sum = elem('p', 'verdict', nErr ? `有 ${nErr} 项必须处理，否则草稿可能无法保存` : nWarn ? `没有必须处理的问题，有 ${nWarn} 项需要留意` : '没有需要处理的问题');
   box.appendChild(sum);
   for (const [lv, name] of groups) {
     const list = items.filter(i => i.level === lv);
@@ -417,7 +552,7 @@ function renderChecks() {
     for (const it of list) {
       const li = elem('li', lv);
       const head = [elem('b', null, it.title), document.createTextNode(it.text)];
-      const btn = it.ids.length ? elem('button', null, '在预览里标出') : null;
+      const btn = it.ids.length ? elem('button', null, '在预览中标出') : null;
       if (btn) { btn.type = 'button'; btn.onclick = () => highlight(it.ids); }
       if (it.detail) {
         const d = elem('details'), s = elem('summary');
@@ -445,97 +580,155 @@ function highlight(ids) {
   if (el) el.scrollIntoView({ block: 'center' });
 }
 
-/* ---------- 图床状态 ---------- */
-const HOST_KEY = 'wxc.host';
-const hostOptions = h => [...h.list, ...(h.custom ? [{ ...h.custom, custom: true }] : [])];
-/** 当前用哪个出口：用户选过且还在列表里就用它，否则用服务端推荐的 */
-function chosen() {
-  const h = state.server && state.server.host;
-  if (!h) return null;
-  const mine = localStorage.getItem(HOST_KEY);
-  const hit = mine && hostOptions(h).find(x => x.base === mine);
-  return hit ? { base: hit.base, ok: hit.ok, manual: true } : h.pick;
+/* ---------- 取图地址 ---------- */
+// 和端口映射软件一样分三项：本机端口（取图服务监听的端口），公网地址与公网端口（微信连接的地址）。
+// 公网地址留空时自动检测公网 IP；公网端口留空时与本机端口相同（路由器端口转发通常两边一致）
+const hostCfg = () => state.server && state.server.host.config;
+let hostDirty = false, hostSig = '';
+function fillHostForm(c) {
+  $('hfPort').value = c.imgPort;
+  $('hfHost').value = c.host;
+  $('hfPubPort').value = c.port || '';
+  $('hfProto').value = c.proto;
+  hostDirty = false;
+  syncHostForm();
 }
-
-let hostSig = '';
+/** 自动检测时只能是 http：裸 IP 没有证书。公网端口留空时 http 同本机端口、https 用 443，和服务端 baseOf 一致 */
+function syncHostForm() {
+  const auto = !$('hfHost').value.trim();
+  if (auto) $('hfProto').value = 'http';
+  $('hfProto').disabled = auto;
+  $('hfPubPort').placeholder = $('hfProto').value === 'https' ? '留空则使用 443' : `留空则与本机端口相同（${$('hfPort').value.trim() || '本机端口'}）`;
+}
+/** 粘贴的完整地址（https://abc.example.com:8443）拆进协议、地址、端口三格 */
+function splitHostInput() {
+  const v = $('hfHost').value.trim();
+  if (!/^https?:\/\//i.test(v)) return;
+  let u;
+  try { u = new URL(v); } catch { return; }
+  $('hfProto').value = u.protocol.slice(0, -1);
+  $('hfHost').value = u.hostname;
+  $('hfPubPort').value = u.port || (u.protocol === 'https:' ? '443' : '80');
+  syncHostForm();
+}
+$('hostForm').addEventListener('input', e => {
+  hostDirty = true;
+  $('hostNote').textContent = '';
+  if (e.target === $('hfHost') && e.inputType === 'insertFromPaste') splitHostInput();
+  syncHostForm();
+});
+$('hfHost').addEventListener('change', splitHostInput);
+$('hostForm').onsubmit = async e => {
+  e.preventDefault();
+  splitHostInput();
+  const note = $('hostNote'), btn = $('hostForm').querySelector('button[type="submit"]');
+  const val = id => $(id).value.trim();
+  btn.disabled = true; note.className = 'note'; note.textContent = '正在保存…';
+  try {
+    const j = await api('/api/host', { imgPort: val('hfPort'), host: val('hfHost'), port: val('hfPubPort'), proto: $('hfProto').value });
+    if (state.server) state.server.host = j.host;
+    fillHostForm(j.host.config);
+    hostSig = JSON.stringify(j.host.config);
+    note.className = 'note ok'; note.textContent = '已保存，正在自测';
+    renderHost(); refreshCopy();
+  } catch (err) { note.className = 'note err'; note.textContent = err.message; }
+  finally { btn.disabled = false; }
+};
+const TAG = { ok: ['ok', '自测通过'], no: ['no', '自测未通过'], wait: ['wait', '自测中'] };
+function tag(kind) { const [cls, text] = TAG[kind]; return elem('span', 'tag ' + cls, text); }
+const ROUTER_LOOP = '部分路由器不支持从内网访问自己的公网地址，此时自测不会通过，但外网仍可能正常访问。可以先复制、粘贴一次，观察“复制到剪贴板”下方显示的已下载图片数是否增加。';
+/** 自测未通过、没有检测到公网 IP 时的说明：一句结论，加上可能的原因 */
+function hostHelpFor(h, c) {
+  if (!h.pick) return h.checking ? null : ['这台电脑可能没有联网，或者无法访问查询 IP 的网站（使用需要登录的校园网时，登录前也会如此）。可以在“公网地址”中直接填写域名或 IP。', []];
+  if (h.pick.ok !== false || h.checking) return null;
+  if (c.host) return ['从这台电脑无法访问这个地址，微信服务器可能也无法下载图片。请检查：', [
+    `使用内网穿透时：内网穿透工具是否正在运行，是否把本机的 ${c.imgPort} 端口映射到了这个地址，“公网地址”“公网端口”“协议”是否与内网穿透工具提供的一致。`,
+    `使用端口转发时：路由器是否把公网端口转发到了这台电脑的 ${c.imgPort} 端口。` + ROUTER_LOOP]];
+  return ['从这台电脑无法访问这个地址，微信服务器可能也无法下载图片。常见原因：', [
+    '使用校园网或移动宽带：检测到的是学校或运营商的出口 IP，外网无法通过它访问这台电脑。请改用内网穿透，见“填写说明”。',
+    `有公网 IP，但路由器没有把端口转发到这台电脑的 ${c.imgPort} 端口，或者防火墙阻止了外网的连接。`,
+    ROUTER_LOOP]];
+}
+let exitSig = '', helpSig = '';
+function renderHelp(help, content) {
+  const sig = JSON.stringify(content);
+  help.hidden = !content;
+  if (sig === helpSig) return;
+  helpSig = sig;
+  if (!content) { help.replaceChildren(); return; }
+  const [lead, items] = content;
+  help.replaceChildren(elem('p', null, lead));
+  if (!items.length) return;
+  const ul = elem('ul');
+  ul.append(...items.map(t => elem('li', null, t)));
+  help.appendChild(ul);
+}
 function renderHost() {
   const h = state.server && state.server.host;
   const line = $('hostLine'), help = $('hostHelp');
-  if (!h) { line.className = 'status err'; line.textContent = `连不上本地服务，请确认${SERVICE.trim()}没有关闭`; $('hostPick').hidden = true; return; }
-  const c = chosen();
-  const opts = hostOptions(h);
-  $('imgPortHint').textContent = state.server.imgPort;
-  if (document.activeElement !== $('portInput')) $('portInput').value = state.server.imgPort;
-  if (!opts.length) {
-    line.className = h.checking ? 'status' : 'status err';
-    line.textContent = h.checking ? '正在检测取图地址…' : '查不到本机的公网 IP';
-    help.hidden = h.checking; help.textContent = '本机没有联网，或查询 IP 的网站都连不上。可以改用下面的内网穿透地址。';
-  } else if (c && c.ok) {
-    line.className = 'status ok'; line.textContent = '微信从 ' + c.base + ' 取图';
-    help.hidden = true;
-  } else {
-    line.className = 'status warn'; line.textContent = '微信从 ' + (c ? c.base : '—') + ' 取图（未确认外网可达）';
-    help.hidden = false;
-    help.textContent = `从外网回连这个地址的 ${state.server.imgPort} 端口失败，微信可能取不到图。常见原因：宽带没有公网 IP（运营商 NAT）；路由器没有把这个端口转发到本机。也可能只是路由器不支持从内网回连自己的公网地址，实际能通。有“外网可达”的地址时选它；都不通时先复制粘贴一次，取图进度一直为 0 再改用内网穿透。`;
+  if (!h) {
+    line.className = 'status err'; line.textContent = `无法连接本机服务，请确认${SERVICE}没有关闭`;
+    renderHelp(help, null); $('exitBox').hidden = true;
+    return;
   }
-  $('hostWhen').textContent = h.checking ? (h.checkedAt ? '检测中…' : '') : h.checkedAt ? `上次 ${new Date(h.checkedAt).toLocaleTimeString('zh-CN', { hour12: false })}，每 5 分钟自动检测` : '';
+  const c = h.config, sig = JSON.stringify(c);
+  if (!hostDirty && sig !== hostSig) { hostSig = sig; fillHostForm(c); }
+  for (const s of document.querySelectorAll('.guide-port')) s.textContent = c.imgPort;
+  const p = h.pick;
+  if (!p) {
+    line.className = h.checking ? 'status' : 'status err';
+    line.textContent = h.checking ? '正在检测公网 IP…' : '没有检测到公网 IP';
+  } else {
+    const kind = p.ok == null || h.checking && !p.ok ? 'wait' : p.ok ? 'ok' : 'no';
+    line.className = 'status ' + (kind === 'ok' ? 'ok' : kind === 'no' ? 'warn' : '');
+    line.replaceChildren('当前地址', tag(kind), elem('span', 'url', p.base));
+  }
+  renderHelp(help, hostHelpFor(h, c));
+  $('hostWhen').textContent = h.checking ? '' : h.checkedAt ? `上次检测 ${new Date(h.checkedAt).toLocaleTimeString('zh-CN', { hour12: false })}，每 5 分钟自动检测` : '';
   $('recheck').disabled = h.checking;
 
-  // 只在内容变化时重画，避免每次轮询抢走键盘焦点
-  const sig = JSON.stringify([opts.map(x => [x.base, x.ok, x.seen, x.stale]), c && c.base, h.probes]);
-  if (sig === hostSig) return;
-  hostSig = sig;
-  const box = $('hostList'); box.textContent = '';
-  $('hostPick').hidden = !opts.length;
-  for (const x of opts) {
-    const lab = document.createElement('label');
-    const r = document.createElement('input');
-    r.type = 'radio'; r.name = 'host'; r.value = x.base; r.checked = !!c && c.base === x.base;
-    r.onchange = () => { localStorage.setItem(HOST_KEY, x.base); hostSig = ''; renderHost(); refreshCopy(); };
-    const ip = document.createElement('span'); ip.className = 'ip'; ip.textContent = x.custom ? x.base : x.ip;
-    const tag = document.createElement('span');
-    tag.className = 'tag ' + (x.stale ? 'stale' : x.ok ? 'ok' : 'no');
-    tag.textContent = x.stale ? '这轮没测到' : x.ok ? '外网可达' : '不通';
-    lab.append(r, ip, tag);
-    // 只有一条宽带时次数总是满的，不显示；多线时说明各条线分到多少流量
-    if (!x.custom && !x.stale && h.probes && opts.filter(o => !o.custom && !o.stale).length > 1) {
-      const n = document.createElement('span'); n.className = 'n';
-      n.textContent = `${x.seen}/${h.probes} 次`;
-      n.title = '这轮检测发出的连接里，有多少次从这条宽带出去（多条宽带按连接分流）';
-      lab.appendChild(n);
-    }
-    box.appendChild(lab);
-  }
+  // 自动检测到多个公网 IP（多条宽带按连接分流）时列出来；只在内容变化时重画
+  const many = !c.host && h.list.length > 1;
+  $('exitBox').hidden = !many;
+  const es = JSON.stringify([many, h.list.map(x => [x.ip, x.ok, x.stale]), p && p.base]);
+  if (!many || es === exitSig) return;
+  exitSig = es;
+  $('exitSum').textContent = `检测到 ${h.list.length} 个公网 IP`;
+  $('exitList').replaceChildren(...h.list.map(x => {
+    const li = elem('li');
+    li.append(elem('span', 'ip', x.ip), x.stale ? elem('span', 'tag wait', '本轮未检测到') : tag(x.ok ? 'ok' : 'no'));
+    if (p && p.base === x.base) li.append(elem('span', 'n', '使用中'));
+    return li;
+  }));
 }
 
 // 实测：粘贴后第一次保存时编辑器还没给图片补上 data-ratio，存下的正文在预览页里图片不加载；保存后编辑器才补上
-const SAVE_TWICE = '保存草稿要点两次“保存为草稿”（提示已保存后再点一次）：第一次保存时编辑器还没给图片补上尺寸信息（data-ratio），存下的图片在预览里不显示。';
-const copiedNote = () => localImageIds().length ? '已复制。在公众号后台的正文里按 Ctrl+V，然后等下方的取图进度走完。'
-  : /<img\b/.test(state.result.payload) ? '已复制。在公众号后台的正文里按 Ctrl+V。' + SAVE_TWICE : '已复制。在公众号后台的正文里按 Ctrl+V。';
-function localImageIds() {
-  if (!state.result) return [];
-  return [...new Set([...state.result.payload.matchAll(/\/a\/([0-9a-f]{16}\.[a-z0-9]+)/g)].map(m => m[1]))];
-}
+const SAVE_TWICE = '第一次保存草稿时，编辑器尚未为图片添加尺寸信息，此时保存的正文在后台的“预览”中不显示图片。因此请点击两次“保存为草稿”：提示已保存后，再点击一次。';
+const copiedNote = () => localImageIds().length ? '已复制。请在公众号后台的正文中按 Ctrl+V，然后等待下方显示图片已全部下载。'
+  : /<img\b/.test(state.result.payload) ? '已复制。请在公众号后台的正文中按 Ctrl+V。' + SAVE_TWICE : '已复制。请在公众号后台的正文中按 Ctrl+V。';
+const localImageIds = () => state.result ? imageIdsIn(state.result.payload) : [];
+const redoHint = () => state.src && state.src.kind === 'files' ? '重新拖入文件夹' : '点击“重新转换”';
 function refreshCopy() {
   const btn = $('copy'), note = $('copyNote');
   if (!state.result) { btn.disabled = true; note.textContent = '载入文章后可复制。'; return; }
   const imgs = localImageIds();
-  const pick = chosen();
+  const pick = picked();
   if (imgs.length && !pick) {
     const checking = state.server && state.server.host.checking;
     btn.disabled = true;
-    note.textContent = checking ? `文中有 ${imgs.length} 张本地图片，正在检测取图地址，检测完就能复制。` : `文中有 ${imgs.length} 张本地图片，还没有能用的取图地址，见下方“取图地址”。`;
+    note.textContent = checking ? `文中有 ${imgs.length} 张本地图片。正在检测公网 IP，检测完成后即可复制。` : `文中有 ${imgs.length} 张本地图片，还没有可用的取图地址，请在下方“取图地址”中填写。`;
     return;
   }
   btn.disabled = state.busy;
   if (state.copiedAt) { note.textContent = copiedNote(); return; }
   const errs = state.result.findings.filter(f => f.level === 'error').length + (state.result.report.missing.length ? 1 : 0);
-  note.textContent = (errs ? `${errs} 项必须处理（见下方检查结果），否则草稿可能存不了。` : '')
-    + (imgs.length ? `复制后在公众号后台的正文里按 Ctrl+V。${imgs.length} 张图片由微信从本机取走，取完前不要关闭${SERVICE}。` : '复制后在公众号后台的正文里按 Ctrl+V。');
+  note.textContent = (errs ? `有 ${errs} 项必须处理（见下方检查结果），否则草稿可能无法保存。` : '')
+    + (imgs.length ? `复制后，在公众号后台的正文中按 Ctrl+V。${imgs.length} 张图片由微信从本机下载，下载完成前请不要关闭${SERVICE}。` : '复制后，在公众号后台的正文中按 Ctrl+V。');
 }
+const picked = () => state.server && state.server.host.pick;
 
 async function copy() {
-  const pick = chosen();
+  const pick = picked();
   const html = pick ? state.result.payload.split(ORIGIN + '/a/').join(pick.base + '/a/') : state.result.payload;
   const text = $('verify').contentDocument.querySelector('.rich_media_content').innerText;
   try {
@@ -548,22 +741,47 @@ async function copy() {
     document.addEventListener('copy', on, { once: true });
     const ok = document.execCommand('copy');
     document.removeEventListener('copy', on);
-    if (!ok) { $('copyNote').textContent = '浏览器拒绝写入剪贴板，请再点一次。'; return; }
+    if (!ok) { $('copyNote').textContent = '浏览器拒绝写入剪贴板，请再点击一次。'; return; }
   }
-  state.copiedAt = { hits: { ...(state.server.hits || {}) }, base: pick ? pick.base : '' };
+  state.copiedAt = { t: Date.now(), base: pick ? pick.base : '' };
   $('copyNote').textContent = copiedNote();
   renderFetch();
 }
 
+/**
+ * 复制之后这张图的下载情况。微信服务器下载超时会隔约 0.5 秒重试，三次都超时就放弃，
+ * 所以只看最后一串（间隔不到 1.5 秒的）请求：三次及以上算失败，一两次且之后 2 秒没有再来算成功
+ */
+const BURST_GAP = 1500, SETTLE = 2000;
+function fetchState(times, since, now) {
+  const t = (times || []).filter(x => x >= since);
+  if (!t.length) return 'wait';
+  let k = t.length - 1;
+  while (k > 0 && t[k] - t[k - 1] < BURST_GAP) k--;
+  if (t.length - k >= 3) return 'fail';
+  return now - t[t.length - 1] < SETTLE ? 'busy' : 'ok';
+}
 function renderFetch() {
   const el = $('fetchLine');
   const ids = localImageIds();
-  if (!state.copiedAt || !ids.length) { el.hidden = true; return; }
-  const hits = state.server.hits || {};
-  const got = ids.filter(id => (hits[id] || 0) > (state.copiedAt.hits[id] || 0)).length;
+  if (!state.copiedAt || !ids.length || !state.server) { el.hidden = true; return; }
+  const fetches = state.server.fetches || {}, now = Date.now();
+  const st = ids.map(id => fetchState(fetches[id], state.copiedAt.t, now));
+  const got = st.filter(s => s === 'ok').length, failed = ids.filter((id, i) => st[i] === 'fail');
+  // 转换生成的位图没有文件名，同名的合并计数
+  const names = new Map();
+  for (const id of failed) { const n = state.result.report.names.get(id) || '转换生成的位图'; names.set(n, (names.get(n) || 0) + 1); }
+  const listed = [...names].map(([n, k]) => k > 1 ? `${n}（${k} 张）` : n);
   el.hidden = false;
-  el.className = 'status ' + (got === ids.length ? 'ok' : got ? 'warn' : '');
-  el.textContent = got === ids.length ? `${got} 张图片微信已全部取走，可以关闭${SERVICE}。${SAVE_TWICE}` : `微信取图：${got}/${ids.length}（经 ${state.copiedAt.base}）。粘贴后一段时间仍为 0，说明微信连不上这个地址：换一个取图地址或改用内网穿透，再重新复制粘贴。`;
+  el.className = 'status ' + (failed.length ? 'err' : got === ids.length ? 'ok' : got ? 'warn' : '');
+  if (failed.length) {
+    el.textContent = `微信已下载 ${got}/${ids.length} 张图片。${failed.length} 张图片连续三次下载超时：${listed.slice(0, 4).join('、')}${listed.length > 4 ? ' 等' : ''}。`
+      + `编辑器中这些图片的位置会显示“系统繁忙”，草稿无法保存。请压缩这些图片（一般压缩到 1 MB 以内；通过内网穿透提供图片时需要更小），${redoHint()}，然后删除已粘贴的正文，重新复制、粘贴。`;
+  } else if (got === ids.length) {
+    el.textContent = `微信已下载全部 ${got} 张图片，可以关闭${SERVICE}。${SAVE_TWICE}`;
+  } else {
+    el.textContent = `微信已下载 ${got}/${ids.length} 张图片（取图地址 ${state.copiedAt.base}）。如果粘贴半分钟后已下载的图片数仍为 0，通常是微信服务器无法访问取图地址：请检查“取图地址”的设置，修改后删除已粘贴的正文，重新复制、粘贴。`;
+  }
 }
 
 /* ---------- 轮询 ---------- */
@@ -592,7 +810,7 @@ function useFiles(files, name) {
   const map = new Map();
   for (const { rel, file } of files) map.set(rel, file);
   const htmls = [...map.keys()].filter(r => /\.html?$/i.test(r)).sort((a, b) => a.split('/').length - b.split('/').length || (/index\.html?$/i.test(b) - /index\.html?$/i.test(a)));
-  if (!htmls.length) return banner('这个文件夹里没有 HTML 文件。', true);
+  if (!htmls.length) return srcNote('这个文件夹中没有 HTML 文件。', 'err');
   const top = htmls.filter(r => r.split('/').length === htmls[0].split('/').length);
   const entry = top.find(r => /(^|\/)index\.html?$/i.test(r)) || top[0];
   state.src = { kind: 'files', name, map, entry };
@@ -632,7 +850,7 @@ document.body.addEventListener('drop', async e => {
   }
   const out = [];
   for (const en of entries) await walk(en, '', out);
-  if (out.length === 1) banner('只拖进了一个 HTML 文件，浏览器拿不到它旁边的图片。请拖整个文件夹，或在左边粘贴文件路径。', true);
+  if (out.length === 1) srcNote('只拖入了一个 HTML 文件，浏览器无法读取同一文件夹中的图片。请拖入整个文件夹，或在上方粘贴文件路径。', 'err');
   else useFiles(out, '');
 });
 
@@ -640,28 +858,8 @@ $('pathForm').onsubmit = async e => {
   e.preventDefault();
   const p = $('pathInput').value.trim();
   if (!p) return;
-  try { await api('/api/open', { path: p }); banner('打开中…'); }
-  catch (err) { banner(err.message, true); }
-};
-$('portForm').onsubmit = async e => {
-  e.preventDefault();
-  const port = Number($('portInput').value);
-  const btn = $('portForm').querySelector('button[type="submit"]');
-  btn.disabled = true;
-  try {
-    const j = await api('/api/port', { port });
-    hostSig = '';
-    banner(`取图端口已改为 ${j.imgPort}。路由器端口转发或内网穿透要对准新端口，改完重新复制粘贴。`);
-  } catch (err) { banner(err.message, true); }
-  finally { btn.disabled = false; $('portInput').blur(); }
-};
-$('customForm').onsubmit = async e => {
-  e.preventDefault();
-  try {
-    const j = await api('/api/custom', { base: $('customInput').value });
-    if (j.custom) localStorage.setItem(HOST_KEY, j.custom.base); else localStorage.removeItem(HOST_KEY);
-    hostSig = '';
-  } catch (err) { banner(err.message, true); }
+  try { await api('/api/open', { path: p }); srcNote('正在打开…'); }
+  catch (err) { srcNote(err.message, 'err'); }
 };
 $('recheck').onclick = () => {
   if (state.server) state.server.host.checking = true;
@@ -687,15 +885,15 @@ async function renderReader() {
   pb.style.width = w + 'px';
   $('device').classList.toggle('dark', dark);
   const doc = readerDoc(r.preview, dark);
-  if (!dark) { pb.dataset.dark = ''; pb.srcdoc = doc; return; }
-  banner('生成深色模式…');
+  if (!dark) { notice('reader', ''); pb.dataset.dark = ''; pb.srcdoc = doc; return; }
+  notice('reader', '正在生成深色模式…');
   try {
     const html = await darkHtml($('darkFrame'), doc, w, pb.clientHeight);
     if (html == null || seq !== readerSeq) return;
     pb.dataset.dark = '1';
     pb.srcdoc = html;
-    banner('');
-  } catch (e) { if (seq === readerSeq) banner(e.message, true); }
+    notice('reader', '');
+  } catch (e) { if (seq === readerSeq) notice('reader', e.message, 'err'); }
 }
 $('dark').onchange = () => {
   localStorage.setItem(DARK_KEY, $('dark').checked ? '1' : '');
@@ -724,4 +922,6 @@ for (const id of ['paneA', 'paneB']) {
 }
 
 window.__wxc = state;
+window.__wxcNotice = notice;
+window.__wxcBig = bigImages;
 poll();

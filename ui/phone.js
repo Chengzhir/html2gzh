@@ -63,7 +63,7 @@ export async function darkHtml(frame, doc, width, height) {
   const src = doc.slice(0, at) + `<script>${await libText()}<\/script>` + runner(nonce) + doc.slice(at);
   if (pending) pending(null);
   return new Promise((resolve, reject) => {
-    const t = setTimeout(() => { finish(); reject(new Error('深色模式转换 30 秒内没完成')); }, 30000);
+    const t = setTimeout(() => { finish(); reject(new Error('深色模式转换在 30 秒内没有完成')); }, 30000);
     const finish = () => { clearTimeout(t); removeEventListener('message', on); pending = null; };
     const on = e => {
       if (e.source !== frame.contentWindow || !e.data || e.data.type !== 'wxc-dark' || e.data.nonce !== nonce) return;

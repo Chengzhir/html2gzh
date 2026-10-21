@@ -33,7 +33,7 @@ img{display:block;width:100%}
 .px{font:700 26px/1.4 "Microsoft YaHei",sans-serif}
 .syn{font:900 7cqw/1.3 SimSun,serif}
 .ul{font-size:8cqw;line-height:1.3;text-decoration:underline}
-/* 网络字体：字形服务端的浏览器没有它，必须留成文字。local() 指向 Arial，原稿与成品（丢了 @font-face 回落到 Arial）字形相同 */
+/* 网页字体：src 只有 local()，指向本机的 Arial。字形服务照样声明这条 @font-face，Chrome 报的是本机字体，按本机字体目录取字形 */
 @font-face{font-family:WebX;src:local("Arial")}
 .web,.zal{margin:0 0 4cqw;font:400 7cqw/1.3 Arial,sans-serif}
 /* 连字：Calibri 的 ffi、ff 各排成一个字形；字距不为 0 时 Chrome 不排连字 */
@@ -61,8 +61,8 @@ img{display:block;width:100%}
   <p class="px" data-expect="svg">固定字号&#x200b;的标题</p>
   <p class="syn" data-expect="svg">宋体假粗体</p>
   <p class="ul" data-expect="text">带下划线的大字</p>
-  <!-- 原稿走 @font-face、成品走系统 Arial，同一个字体文件栅格化仍有差别：不比像素 -->
-  <p class="web" data-expect="text" data-pixel-skip>Web Font</p>
+  <!-- 保留为文字时，原稿走 @font-face、成品走系统 Arial，同一个字体文件栅格化仍有差别：不比像素 -->
+  <p class="web" data-expect="svg" data-pixel-skip>Web Font</p>
   <p class="lig" data-expect="svg" data-expect-glyphs="8">office <span style="color:#2563eb">Sta</span>ff</p>
   <p class="lig-ls" data-expect="svg" data-expect-glyphs="11">office Staff</p>
   <!-- 一个字素带 18 个组合用字素连接符（U+034F，零宽、不叠高），超过字形接口的单字长度上限：只有这一段留成文字，别的段照转 -->

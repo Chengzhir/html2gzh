@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>webfont fixture</title>
+<!-- 网页字体转为 SVG 路径的测试稿。fonts/ 由 test/webfonts.mjs 从 Windows 自带字体生成（不进仓库）；
+     127.0.0.1:48970 是 e2e 起的允许跨域的服务，模拟字体网站。每段一种情形，e2e 用 --svg 跑，所有正文都应转为路径 -->
+<link rel="stylesheet" href="http://127.0.0.1:48970/remote.css">
+<link rel="stylesheet" href="fonts/inline.css">
+<style>
+@import url("http://127.0.0.1:48970/imported.css");
+@font-face{font-family:"Hei Web";src:url(fonts/cjk.woff2) format("woff2");font-weight:400}
+@font-face{font-family:"Slice Sans";src:url(fonts/slice-latin.woff2) format("woff2");unicode-range:U+0020-002F,U+003A-007E}
+@font-face{font-family:"Slice Sans";src:url(fonts/slice-digits.woff2) format("woff2");unicode-range:U+0030-0039}
+@font-face{font-family:"Var Sans";src:url(fonts/var.woff2) format("woff2");font-weight:300 700;font-stretch:75% 100%}
+@font-face{font-family:"Var Fixed";src:url(fonts/var.woff2) format("woff2");font-weight:400}
+@font-face{font-family:"Adj Sans";src:url(fonts/slice-latin.woff2) format("woff2");size-adjust:80%}
+@font-face{font-family:"Gone Sans";src:url(fonts/gone.woff2) format("woff2")}
+body{margin:8px;font:15px/1.6 sans-serif;color:#222}
+.page{container-type:inline-size}
+.case{margin:0 0 3cqw}
+.case p{margin:0;font-size:12px;color:#666}
+.case .t{margin:0;font-size:8cqw;line-height:1.3;color:#222}
+</style></head>
+<body><div class="page">
+<section class="case"><p>中文网页字体（SimHei 子集，woff2），400 与合成粗体 700</p>
+<p class="t" data-expect="svg" style="font-family:'Hei Web',serif">网页字体标题</p>
+<p class="t" data-expect="svg" style="font-family:'Hei Web',serif;font-weight:700">合成粗体的标题</p></section>
+
+<section class="case"><p>同一款字体按 unicode-range 切成两片：字母在一片，数字在另一片</p>
+<p class="t" data-expect="svg" style="font-family:'Slice Sans',serif">Year 2026 No 15</p></section>
+
+<section class="case"><p>可变字体（wght 300–700、wdth 75–100）：300、700、900（夹到 700）、窄体 75%</p>
+<p class="t" data-expect="svg" style="font-family:'Var Sans',serif;font-weight:300">Light 300</p>
+<p class="t" data-expect="svg" style="font-family:'Var Sans',serif;font-weight:700">Bold 700</p>
+<p class="t" data-expect="svg" style="font-family:'Var Sans',serif;font-weight:900">Heavy 900</p>
+<p class="t" data-expect="svg" style="font-family:'Var Sans',serif;font-stretch:75%">Narrow 75</p></section>
+
+<section class="case"><p>可变字体声明为固定字重 400：700 夹回 400，再合成粗体</p>
+<p class="t" data-expect="svg" style="font-family:'Var Fixed',serif;font-weight:700">Fixed Bold</p></section>
+
+<section class="case"><p>合成斜体；size-adjust: 80%</p>
+<p class="t" data-expect="svg" style="font-family:'Slice Sans',serif;font-style:italic">Oblique Text</p>
+<p class="t" data-expect="svg" style="font-family:'Adj Sans',serif">Adjusted Size</p></section>
+
+<section class="case"><p>站外样式表（相对地址的字体）、@import 进来的样式表（woff）、data: 内嵌字体</p>
+<p class="t" data-expect="svg" style="font-family:'Remote Sans',serif">Remote Font</p>
+<p class="t" data-expect="svg" style="font-family:'Imported Serif',sans-serif">Imported Font</p>
+<p class="t" data-expect="svg" style="font-family:'Inline Serif',sans-serif">Inline Font</p></section>
+
+<section class="case"><p>字体文件不存在：原稿回落到 Arial，转出来也是 Arial</p>
+<p class="t" data-expect="svg" style="font-family:'Gone Sans',Arial,sans-serif">Fallback Arial</p></section>
+</div></body></html>
