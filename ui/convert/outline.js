@@ -1,4 +1,5 @@
-import { ID, isHtmlEl, measure, diffBoxes, splitTop } from './util.js';
+import { ID, isHtmlEl, measure, diffBoxes, splitTop, unq, NO_TRANSFORM } from './util.js';
+import { GLYPH_BATCH as BATCH } from './glyphlimits.js';
 import { faceKey } from './fonts.js';
 import { annotateContainerWidths } from './responsive.js';
 import { resolveWebFonts, usesMissing } from './webfonts.js';
@@ -7,7 +8,6 @@ import { resolveWebFonts, usesMissing } from './webfonts.js';
 // 单元 = 一个块元素的全部内容，或块容器/弹性容器里的一段行内内容（包进一个块级 span 后整体替换）。
 // 两个宽度各转一遍后，只保留"逐字位置按宽度等比缩放（或完全不变）"的单元，其余还原成文字。
 const SVG = 'http://www.w3.org/2000/svg';
-const NO_TF = '*{transform:none!important;translate:none!important;rotate:none!important;scale:none!important}';
 const WJ = '\u2060';
 // 零宽字符（零宽空格、连接符、BOM）不画、不进复制层：它们没有字形，送去取字形只会让整段判成缺字
 const INVISIBLE = /^[\u200b-\u200d\u2060\ufeff]+$/;
@@ -22,11 +22,14 @@ const glyphCache = new Map(), runCache = new Map();
 
 const isFloat = n => n.nodeType === 1 && n.hasAttribute('data-wxc-float');
 const f3 = n => String(Math.round(n * 1000) / 1000);
-const unq = s => s.trim().replace(/^["']|["']$/g, '');
 const MISS = { nofont: '无法确定实际使用的字体', webfont: '网页字体的声明与字体文件不匹配', webfile: '无法获取网页字体的文件', notindexed: '这台电脑的字体目录中没有这个字体',
   color: '是彩色字体', shape: '字形排版失败', notdef: '字体中没有这个字', long: '组合符号过多' };
 /** 拼成"字体名：原因"计数，同一原因在不同字体上分开记 */
-const noteMiss = (notes, kind, ps) => { const k = ps ? `${ps}：${MISS[kind] || kind}` : MISS[kind] || kind; notes.miss.set(k, (notes.miss.get(k) || 0) + 1); };
+const noteMiss = (notes, kind, ps) => {
+  const k = ps ? `${ps}：${MISS[kind] || kind}` : MISS[kind] || kind;
+  notes.miss.set(k, (notes.miss.get(k) || 0) + 1);
+  notes.kinds.add(kind);
+};
 
 /**
  * 原稿真正用上的网页字体（@font-face）的字体名。用到它们的字转为路径时，字形取自文章引用的字体文件（见 webfonts.js）。
@@ -369,8 +372,6 @@ function baselines(doc, u, cb) {
 }
 
 const keyOf = s => JSON.stringify([s.family, s.weight, s.style, s.stretch, s.features, s.variations, s.ligatures, s.lang, s.spaced, ...(s.web ? [s.opsz, s.wsig] : [])]);
-// 每次请求的上限，比服务端（lib/glyphs.mjs 的 LIMITS）略紧
-const BATCH = { items: 250, chars: 4000, char: 16, runs: 1200, run: 200, runChars: 16000 };
 /**
  * 单元里的词：同一样式、同一字号、首尾相接（同一行、中间没有内边距之类的空隙）的一串非空白字。
  * Chrome 跨元素连排（只换颜色的相邻 span 照样成连字），字号、字距不同或有空隙就断开
@@ -594,7 +595,7 @@ export async function outline(doc, root, descs, ctx, notes) {
   const win = doc.defaultView;
   const base = measure(doc, true);
   const noTf = doc.createElement('style');
-  noTf.setAttribute('data-wxc-tool', ''); noTf.textContent = NO_TF;
+  noTf.setAttribute('data-wxc-tool', ''); noTf.textContent = NO_TRANSFORM;
   doc.head.appendChild(noTf);
   const units = descs.map(d => locate(doc, root, d));
   const fonts = { web: ctx.web || new Set(), sig: ctx.webSig || '' };

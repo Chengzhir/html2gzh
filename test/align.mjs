@@ -1,6 +1,5 @@
 // 轮廓对位：逐个轮廓单元截原稿与成品的同一区域，用墨迹投影互相关量亚像素偏移，再比墨量。
 // 被 e2e.mjs --svg 调用；也可单独跑：node test/align.mjs <文章路径> [设备像素比…]
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,10 +75,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const ARTICLE = path.resolve(process.argv[2]);
   const DPRS = process.argv.slice(3).map(Number).filter(Boolean);
   const IMG = 48980, UI = 48981;
-  const srv = spawn(process.execPath, ['server.mjs', ARTICLE, '--port', String(IMG), '--ui', String(UI), '--no-open'], { stdio: ['ignore', 'pipe', 'pipe'] });
-  let log = '';
-  srv.stdout.on('data', d => { log += d; }); srv.stderr.on('data', d => { log += d; });
-  for (let i = 0; i < 50 && !log.includes('页面'); i++) await new Promise(r => setTimeout(r, 100));
+  const { startServer } = await import('./serve.mjs');
+  const srv = await startServer({ article: ARTICLE, img: IMG, ui: UI });
   const browser = await puppeteer.launch({ executablePath: findChrome(), headless: true });
   try {
     const ui = await browser.newPage();
@@ -92,5 +89,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const rows = [];
     for (const dpr of DPRS.length ? DPRS : [1, 3]) for (const a of await alignUnits(browser, r.original, r.preview, 335, dpr, `http://127.0.0.1:${UI}`)) rows.push({ dpr, ...a, text: (r.verdicts[a.unit] || {}).text });
     console.table(rows);
-  } finally { await browser.close(); srv.kill(); }
+  } finally { await browser.close(); srv.stop(); }
 }

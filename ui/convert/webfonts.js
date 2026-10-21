@@ -1,4 +1,4 @@
-import { splitTop, ruleType } from './util.js';
+import { splitTop, ruleType, unq, unicodeRanges, eachAuthorSheet } from './util.js';
 
 // 原稿的网页字体（@font-face）：哪些在原稿里真正用上了（加载过），字体文件在哪。
 // 转为 SVG 路径时，字形服务在无头 Chrome 里照原样声明这些字体，取同样文件里的字形
@@ -6,45 +6,34 @@ import { splitTop, ruleType } from './util.js';
 const KW_W = { normal: '400', bold: '700' };
 const KW_S = { 'ultra-condensed': '50%', 'extra-condensed': '62.5%', condensed: '75%', 'semi-condensed': '87.5%', normal: '100%',
   'semi-expanded': '112.5%', expanded: '125%', 'extra-expanded': '150%', 'ultra-expanded': '200%' };
-const unq = s => String(s || '').trim().replace(/^["']|["']$/g, '');
 /** "bold" / "300 700" / "400 400" → 统一写法；FontFace 与 CSSFontFaceRule 序列化得不一样，两边都过一遍再比 */
 const normRange = (s, kw, def) => {
   const v = (String(s || '').trim().toLowerCase() || def).split(/\s+/).map(x => kw[x] || x);
   return v.length === 2 && v[0] === v[1] ? v[0] : v.join(' ');
 };
 const normStyle = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ') || 'normal';
-/** unicode-range → "lo-hi,lo-hi"（十六进制），空值为全部 */
+/** unicode-range → "lo-hi,lo-hi"（十六进制），空值或全写错时为全部 */
 function normUnicode(s) {
-  const out = [];
-  for (const part of String(s || '').split(',')) {
-    const m = part.trim().match(/^u\+([0-9a-f?]{1,6})(?:-([0-9a-f]{1,6}))?$/i);
-    if (!m) continue;
-    const lo = parseInt(m[1].replace(/\?/g, '0'), 16), hi = m[1].includes('?') ? parseInt(m[1].replace(/\?/g, 'f'), 16) : parseInt(m[2] || m[1], 16);
-    out.push(lo.toString(16) + '-' + hi.toString(16));
-  }
-  return out.join(',') || '0-10ffff';
+  const r = unicodeRanges(s);
+  return (r.length ? r : [[0, 0x10ffff]]).map(([lo, hi]) => lo.toString(16) + '-' + hi.toString(16)).join(',');
 }
 const faceKey = (family, weight, style, stretch, range) =>
   [unq(family).toLowerCase(), normRange(weight, KW_W, '400'), normStyle(style), normRange(stretch, KW_S, '100%'), normUnicode(range)].join('|');
 
-/** 作者样式表里的 @font-face；when 为真时只取生效的 @media/@supports 里的 */
-function* faceRules(doc, when) {
-  const win = doc.defaultView;
-  function* walk(list) {
+/** 作者样式表里生效的 @font-face（所在的 @media/@supports 当场成立） */
+function faceRules(doc) {
+  const win = doc.defaultView, out = [];
+  const walk = list => {
     for (const r of list) {
       const t = ruleType(r);
-      if (t === 'CSSFontFaceRule') yield r;
-      else if (t === 'CSSMediaRule') { if (!when || win.matchMedia(r.media.mediaText).matches) yield* walk(r.cssRules); }
-      else if (t === 'CSSSupportsRule') { if (!when || win.CSS.supports(r.conditionText)) yield* walk(r.cssRules); }
-      else if (t === 'CSSLayerBlockRule') yield* walk(r.cssRules);
+      if (t === 'CSSFontFaceRule') out.push(r);
+      else if (t === 'CSSMediaRule') { if (win.matchMedia(r.media.mediaText).matches) walk(r.cssRules); }
+      else if (t === 'CSSSupportsRule') { if (win.CSS.supports(r.conditionText)) walk(r.cssRules); }
+      else if (t === 'CSSLayerBlockRule') walk(r.cssRules);
     }
-  }
-  for (const sh of doc.styleSheets) {
-    if (!sh.ownerNode || !sh.ownerNode.hasAttribute('data-wxc-author')) continue;
-    let list;
-    try { list = sh.cssRules; } catch { continue; }
-    yield* walk(list);
-  }
+  };
+  eachAuthorSheet(doc, walk);
+  return out;
 }
 
 /** 作者的全部 @font-face（带外层 @media/@supports），转换帧摘掉样式表后放回去：转换与转为路径时的排版和原稿用同一套字体 */
@@ -59,10 +48,7 @@ export function fontFaceCss(doc) {
       else if (t === 'CSSLayerBlockRule') walk(r.cssRules, wrap);
     }
   };
-  for (const sh of doc.styleSheets) {
-    if (!sh.ownerNode || !sh.ownerNode.hasAttribute('data-wxc-author')) continue;
-    try { walk(sh.cssRules, css => css); } catch { /* 读不了的样式表 */ }
-  }
+  eachAuthorSheet(doc, list => walk(list, css => css));
   return out.join('\n');
 }
 
@@ -85,7 +71,7 @@ export function parseSrc(text) {
  */
 export function usedWebFonts(doc) {
   const rules = new Map();
-  for (const r of faceRules(doc, true)) {
+  for (const r of faceRules(doc)) {
     const st = r.style, g = k => st.getPropertyValue(k);
     rules.set(faceKey(g('font-family'), g('font-weight'), g('font-style'), g('font-stretch'), g('unicode-range')), r);
   }

@@ -1,4 +1,4 @@
-import { splitTop, parseDecls, ruleType, round } from './util.js';
+import { splitTop, parseDecls, ruleType, round, eachAuthorSheet } from './util.js';
 import { mobileFonts } from './fonts.js';
 
 /** 按顺序收集作者样式规则；@media/@supports 按手机宽度当场求值 */
@@ -20,10 +20,7 @@ export function collectRules(doc, notes) {
       else if (t === 'CSSContainerRule') notes.container++;
     }
   };
-  for (const sh of doc.styleSheets) {
-    if (!sh.ownerNode || !sh.ownerNode.hasAttribute('data-wxc-author')) continue;
-    try { walk(sh.cssRules); } catch { notes.unreadable++; }
-  }
+  eachAuthorSheet(doc, walk, () => { notes.unreadable++; });
   return rules;
 }
 

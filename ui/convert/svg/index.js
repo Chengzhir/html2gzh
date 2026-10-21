@@ -20,7 +20,7 @@ const freeze = doc => { for (const s of doc.getElementsByTagNameNS(SVG_NS, 'svg'
 
 /**
  * 层叠已内联、样式表已删掉之后调用。ctx: { raster(dataUri) → 地址, rasterCache: Map, spline }。
- * 返回 { stat, findings: [[level, title, text, els]] }
+ * 返回 { stat, findings: [[level, title, text, detail, els]] }
  */
 export async function convertSvgs(doc, st, ctx) {
   if (!st) return { findings: [] };

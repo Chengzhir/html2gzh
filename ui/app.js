@@ -5,6 +5,7 @@ import { setTip } from './tip.js';
 import { readerDoc, darkHtml, SIDE } from './phone.js';
 import { readerImages } from './convert/reader.js';
 import { imageScales } from './convert/images.js';
+import { ASSET_ID, assetIdsIn } from './convert/assetid.js';
 
 const $ = id => document.getElementById(id);
 // Windows 上用 serve.cmd 启动；别的系统在终端里跑 node server.mjs
@@ -423,7 +424,7 @@ const fontIds = new Map();
 const FONT_MAGIC = [['wOF2', 'woff2'], ['wOFF', 'woff'], ['OTTO', 'otf'], ['true', 'ttf'], ['ttcf', 'ttc'], ['\u0000\u0001\u0000\u0000', 'ttf']];
 function fontBytes(url) {
   const local = url.startsWith(ORIGIN + '/a/') ? url.slice(ORIGIN.length + 3) : '';
-  if (/^[0-9a-f]{16}\.[a-z0-9]+$/.test(local)) return Promise.resolve(local);
+  if (ASSET_ID.test(local)) return Promise.resolve(local);
   if (!fontIds.has(url)) {
     const job = (async () => {
       const r = await fetch(url, { mode: 'cors', credentials: 'omit' });
@@ -441,7 +442,7 @@ function fontBytes(url) {
   return fontIds.get(url);
 }
 /** 正文里由本机提供的图片 id（去重） */
-const imageIdsIn = html => [...new Set([...html.matchAll(/\/a\/([0-9a-f]{16}\.[a-z0-9]+)/g)].map(m => m[1]))];
+const imageIdsIn = assetIdsIn;
 
 /* ---------- 大图 ---------- */
 // 微信服务器下载一张图最多等约 0.5 秒，超时隔 0.5 秒再试，三次都超时就放弃（2026-10-21 实测）。
@@ -683,7 +684,6 @@ function highlight(ids) {
 /* ---------- 取图地址 ---------- */
 // 和端口映射软件一样分三项：本机端口（取图服务监听的端口），公网地址与公网端口（微信连接的地址）。
 // 公网地址留空时自动检测公网 IP；公网端口留空时与本机端口相同（路由器端口转发通常两边一致）
-const hostCfg = () => state.server && state.server.host.config;
 let hostDirty = false, hostSig = '';
 function fillHostForm(c) {
   $('hfPort').value = c.imgPort;

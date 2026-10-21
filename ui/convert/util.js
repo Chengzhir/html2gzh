@@ -16,6 +16,30 @@ export function splitTop(s, sep = ',') {
   return out.map(x => x.trim()).filter(Boolean);
 }
 
+/** 去掉首尾空白与一层引号（字体名等） */
+export const unq = s => String(s || '').trim().replace(/^["']|["']$/g, '');
+
+/** unicode-range → [[lo, hi]]；空值表示全部，写错的段跳过（全写错时为空数组） */
+export function unicodeRanges(s) {
+  if (!String(s || '').trim()) return [[0, 0x10ffff]];
+  const out = [];
+  for (const part of String(s).split(',')) {
+    const m = part.trim().match(/^u\+([0-9a-f?]{1,6})(?:-([0-9a-f]{1,6}))?$/i);
+    if (!m) continue;
+    if (m[1].includes('?')) out.push([parseInt(m[1].replace(/\?/g, '0'), 16), parseInt(m[1].replace(/\?/g, 'f'), 16)]);
+    else out.push([parseInt(m[1], 16), parseInt(m[2] || m[1], 16)]);
+  }
+  return out;
+}
+
+/** 作者样式表（带 data-wxc-author 的）的规则列表逐个交给 fn；读不了的（跨域等）交给 unreadable */
+export function eachAuthorSheet(doc, fn, unreadable) {
+  for (const sh of doc.styleSheets) {
+    if (!sh.ownerNode || !sh.ownerNode.hasAttribute('data-wxc-author')) continue;
+    try { fn(sh.cssRules); } catch { if (unreadable) unreadable(sh); }
+  }
+}
+
 /** 解析声明块文本 → [{prop, value, important}]；保留简写原文（CSSOM 对含 var() 的简写读不出长写值） */
 export function parseDecls(text) {
   const out = [];
@@ -37,6 +61,9 @@ export const isEl = (n, name) => n && n.nodeType === 1 && (!name || n.localName 
 export const isHtmlEl = n => n && n.nodeType === 1 && n.namespaceURI === 'http://www.w3.org/1999/xhtml';
 export const round = n => Math.round(n * 1000) / 1000;
 
+/** 临时去掉所有变换，量布局位置用 */
+export const NO_TRANSFORM = '*{transform:none!important;translate:none!important;rotate:none!important;scale:none!important}';
+// measure 还要停住伪元素与过渡、动画：量的是每个元素的静止布局
 const NO_TF = `*,*::before,*::after{transform:none!important;translate:none!important;rotate:none!important;scale:none!important;transition:none!important;animation:none!important}`;
 
 /**

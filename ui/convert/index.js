@@ -1,4 +1,4 @@
-import { ID, isHtmlEl, measure, diffBoxes, loadFrame, sleep } from './util.js';
+import { ID, isHtmlEl, measure, diffBoxes, loadFrame, sleep, NO_TRANSFORM } from './util.js';
 import { collectRules, matchRules, cascadeOrder, toStyle } from './cascade.js';
 import { convertPositions, correctOffsets, INHERITED } from './position.js';
 import { cleanStructure, keepShapes, squashWhitespace, keepNoWrap, cleanAttributes } from './structure.js';
@@ -38,7 +38,7 @@ export async function convert(html, { width, frame, verifyFrame, opts = {}, glyp
   const o = { ...DEFAULT_OPTS, ...opts };
   const { rules: fontRules, bad: badRules } = parseRules(o.rules);
   // web：原稿用上的网页字体名；webUsed：它们的 @font-face 与文件地址；fontBytes(url) → 本机服务里的文件 id
-  const ctx = { o, fontRules, glyphs, fontBytes, plan: null, web: null, webUsed: null, webSig: '', webResolved: null, pins: new Map(), notes: { miss: new Map(), server: '' },
+  const ctx = { o, fontRules, glyphs, fontBytes, plan: null, web: null, webUsed: null, webSig: '', webResolved: null, pins: new Map(), notes: { miss: new Map(), kinds: new Set(), server: '' },
     // spline：白名单属性的 <animate> 带 calcMode="spline" 存得住（2026-10-21 实测），缓动直接写成 keySplines
     sizes: { A: null, B: null }, svg: { raster, rasterCache: new Map(), spline: true } };
   const wb = width < 400 ? width + 64 : width - 64;
@@ -170,7 +170,7 @@ function outlineFindings(F, s, ctx) {
   const miss = [...ctx.notes.miss.keys()];
   const fonts = miss.length ? `（${miss.slice(0, 3).join('；')}）` : '';
   // 字由、Adobe Fonts 一类工具激活的字体不装进系统字体目录，浏览器能用，字形接口找不到文件
-  const hint = miss.some(k => k.includes('字体目录')) ? '\n通过 Adobe Fonts 等工具临时激活的字体，需要正式安装后才能转为 SVG 路径。' : '';
+  const hint = ctx.notes.kinds.has('notindexed') ? '\n通过 Adobe Fonts 等工具临时激活的字体，需要正式安装后才能转为 SVG 路径。' : '';
   F.warn('SVG 路径', `${left.length} 段勾选的字未能转为 SVG 路径`, '这些字保留为文字，手机上没有原稿字体时显示为备用字体。原因：\n' + [...why].map(([k, n]) => `· ${n} 段：${k}${k === WHY_TEXT.font ? fonts : ''}`).join('\n') + hint, left);
 }
 
@@ -255,7 +255,7 @@ async function convertAt(html, width, frame, ctx) {
   const tmp = doc.createElement('span');
   const noTf = doc.createElement('style');
   noTf.setAttribute('data-wxc-tool', '');
-  noTf.textContent = '*{transform:none!important;translate:none!important;rotate:none!important;scale:none!important}';
+  noTf.textContent = NO_TRANSFORM;
   const layoutBox = el => { doc.head.appendChild(noTf); const r = el.getBoundingClientRect(); noTf.remove(); return r; };
   // 用布局盒（不含 transform）的小数尺寸；clientWidth 会取整，换算出的 px 就差 1
   const box = el => { const r = layoutBox(el), c = cs(el); return { pw: r.width - parseFloat(c.borderLeftWidth) - parseFloat(c.borderRightWidth), ph: r.height - parseFloat(c.borderTopWidth) - parseFloat(c.borderBottomWidth), c }; };

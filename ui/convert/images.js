@@ -1,7 +1,6 @@
 import { splitTop } from './util.js';
+import { ASSET_URL_RE } from './assetid.js';
 
-/** 本机服务提供的图片地址里的 id */
-export const ASSET_ID_RE = /\/a\/([0-9a-f]{16}\.[a-z0-9]+)/;
 // 需要的设备像素按电脑上的阅读页算：正文宽 677px、2 倍屏（手机正文最宽约 400px × 3 倍屏 = 1200，比它小）。
 // 服务端再按读者拿到的最宽 1080px 封顶
 const NEED_W = 677 * 2;
@@ -21,7 +20,7 @@ export async function imageScales(doc, width) {
     if (cur === null) return;
     need.set(id, v === null ? null : cur === undefined ? v : Math.max(cur, v));
   };
-  const idOf = u => { const m = ASSET_ID_RE.exec(u || ''); return m && m[1]; };
+  const idOf = u => { const m = ASSET_URL_RE.exec(u || ''); return m && m[1]; };
   // 元素自身的 CSS 像素到屏幕像素的比例（含 transform 与 SVG viewBox 的缩放）
   const screen = el => { const r = el.getBoundingClientRect(); return Math.max(r.width / (el.offsetWidth || 1), r.height / (el.offsetHeight || 1)); };
   // 在带 SMIL 动画的 SVG 里：显示尺寸可能随动画变化，量到的只是某一时刻

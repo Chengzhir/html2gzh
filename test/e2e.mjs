@@ -1,6 +1,5 @@
 // 端到端：起真服务 → 无头 Chrome 打开页面 → 转换文章 → 检查成品 + 原稿/成品逐像素比对 + 端口安全探测
 // 用法：node test/e2e.mjs [文章路径]   默认用 test/fixture
-import { spawn } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,6 +12,9 @@ import { previewDoc, readerImages } from '../ui/convert/reader.js';
 import { WX_ANIM_OK } from '../ui/convert/svg/dom.js';
 import { settled, pickDefault } from './ui.mjs';
 import { buildWebfontFixture, serveRemote } from './webfonts.mjs';
+import { startServer } from './serve.mjs';
+import { pixelDiff as diffIn } from './pixeldiff.mjs';
+import { assetIdsIn } from '../ui/convert/assetid.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -40,10 +42,7 @@ if (WEBFONT) { await buildWebfontFixture(ARTICLE); remote = await serveRemote(AR
 // 设置文件放 test/out：测试里改端口不碰用户的 settings.json
 const SETTINGS = path.join(OUT, 'e2e-settings.json');
 fs.rmSync(SETTINGS, { force: true });
-const srv = spawn(process.execPath, [path.join(HERE, '..', 'server.mjs'), ARTICLE, '--port', String(IMG), '--ui', String(UI), '--settings', SETTINGS, '--no-open'], { stdio: ['ignore', 'pipe', 'pipe'] });
-let log = '';
-srv.stdout.on('data', d => { log += d; }); srv.stderr.on('data', d => { log += d; });
-for (let i = 0; i < 50 && !log.includes('页面'); i++) await new Promise(r => setTimeout(r, 100));
+const srv = await startServer({ article: ARTICLE, img: IMG, ui: UI, settings: SETTINGS });
 
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ['--no-first-run'] });
 try {
@@ -246,32 +245,7 @@ try {
     await pg.close();
     return b;
   };
-  const pixelDiff = (a, b, masks) => page.evaluate(async (a, b, masks) => {
-    const load = s => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = 'data:image/png;base64,' + s; });
-    const [ia, ib] = await Promise.all([load(a), load(b)]);
-    const w = Math.min(ia.width, ib.width), h = Math.min(ia.height, ib.height);
-    const px = img => { const c = new OffscreenCanvas(w, h); const x = c.getContext('2d'); x.drawImage(img, 0, 0); return x.getImageData(0, 0, w, h).data; };
-    const da = px(ia), db = px(ib);
-    const c = new OffscreenCanvas(w, h), x = c.getContext('2d'), out = x.createImageData(w, h);
-    // 屏蔽区域外扩 3px（容纳超出盒子的字形墨迹），不参与逐像素比较，画成浅蓝
-    const masked = new Uint8Array(w * h);
-    for (const [mx, my, mw, mh] of masks || []) {
-      for (let y = Math.max(0, Math.floor(my - 3)); y < Math.min(h, Math.ceil(my + mh + 3)); y++)
-        for (let X = Math.max(0, Math.floor(mx - 3)); X < Math.min(w, Math.ceil(mx + mw + 3)); X++) masked[y * w + X] = 1;
-    }
-    let bad = 0, area = 0;
-    for (let i = 0; i < da.length; i += 4) {
-      if (masked[i / 4]) { area++; out.data[i] = 200; out.data[i + 1] = 225; out.data[i + 2] = 245; out.data[i + 3] = 255; continue; }
-      const d = Math.max(Math.abs(da[i] - db[i]), Math.abs(da[i + 1] - db[i + 1]), Math.abs(da[i + 2] - db[i + 2]));
-      const hit = d > 48; if (hit) bad++;
-      out.data[i] = hit ? 255 : da[i] * 0.3 + 178; out.data[i + 1] = hit ? 0 : da[i + 1] * 0.3 + 178; out.data[i + 2] = hit ? 0 : da[i + 2] * 0.3 + 178; out.data[i + 3] = 255;
-    }
-    x.putImageData(out, 0, 0);
-    const blob = await c.convertToBlob();
-    const buf = new Uint8Array(await blob.arrayBuffer());
-    let s = ''; for (const v of buf) s += String.fromCharCode(v);
-    return { bad, area, total: w * h, ha: ia.height, hb: ib.height, png: btoa(s) };
-  }, a, b, masks);
+  const pixelDiff = (a, b, masks) => diffIn(page, a, b, masks);
   if (SVG_MODE) {
     // 轮廓区域单独量：逐个单元的亚像素偏移与墨量（3 倍像素密度，接近手机）。
     // 偏移门槛：Chrome 把 svg 盒子对齐到整 CSS 像素而字形保留小数位置，横向差最多 0.5px；纵向文字基线也取整，两次取整最多差 1px
@@ -290,7 +264,7 @@ try {
   fs.writeFileSync(path.join(OUT, `original${sfx}.png`), Buffer.from(a, 'base64'));
   fs.writeFileSync(path.join(OUT, `converted${sfx}.png`), Buffer.from(b, 'base64'));
   const diff = await pixelDiff(a, b, masks);
-  fs.writeFileSync(path.join(OUT, `diff${sfx}.png`), Buffer.from(diff.png, 'base64'));
+  fs.writeFileSync(path.join(OUT, `diff${sfx}.png`), Buffer.from(diff.diff, 'base64'));
   const ratio = diff.bad / (diff.total - diff.area);
   check(Math.abs(diff.ha - diff.hb) <= 2, `${w}px 页面高度一致`, `${diff.ha} vs ${diff.hb}`);
   // 主宽度要求 0.3%；其他宽度下图片重采样、斜排文字的亚像素位置不同，放宽到 0.5%（逐元素比对另有 1.5px 硬门槛）
@@ -310,7 +284,7 @@ try {
       if (ratio >= 0.003) {
         const tag = clicks == null ? `t=${t}s` : `点击后 ${Math.round((clicks - t) * 100) / 100}s`;
         bad.push(`${tag} ${(ratio * 100).toFixed(2)}%`);
-        fs.writeFileSync(path.join(OUT, `diff-anim-${t}-${clicks ?? 'x'}.png`), Buffer.from(d.png, 'base64'));
+        fs.writeFileSync(path.join(OUT, `diff-anim-${t}-${clicks ?? 'x'}.png`), Buffer.from(d.diff, 'base64'));
       }
     }
     check(!bad.length, '动画在各采样时刻与原稿一致（差异像素 < 0.3%）', bad.join(' | ') || '5 个时刻');
@@ -400,13 +374,13 @@ try {
   }
 
   console.log('\n端口安全');
-  const ids = [...p.matchAll(/\/a\/([0-9a-f]{16}\.(png|jpe?g|gif|webp|svg))/g)].map(m => m[1]);
+  const ids = assetIdsIn(p).filter(id => /\.(png|jpe?g|gif|webp|svg)$/.test(id));
   if (ids.length) check((await raw(IMG, '/a/' + ids[0])).status === 200, '图床口能取到已登记图片');
   check((await raw(IMG, '/api/state')).status === 404, '图床口不暴露 API');
   check((await raw(IMG, '/a/..%2f..%2fserver.mjs')).status === 404, '图床口路径穿越 404');
   check((await raw(IMG, '/a/0000000000000000.png')).status === 404, '图床口未登记 id 404');
-  const css = [...p.matchAll(/\/a\/([0-9a-f]{16}\.css)/g)];
-  if (css.length) check((await raw(IMG, '/a/' + css[0][1])).status === 404, '图床口不出非图片文件');
+  const css = assetIdsIn(p).filter(id => id.endsWith('.css'));
+  if (css.length) check((await raw(IMG, '/a/' + css[0])).status === 404, '图床口不出非图片文件');
   check((await raw(UI, '/api/state', { headers: { host: 'evil.example:' + UI } })).status === 403, 'UI 口拒绝陌生 Host');
   check((await raw(UI, '/api/open', { method: 'POST', headers: { host: '127.0.0.1:' + UI, origin: 'http://evil.example' }, body: '{"path":"C:/"}' })).status === 403, 'UI 口拒绝跨站 POST');
   check((await raw(UI, '/api/open', { method: 'POST', headers: { host: '127.0.0.1:' + UI }, body: '{"path":"C:/"}' })).status === 403, 'UI 口拒绝不带 Origin 的 POST');
@@ -591,8 +565,8 @@ try {
   await browser.close();
   if (remote) remote.close();
   // 等服务真正退出、端口释放，紧接着再跑一轮时才不会撞上旧进程
-  const exited = new Promise(r => srv.once('exit', r));
-  srv.kill();
+  const exited = new Promise(r => srv.proc.once('exit', r));
+  srv.stop();
   await Promise.race([exited, new Promise(r => setTimeout(r, 5000))]);
 }
 console.log(fails ? `\n${fails} 项失败` : '\n全部通过');

@@ -1,4 +1,4 @@
-import { ID, isHtmlEl, round, measure } from './util.js';
+import { ID, isHtmlEl, round, measure, NO_TRANSFORM } from './util.js';
 
 // 微信存储层删 position 但保留 float / transform / margin / z-index：
 // relative → 去掉定位，位移交给 translate；absolute → 零占位浮动（负外边距抵消尺寸），再用 translate 摆回原处。
@@ -12,7 +12,7 @@ const stripInset = s => INSET.forEach(p => s.removeProperty(p));
 const FAR = 4000;
 const layoutRect = (doc, el) => {
   const st = doc.createElement('style');
-  st.textContent = '*{transform:none!important;translate:none!important;rotate:none!important;scale:none!important}';
+  st.textContent = NO_TRANSFORM;
   doc.head.appendChild(st);
   const r = el.getBoundingClientRect();
   st.remove();

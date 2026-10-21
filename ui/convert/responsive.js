@@ -1,4 +1,4 @@
-import { round } from './util.js';
+import { round, NO_TRANSFORM } from './util.js';
 
 // 微信存储会删掉含 calc() 的声明，但 cqw 与 container-type 原样保留。
 // 同一篇文章按两个版心宽度各转一遍，逐个 px 数值拟合 v = k·W + b（W 是该元素查询容器的内容宽度）：
@@ -127,7 +127,7 @@ export function mergeWidths(A, B) {
 export function annotateContainerWidths(doc, root) {
   const win = doc.defaultView;
   const noTf = doc.createElement('style');
-  noTf.textContent = '*{transform:none!important;translate:none!important;rotate:none!important;scale:none!important}';
+  noTf.textContent = NO_TRANSFORM;
   doc.head.appendChild(noTf);
   const cache = new Map();
   const cw = el => {
