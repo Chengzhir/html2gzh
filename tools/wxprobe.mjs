@@ -3,6 +3,7 @@
 // 用法：
 //   node tools/wxprobe.mjs build [--img <mmbiz 图片地址>]   → test/out/probe.html（再用 tools/clip.mjs test/out/probe.html 放进剪贴板）
 //   node tools/wxprobe.mjs check <预览链接>                 → 逐项结果，另存 test/out/probe-result.json
+//   node tools/wxprobe.mjs diff <预览链接> [发出的正文]      → 转换器成品整份比对：存下来的正文与发出的有哪些差异（合并计数），另存 test/out/diff-result.json
 import fs from 'node:fs';
 import puppeteer from 'puppeteer-core';
 import { findChrome } from '../lib/chrome.mjs';
@@ -185,9 +186,22 @@ export const PROBES3 = [
   { t: 'gfilter', svg: sw('gfilter', '<g filter="drop-shadow(2px 2px 0 #000)"><rect x="10" y="8" width="40" height="24" fill="#2563eb"/></g>') },
 ];
 
+/** 第四轮：白名单内属性的 <animate> 带 calcMode="spline" 能否存活（转换器的 svg.spline 开关取决于它），按转换器写出的格式 */
+const SPL = '0.42 0 0.58 1;0.25 0.1 0.25 1';
+const SPV = { opacity: '1;0.2;1', fill: '#2f6db3;#2563eb;#2f6db3', 'stroke-width': '1;5;1', 'stroke-dashoffset': '0;40;0', r: '4;10;4', x: '0;40;0', y: '0;10;0',
+  width: '10;40;10', height: '10;30;10', d: 'M0 0 H10 V10 Z;M0 0 H30 V20 Z;M0 0 H10 V10 Z' };
+export const PROBES4 = [
+  ...Object.entries(SPV).map(([a, v]) => ({ t: 'spl_' + a, svg: sw('spl_' + a, `<rect width="20" height="20" fill="#cbb" stroke="#1f2937" stroke-dasharray="20 10"><animate attributeName="${a}" values="${v}" keyTimes="0;0.5;1" calcMode="spline" keySplines="${SPL}" dur="2s" repeatCount="indefinite"/></rect>`) })),
+  { t: 'spl_one', svg: sw('spl_one', '<rect width="20" height="20" fill="#cbb"><animate attributeName="opacity" values="1;0.2" keyTimes="0;1" calcMode="spline" keySplines="0.42 0 0.58 1" dur="2s" repeatCount="indefinite"/></rect>') },
+  { t: 'spl_lin', svg: sw('spl_lin', '<rect width="20" height="20" fill="#cbb"><animate attributeName="opacity" values="1;0.2;1;0.6" keyTimes="0;0.3333;0.6667;1" calcMode="spline" keySplines="0 0 1 1;0.42 0 0.58 1;0 0 1 1" dur="2s" begin="0.5s" fill="freeze"/></rect>') },
+  { t: 'spl_comma', svg: sw('spl_comma', '<rect width="20" height="20" fill="#cbb"><animate attributeName="x" values="0;40" keyTimes="0;1" calcMode="spline" keySplines="0.42,0,0.58,1" dur="2s" repeatCount="indefinite"/></rect>') },
+  { t: 'spl_click', svg: sw('spl_click', '<rect width="20" height="20" fill="#cbb"><animate attributeName="x" values="0;40" keyTimes="0;1" calcMode="spline" keySplines="0.42 0 0.58 1" dur="0.6s" begin="click" fill="freeze"/></rect>') },
+  { t: 'spl_set', svg: sw('spl_set', '<rect width="20" height="20" fill="#cbb"><animate attributeName="opacity" values="1;0.2;1" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.42 0 0.58 1;0.42 0 0.58 1" dur="2s" repeatCount="indefinite"/><set attributeName="visibility" to="hidden" begin="click" fill="freeze"/></rect>') },
+];
+
 function build(set, img, asset) {
   const imgSvg = img ? sw('svgimg', `<image href="${img}" width="40" height="40" preserveAspectRatio="xMidYMid slice"/><image xlink:href="${img}" x="40" width="40" height="40"/>`) : '';
-  const probes = (set === '2' ? PROBES2 : set === '3' ? PROBES3 : PROBES).filter(p => asset || !/@ASSET@/.test(p.css || p.svg || ''));
+  const probes = ({ 2: PROBES2, 3: PROBES3, 4: PROBES4 }[set] || PROBES).filter(p => asset || !/@ASSET@/.test(p.css || p.svg || ''));
   const parts = probes.map(p => {
     p = { ...p, css: p.css && p.css.replace(/@ASSET@/g, asset), svg: p.svg && (p.svg === '@PIC@' ? sw('imgdata', `<image href="data:image/png;base64,${pic()}" width="40" height="20"/>`) : p.svg.replace(/@ASSET@/g, asset)) };
     const label = `<p style="margin:8px 0 0;font-size:11px;color:#64748b">${p.t}</p>`;
@@ -216,16 +230,25 @@ export async function storedHtml(browser, url) {
   return raw.slice(start, end);
 }
 
-async function check(url) {
+/**
+ * probe：按 data-t 逐项比；tree：整份正文按顶层元素逐个比（用于转换器的成品），差异按种类合并计数。
+ * tree 模式先抹掉粘贴时必然变的部分：图片地址（本机 → mmbiz）、编辑器给 <img> 加的 class 与 data-*、末尾的 mp-style-type
+ */
+async function check(url, mode = 'probe', sentFile = `${OUT}/probe.html`) {
   const browser = await puppeteer.launch({ executablePath: findChrome(), headless: true });
   try {
     const stored = /^https?:/.test(url) ? await storedHtml(browser, url) : fs.readFileSync(url, 'utf8');
-    fs.writeFileSync(`${OUT}/probe-stored.html`, stored);
-    const sent = fs.readFileSync(`${OUT}/probe.html`, 'utf8');
+    fs.writeFileSync(`${OUT}/${mode === 'tree' ? 'diff' : 'probe'}-stored.html`, stored);
+    const sent = fs.readFileSync(sentFile, 'utf8');
     const page = await browser.newPage();
-    const res = await page.evaluate((sent, stored) => {
+    const res = await page.evaluate((sent, stored, mode) => {
       const P = new DOMParser();
       const A = P.parseFromString(`<body>${sent}</body>`, 'text/html'), B = P.parseFromString(`<body>${stored}</body>`, 'text/html');
+      if (mode === 'tree') for (const d of [A, B]) {
+        for (const el of d.querySelectorAll('[style]')) el.setAttribute('style', el.getAttribute('style').replace(/url\((['"]?)[^)'"]*\1\)/g, 'url(U)'));
+        for (const im of d.querySelectorAll('img')) for (const a of [...im.attributes]) if (a.name === 'src' || a.name === 'class' || a.name.startsWith('data-')) im.removeAttribute(a.name);
+        for (const m of d.querySelectorAll('mp-style-type')) (m.closest('p') || m).remove();
+      }
       const scratch = document.createElement('div');
       const longhands = decl => { scratch.removeAttribute('style'); scratch.setAttribute('style', decl); const o = {}; for (const k of scratch.style) o[k] = scratch.style.getPropertyValue(k); return o; };
       const decls = s => { const out = []; let d = 0, q = '', cur = ''; for (const c of s) { if (q) { cur += c; if (c === q) q = ''; continue; } if (c === '"' || c === "'") { q = c; cur += c; continue; } if (c === '(') d++; if (c === ')') d--; if (c === ';' && !d) { out.push(cur); cur = ''; continue; } cur += c; } if (cur.trim()) out.push(cur); return out.map(x => x.trim()).filter(Boolean); };
@@ -261,6 +284,22 @@ async function check(url) {
         ka.forEach((k, i) => cmpTree(k, kb[i], `${path}/${k.localName}[${i}]`, out));
         if (kb.length > ka.length) out.push(`多出 ${kb.length - ka.length} 个子元素 @${path}：${kb.slice(ka.length).map(k => k.localName).join(',')}`);
       };
+      if (mode === 'tree') {
+        const notes = [];
+        const ka = [...A.body.children], kb = [...B.body.children];
+        ka.forEach((k, i) => cmpTree(k, kb[i], `${k.localName}[${i}]`, notes));
+        if (kb.length > ka.length) notes.push(`多出 ${kb.length - ka.length} 个顶层元素：${kb.slice(ka.length).map(k => k.localName).join(',')}`);
+        // 同一种差异（去掉位置与数字）合并计数，留一个原样的例子
+        const kinds = new Map();
+        for (const n of notes) {
+          const k = n.replace(/ @.*$/, '').replace(/-?\d+(\.\d+)?/g, '#');
+          const e = kinds.get(k) || { kind: k, n: 0, example: n };
+          e.n++; kinds.set(k, e);
+        }
+        const count = (d, sel) => d.querySelectorAll(sel).length;
+        const tags = ['svg', 'animate', 'animateTransform', 'animateMotion', 'set', 'path', 'img', 'foreignObject'];
+        return { total: notes.length, kinds: [...kinds.values()].sort((a, b) => b.n - a.n), tags: tags.map(t => [t, count(A, t), count(B, t)]) };
+      }
       const rows = [];
       for (const a of A.querySelectorAll('[data-t]')) {
         const t = a.getAttribute('data-t');
@@ -275,7 +314,14 @@ async function check(url) {
         rows.push({ t, status: notes.length ? '有改动' : '原样', notes, stored: b.innerHTML.slice(0, 600) });
       }
       return rows;
-    }, sent, stored);
+    }, sent, stored, mode);
+    if (mode === 'tree') {
+      fs.writeFileSync(`${OUT}/diff-result.json`, JSON.stringify(res, null, 1));
+      console.log('元素数（发出 → 存下）：' + res.tags.map(([t, a, b]) => `${t} ${a}${a === b ? '' : ' → ' + b}`).join('，'));
+      console.log(res.total ? `${res.total} 处差异，${res.kinds.length} 种：` : '没有差异');
+      for (const k of res.kinds.slice(0, 40)) console.log(`  ${String(k.n).padStart(4)} × ${k.example.slice(0, 160)}`);
+      return;
+    }
     fs.writeFileSync(`${OUT}/probe-result.json`, JSON.stringify(res, null, 1));
     for (const r of res) console.log(`${r.status === '原样' ? '  ' : '✗ '}${r.t.padEnd(12)} ${r.status}${r.notes.length ? '  ' + r.notes.join(' | ') : ''}`);
   } finally { await browser.close(); }
@@ -289,4 +335,5 @@ if (cmd === 'build') {
   fs.writeFileSync(`${OUT}/probe.html`, html);
   console.log(`${OUT}/probe.html：${(html.match(/data-t="/g) || []).length} 项`);
 } else if (cmd === 'check' && arg) await check(arg);
-else console.log('用法：node tools/wxprobe.mjs build [--set 1|2] [--img <mmbiz 图片地址>] [--asset <外网可达的图片地址>] | check <预览链接或存储正文文件>');
+else if (cmd === 'diff' && arg) await check(arg, 'tree', process.argv[4] || `${OUT}/payload.html`);
+else console.log('用法：node tools/wxprobe.mjs build [--set 1|2|3|4] [--img <mmbiz 图片地址>] [--asset <外网可达的图片地址>] | check <预览链接或存储正文文件> | diff <预览链接> [发出的正文，默认 test/out/payload.html]');
