@@ -15,7 +15,11 @@ const SELF_COLORED = 'a,mark';
 
 function collector() {
   const list = [];
-  const add = level => (title, text, els) => list.push({ level, title, text, ids: (els || []).map(e => typeof e === 'string' ? e : e.getAttribute && e.getAttribute(ID)).filter(Boolean) });
+  // 标题、一句结论、可选的详细说明（界面上点开才显示）、要在预览里标出的元素；没有说明时第三个参数直接给元素
+  const add = level => (title, text, detail, els) => {
+    if (typeof detail !== 'string') { els = detail; detail = ''; }
+    list.push({ level, title, text, detail, ids: (els || []).map(e => typeof e === 'string' ? e : e.getAttribute && e.getAttribute(ID)).filter(Boolean) });
+  };
   return { list, fixed: add('fixed'), warn: add('warn'), info: add('info'), error: add('error') };
 }
 const FORCED = ['max-width', 'min-height', 'clear', 'box-sizing', 'height'];
@@ -65,9 +69,9 @@ export async function convert(html, { width, frame, verifyFrame, opts = {}, glyp
   for (const w of CHECK_WIDTHS.filter(w => w > 460 || w === 375)) for (const id of overflowing(await loadFrame(verifyFrame, previewDoc(mergedRaw), w))) overIds.add(id);
   const { html: marked, n: ignored } = markIgnoreWidth(mergedRaw, [...overIds]);
   const merged = wechatClean(marked);
-  if (ignored) F.fixed('超出版面', `${overIds.size} 处故意超出版面的元素（出血图、旋转色块等，原稿里被裁切）和它们的外层容器加了 data-ignore-width，免得粘贴后后台弹出的“内容结构检测”把它们报成溢出`, [...overIds]);
+  if (ignored) F.fixed('超出版面', `${overIds.size} 处故意超出版面的元素加了 data-ignore-width`, '出血图、旋转色块等原稿里被裁切的元素，连同外层容器。不加的话，粘贴后后台的“内容结构检测”会把它们报成溢出。', [...overIds]);
 
-  // 主宽度排最后：verifyFrame 就是界面右边的预览窗，循环结束时它要停在用户选的宽度上
+  // 主宽度排最后：循环结束时 verifyFrame 停在所选宽度上（复制时的纯文本取自它）
   const widths = [...new Set([...CHECK_WIDTHS.filter(w => w !== width), width])];
   const others = [];
   let visualBad = [], verified = 0, V = new Map();
@@ -80,16 +84,16 @@ export async function convert(html, { width, frame, verifyFrame, opts = {}, glyp
     if (w === width) { visualBad = bad; verified = V.size; } else if (bad.length) others.push([w, bad]);
   }
 
-  if (A.pageBg && !/^rgb(255, 255, 255)$/.test(A.pageBg)) F.warn('页面底色', `原稿有页面底色（${A.pageBg}），粘贴后底色和色块只铺满正文区。阅读页正文区左右各留 20px，显示阅读页自己的底色（浅色模式白色，深色模式 #191919），去不掉；效果见右边的预览`);
-  if (badRules.length) F.warn('备用字体规则', `第 ${badRules.join('、')} 行格式不对，已跳过（应为“原稿字体, … => 备用字体, …”）`);
-  if (stat.cq) F.fixed('等比缩放', `${stat.cq} 个尺寸写成了 cqw（1cqw = 外层容器宽度的 1%，通常就是正文宽度），随手机屏宽等比缩放` + (stat.split ? `，${stat.split} 处位移拆成固定 + 比例两段` : ''));
-  // 多宽度比对都过了就只是说明，不必读者处理
-  if (stat.approx) (others.length ? F.warn : F.info)('缩放近似', `${stat.approx} 个尺寸由固定值和比例值合成，公众号不支持 calc()，只在 ${width}px 宽下完全精确，其他屏宽按比例近似` + (others.length ? '' : '；实测各种宽度下偏差都不超过 1.5px，不用处理'));
-  if (stat.diverged) F.warn('缩放近似', `${stat.diverged} 处换个屏宽排版结构就变了（比如换行位置不同），没法拟合等比缩放，按 ${width}px 的样子等比换算，其他屏宽下这几处可能和原稿不同`);
+  if (A.pageBg && A.pageBg !== 'rgb(255, 255, 255)') F.warn('页面底色', `原稿的页面底色（${A.pageBg}）粘贴后只铺满正文区`, '阅读页正文区左右各留 20px，这两条显示阅读页自己的底色（浅色模式白色，深色模式 #191919），去不掉。效果见右边的预览。');
+  if (badRules.length) F.warn('备用字体规则', `第 ${badRules.join('、')} 行格式不对，已跳过`, '每行应为“原稿字体, … => 备用字体, …”。');
+  if (stat.cq) F.fixed('等比缩放', `${stat.cq} 个尺寸改写成 cqw，随手机屏宽等比缩放`, '1cqw 等于外层查询容器宽度的 1%，最外层的容器就是正文区。' + (stat.split ? `其中 ${stat.split} 处位移拆成固定值与比例值两段。` : ''));
+  // 多宽度比对都过了就只是说明，不必处理
+  if (stat.approx) (others.length ? F.warn : F.info)('缩放近似', `${stat.approx} 个尺寸只在正文 ${width}px 宽时完全精确`, `这些尺寸由固定值和比例值合成（相当于 calc()），公众号会删掉 calc()，其他屏宽下按比例近似。` + (others.length ? '' : '各比对宽度下偏差都不超过 1.5px。'));
+  if (stat.diverged) F.warn('缩放近似', `${stat.diverged} 处排版结构随屏宽变化，按正文 ${width}px 宽时的样子等比缩放`, '比如换行位置不同，无法拟合成等比缩放。其他屏宽下这几处可能与原稿不同。');
   // 375/585/677 是内容结构检测直接用的正文宽，460 补在手机与电脑之间
   const phones = widths.filter(w => w !== width && w < 375), rest = widths.filter(w => w !== width && w >= 375);
-  if (others.length) F.list.push({ level: 'warn', title: '其他宽度', text: others.map(([w, b]) => `正文 ${w}px 宽时 ${b.length} 个元素和原稿差了 1.5px 以上`).join('；'), ids: [...new Set(others.flatMap(([, b]) => b))] });
-  else F.info('其他宽度', `换成其他常见手机（正文 ${phones.join('/')}px）和更宽的屏幕（${rest.join('/')}px，含公众号内容结构检测用的宽度）也逐元素和原稿一致`);
+  if (others.length) F.warn('其他宽度', `${others.length} 个宽度下有元素与原稿相差超过 1.5px`, others.map(([w, b]) => `· 正文 ${w}px：${b.length} 个元素`).join('\n'), [...new Set(others.flatMap(([, b]) => b))]);
+  else F.info('其他宽度', `正文 ${phones.join('/')}px 与 ${rest.join('/')}px 下也与原稿一致`, '前者是常见手机，后者包括公众号“内容结构检测”用的宽度。');
 
   const payload = webkitFilter(stripTool(merged));
   return {
@@ -145,8 +149,8 @@ function sizeAtRef(sizes, pseudoSrc) {
 }
 
 function outlineFindings(F, s, ctx) {
-  if (s.kept) F.fixed('SVG 路径', `${s.kept} 段（${s.chars} 个字）转为 SVG 路径，手机上字形与原稿一致` + (ctx.o.svgCopy ? '，上面叠了透明文字，读者仍能选中复制' : '，读者不能选中复制') + `；代码多出约 ${Math.round(s.bytes / 1024)} KB`);
-  if (ctx.notes.server) return F.warn('SVG 路径', `取字形失败（${ctx.notes.server}），勾选的字仍是文字，手机上显示为备用字体`);
+  if (s.kept) F.fixed('SVG 路径', `${s.kept} 段（${s.chars} 字）转为 SVG 路径`, `手机上字形与原稿一致；代码多出约 ${Math.round(s.bytes / 1024)} KB。` + (ctx.o.svgCopy ? '路径上叠了透明文字，读者能选中、复制。' : '没有叠透明文字，读者不能选中、复制。'));
+  if (ctx.notes.server) return F.warn('SVG 路径', '取字形失败，勾选的字仍是文字', `${ctx.notes.server}。这些字在手机上显示为备用字体。`);
   // 按显示出来的原因合并计数（几种内部原因说法相同）；没有可见字的段不算问题
   const why = new Map(), left = [];
   s.verdicts.forEach((v, i) => {
@@ -158,8 +162,8 @@ function outlineFindings(F, s, ctx) {
   const miss = [...ctx.notes.miss.keys()];
   const fonts = miss.length ? `（${miss.slice(0, 3).join('；')}）` : '';
   // 字由、Adobe Fonts 一类工具激活的字体不装进系统字体目录，浏览器能用，字形接口找不到文件
-  const hint = miss.some(k => k.includes('不在本机字体目录')) ? '；用 Adobe Fonts 等工具临时激活的字体要正式安装后才能转' : '';
-  F.warn('SVG 路径', `${left.length} 段勾选的字没能转为路径，手机上显示为备用字体：` + [...why].map(([k, n]) => `${n} 段${k}${k === WHY_TEXT.font ? fonts : ''}`).join('；') + hint, left);
+  const hint = miss.some(k => k.includes('不在本机字体目录')) ? '\n用 Adobe Fonts 等工具临时激活的字体，要正式安装后才能转。' : '';
+  F.warn('SVG 路径', `${left.length} 段勾选的字没能转为路径`, '这些字在手机上显示为备用字体。原因：\n' + [...why].map(([k, n]) => `· ${n} 段：${k}${k === WHY_TEXT.font ? fonts : ''}`).join('\n') + hint, left);
 }
 
 /** 与内容结构检测同一判据：盒子左右任一侧超出正文区 1px 以上、且不是左右对称居中 */
@@ -187,7 +191,7 @@ function dropVisuallyHidden(doc, F) {
     if (c.overflow === 'visible' && c.clipPath === 'none' && c.clip === 'auto') continue;
     el.remove(); n++;
   }
-  if (n) F.fixed('隐藏文字', `删掉 ${n} 处只给读屏软件看的隐藏文字（多半是给页面补的标题，公众号有自己的标题栏；这种 1px 裁切的写法会被后台的“内容结构检测”报成溢出）`);
+  if (n) F.fixed('隐藏文字', `删掉 ${n} 处只给读屏软件读的隐藏文字`, '多为给页面补的标题，公众号有自己的标题栏。这种 1px 裁切的写法会被后台的“内容结构检测”报成溢出。');
 }
 
 /** 微信给所有元素加 max-width:100%!important，作者的 max-width 会失效；块级自动宽度的元素改写成 width，效果等同 min(原上限, 100%) */
@@ -331,7 +335,7 @@ async function convertAt(html, width, frame, ctx) {
   }
   dropVisuallyHidden(doc, F);
   const svg = await convertSvgs(doc, svgState, ctx.svg);
-  for (const [level, title, text, els] of svg.findings) F[level](title, text, els);
+  for (const [level, title, text, detail, els] of svg.findings) F[level](title, text, detail, els);
   // 根容器自身是查询容器：原稿里没有容器祖先的 cqw 相对视口，成品里相对正文宽度，两者一致
   const root = doc.createElement('section');
   root.setAttribute(ID, 'root');
@@ -401,24 +405,24 @@ async function convertAt(html, width, frame, ctx) {
   root.querySelectorAll('[data-wxc-float],[data-wxc-pseudo]').forEach(e => { e.removeAttribute('data-wxc-float'); e.removeAttribute('data-wxc-pseudo'); });
   const preview = root.outerHTML;
 
-  if (pn) F.fixed('伪元素', `${pn} 个 ::before/::after 改成了真实元素`);
-  if (capped) F.fixed('最大宽度', `${capped} 处 max-width 改写成 width（微信会把所有 max-width 强制成 100%）`);
-  if (colorFixed) F.fixed('文字颜色', `${colorFixed} 个链接/mark 补上了文字颜色（阅读页给这几种标签直接上色、不继承父级，深底浅字会变色）`);
-  if (pinned) F.fixed('图片尺寸', `${pinned} 张图片锁住了原尺寸：阅读页会按原图宽高比重算图片高度，带边框/内边距、被拉伸或裁切的图会变形（用相等的 min-height 和 max-height 锁住高度，原来宽度不是定值的改成定宽）`, [...root.querySelectorAll('img')].filter(i => { const p = ctx.pins.get(i.getAttribute(ID)); return p && (p.w || p.h); }));
-  if (forcedN) F.fixed('微信默认样式', `${forcedN} 处会被阅读页正文默认样式（max-width、段落最小高度等）覆盖的属性已写回元素上，其中 max-width、box-sizing 和图片高度要带 !important 才压得过`);
-  if (nw) F.fixed('不换行', `${nw} 处原稿不换行（white-space: nowrap，公众号会删掉）的文字改用不换行空格和看不见的单词连接符（U+2060）固定住；后台的“正文字数”会把连接符也算进去`);
-  if (hit.font) F.fixed('手机字体', `${hit.font} 处字体栈补上了 iOS/安卓自带的近似字体（公众号用不了网页字体，读者手机上也没有电脑上的字体）`);
-  if (ws > 200) F.fixed('空白', `清掉 ${ws} 个标签间的空白字符（手机端会把它们显示成多出来的空行）`);
-  if (notes.fontface) F.warn('网页字体', `${notes.fontface} 个 @font-face 字体用不了，读者看到的是手机自带字体；字宽不同，换行位置可能和原稿不一样`);
-  if (htmlAnims) F.warn('动画', `${htmlAnims} 个 HTML 元素的 CSS 动画在公众号里不会动，元素停在没有动画时的样子；原稿如果靠动画淡入，粘贴后可能直接看不见，在右边预览里核对一下（SVG 里的动画已改写成 SMIL，不在此列）`);
-  if (notes.dynamic) F.warn('交互样式', `${notes.dynamic} 条 :hover/:focus 等交互样式没有效果，已忽略`);
-  if (notes.otherPseudo) F.warn('伪元素', `${notes.otherPseudo} 条 ::marker/::first-line 等规则无法转换，已忽略`);
+  if (pn) F.fixed('伪元素', `${pn} 个 ::before/::after 改成真实元素`);
+  if (capped) F.fixed('最大宽度', `${capped} 处 max-width 改写成 width`, '阅读页把所有元素的 max-width 强制成 100%。');
+  if (colorFixed) F.fixed('文字颜色', `${colorFixed} 个链接、mark 补上文字颜色`, '阅读页直接给这两种标签上色，不继承父级；深底浅字的地方会变色。');
+  if (pinned) F.fixed('图片尺寸', `${pinned} 张图片锁住原尺寸`, '阅读页按原图宽高比重算图片高度，带边框或内边距、被拉伸或裁切的图会变形。高度用相等的 min-height 与 max-height 锁住；原来宽度不是定值的改为定宽。', [...root.querySelectorAll('img')].filter(i => { const p = ctx.pins.get(i.getAttribute(ID)); return p && (p.w || p.h); }));
+  if (forcedN) F.fixed('阅读页默认样式', `${forcedN} 处被默认样式覆盖的属性写回元素上`, '阅读页正文区有 max-width、段落最小高度等默认样式。其中 max-width、box-sizing 与图片高度要带 !important 才能覆盖。');
+  if (nw) F.fixed('不换行', `${nw} 处不换行的文字用不换行空格与 U+2060 固定`, '公众号会删掉 white-space: nowrap。空格换成不换行空格，字与字之间插入 U+2060（单词连接符）。后台的“正文字数”会把 U+2060 也算进去。');
+  if (hit.font) F.fixed('备用字体', `${hit.font} 处字体栈补上了 iOS 与安卓自带的相近字体`, '公众号正文加载不了网页字体，读者手机上一般也没有电脑上的字体。规则见“字体”卡片里的“备用字体规则”。');
+  if (ws > 200) F.fixed('空白', `清掉 ${ws} 个标签间的空白字符`, '手机上会显示成多出来的空行。');
+  if (notes.fontface) F.warn('网页字体', `${notes.fontface} 个 @font-face 字体在公众号里用不了`, '读者看到的是手机自带字体。字宽不同，换行位置可能与原稿不同。');
+  if (htmlAnims) F.warn('动画', `${htmlAnims} 个 HTML 元素的 CSS 动画在公众号里不播放`, '元素停在没有动画时的样子；原稿靠动画淡入的元素，粘贴后可能看不见，请在右边的预览里核对。SVG 里的动画已改写成 SMIL，不在此列。');
+  if (notes.dynamic) F.warn('交互样式', `${notes.dynamic} 条 :hover、:focus 等交互样式已忽略`);
+  if (notes.otherPseudo) F.warn('伪元素', `${notes.otherPseudo} 条 ::marker、::first-line 等规则无法转换，已忽略`);
   if (notes.unreadable || notes.imports) F.warn('样式表', `${notes.unreadable + notes.imports} 个样式表或 @import 读不到，相关样式缺失`);
   if (notes.container) F.warn('容器查询', `${notes.container} 条 @container 规则没有套用，相关样式缺失`);
   if (hit.badVar) F.warn('CSS 变量', `${hit.badVar} 处 var() 找不到值，这几条样式已忽略`);
-  if (cascadeBad.length) F.warn('样式内联', `${cascadeBad.length} 个元素把样式写进 style 属性（内联）后，位置或尺寸和原稿不同`, cascadeBad.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean));
-  if (stuck.length) F.warn('位置偏差', `${stuck.length} 个行内元素（文字片段等）没法用位移校正，位置可能和原稿有些偏差`, stuck.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean));
-  if (notes.media) F.info('屏宽适配', `${notes.media} 条按屏宽切换的样式（@media）取的是正文 ${width}px 宽时的值；成品靠等比缩放适配其他屏宽，不再随断点切换`);
+  if (cascadeBad.length) F.warn('样式内联', `${cascadeBad.length} 个元素的样式写进 style 属性后，位置或尺寸与原稿不同`, cascadeBad.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean));
+  if (stuck.length) F.warn('位置偏差', `${stuck.length} 个行内元素无法用位移校正`, '多为文字片段。位置可能与原稿略有偏差。', stuck.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean));
+  if (notes.media) F.info('屏宽适配', `${notes.media} 条 @media 规则按正文 ${width}px 宽取值`, '成品靠等比缩放适配其他屏宽，不再随断点切换。');
 
   return { F, preview, original, targetV, n, moved, outlined, pageBg };
 }

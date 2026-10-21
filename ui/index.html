@@ -3,21 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>wxpaste · 公众号图文粘贴</title>
+<title>html2gzh · HTML 转公众号图文</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
 <aside class="side">
   <header class="brand">
-    <h1>wxpaste <span class="sub">公众号图文粘贴</span></h1>
-    <p>把本地 HTML 排版原样粘进公众号后台</p>
+    <h1>html2gzh <span class="sub">HTML 转公众号图文</span></h1>
   </header>
 
   <section class="card" id="srcCard" aria-labelledby="srcTitle">
     <h2 id="srcTitle">文章</h2>
     <div id="drop" class="drop" tabindex="0" role="button" aria-describedby="dropHint">
       <strong>把文章文件夹拖到这里</strong>
-      <span id="dropHint">文件夹里要有文章的 HTML（index.html）和它用到的图片</span>
+      <span id="dropHint">文件夹内含文章的 HTML（index.html）及其图片</span>
     </div>
     <div class="row">
       <button type="button" id="pickDir">选择文件夹…</button>
@@ -94,7 +93,10 @@
 
   <section class="card" aria-labelledby="hostTitle">
     <h2 id="hostTitle">取图地址</h2>
-    <p class="muted small">粘贴后，微信服务器会按这个地址到你电脑上取图，所以它要能从外网访问。工具只对外提供载入过的文章里的图片，关掉<span class="svcName"> serve.cmd 窗口</span>就停止。</p>
+    <div class="row small host-intro">
+      <span class="muted">微信服务器从这个地址取走本机的图片，须外网可达</span>
+      <button type="button" class="help" data-tip="粘贴后，公众号后台把正文里的图片地址交给微信服务器，由它下载并转存到微信的图床。取图端口只对外提供载入过的文章里的图片，关闭本工具即停止。">?</button>
+    </div>
     <p id="hostLine" class="status">检测中…</p>
     <fieldset id="hostPick" class="hosts" hidden>
       <legend class="sr-only">选择微信从哪个地址取图</legend>
@@ -112,8 +114,8 @@
       <button type="button" class="help" data-tip="微信从这个端口取图，外网要能连上：路由器端口转发或内网穿透都要对准它。改后立即生效，重启后沿用（存在工具目录的 settings.json）">?</button>
     </form>
     <details>
-      <summary>没有公网 IP？用内网穿透</summary>
-      <p class="muted small">用 frp、cpolar 等内网穿透工具，把本机的 <span id="imgPortHint">38960</span> 端口映射出去，再把得到的地址填在这里。</p>
+      <summary>没有公网 IP：使用内网穿透</summary>
+      <p class="muted small">用 frp、cpolar 等内网穿透工具把本机的 <span id="imgPortHint">38960</span> 端口映射到外网，再把得到的地址填在下面。</p>
       <form id="customForm" class="row">
         <label for="customInput" class="sr-only">自定义取图地址</label>
         <input id="customInput" placeholder="如 https://abc.example.com" autocomplete="off">
@@ -152,8 +154,8 @@
     </figure>
   </div>
   <div id="empty" class="empty">
-    <p>还没有文章。</p>
-    <p class="muted">把文章文件夹拖进左边<span id="dropCmd">，或者直接把文件夹拖到 serve.cmd 上启动</span>。</p>
+    <p>尚未载入文章</p>
+    <p class="muted">把文章文件夹拖到左侧<span id="dropCmd">，或拖到 serve.cmd 上启动</span>。</p>
   </div>
   <iframe id="scratch" class="scratch" title="转换用" aria-hidden="true" tabindex="-1" sandbox="allow-same-origin"></iframe>
   <iframe id="verify" class="scratch" title="比对用" aria-hidden="true" tabindex="-1" sandbox="allow-same-origin"></iframe>

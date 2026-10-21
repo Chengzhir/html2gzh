@@ -4,7 +4,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>wxpaste 探针</title>
+<title>html2gzh 探针</title>
 <style>
 body{font:14px/1.6 system-ui,"Microsoft YaHei",sans-serif;margin:24px;background:#f4f1ea;color:#1d1b18}
 button{font:inherit;padding:10px 22px;font-size:16px;font-weight:600;border:0;border-radius:6px;background:#1d1b18;color:#fff;cursor:pointer}
@@ -15,13 +15,13 @@ button{font:inherit;padding:10px 22px;font-size:16px;font-weight:600;border:0;bo
 </style>
 </head>
 <body>
-<h1 style="font-size:18px;margin:0 0 6px">wxpaste 探针：cqw / container-type / calc 在公众号里能不能活下来</h1>
+<h1 style="font-size:18px;margin:0 0 6px">html2gzh 探针：cqw / container-type / calc 在公众号里能不能活下来</h1>
 <p style="margin:0 0 12px;color:#64748b">点按钮把探针写进剪贴板（直接写 HTML，不经浏览器选区序列化），到编辑器正文里 Ctrl+V。下面是本地在三个宽度下的效果，每一条红条都应停在标尺对应刻度上。</p>
 <button type="button" id="copy">复制探针</button><span id="msg" role="status"></span>
 <div class="widths" id="widths"></div>
 <template id="probe">
 <section data-t="R0" data-ignore-width="" style="container-type:inline-size;max-width:460px;margin:0 auto;padding:0;background:#eef2f7;color:#1f2937;font-size:15px;line-height:1.6;text-align:left">
-<section data-t="H" style="padding:3cqw 4cqw;background:#1f2937;color:#eef2f7;font-weight:700">wxpaste 探针 · 可删除</section>
+<section data-t="H" style="padding:3cqw 4cqw;background:#1f2937;color:#eef2f7;font-weight:700">html2gzh 探针 · 可删除</section>
 <section data-t="RULER" style="height:3cqw;margin:2cqw 0;background-image:linear-gradient(90deg,#1f2937 0 1px,transparent 1px 25%,#1f2937 25% calc(25% + 1px),transparent calc(25% + 1px) 50%,#1f2937 50% calc(50% + 1px),transparent calc(50% + 1px) 75%,#1f2937 75% calc(75% + 1px),transparent calc(75% + 1px));background-color:#e3dccd"></section>
 <p data-t="L1" style="margin:2cqw 4cqw 0;font-size:13px">C1 宽 50cqw（应到 50% 刻度）</p>
 <section data-t="C1" style="width:50cqw;height:3cqw;background:#2563eb"></section>
@@ -66,7 +66,7 @@ for (const w of [320, 375, 460]) {
 }
 // 先走异步剪贴板 API；内嵌浏览器会按权限拒掉，再退回 copy 事件（只要真实点击带来的用户激活，不需要权限）
 const legacyCopy = () => {
-  const on = e => { e.clipboardData.setData('text/html', html); e.clipboardData.setData('text/plain', 'wxpaste 探针'); e.preventDefault(); };
+  const on = e => { e.clipboardData.setData('text/html', html); e.clipboardData.setData('text/plain', 'html2gzh 探针'); e.preventDefault(); };
   document.addEventListener('copy', on, { once: true });
   const ok = document.execCommand('copy');
   document.removeEventListener('copy', on);
@@ -77,7 +77,7 @@ document.getElementById('copy').onclick = async () => {
   try {
     await navigator.clipboard.write([new ClipboardItem({
       'text/html': new Blob([html], { type: 'text/html' }),
-      'text/plain': new Blob(['wxpaste 探针'], { type: 'text/plain' }),
+      'text/plain': new Blob(['html2gzh 探针'], { type: 'text/plain' }),
     })]);
     msg.textContent = '已复制 ' + html.length + ' 字符（clipboard.write）';
   } catch (e) {

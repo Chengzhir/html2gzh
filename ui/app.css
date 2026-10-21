@@ -6,9 +6,8 @@ body{display:flex;font:14px/1.6 system-ui,-apple-system,"PingFang SC","Microsoft
 :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 
 .side{width:380px;flex:none;height:100%;overflow:auto;padding:20px 18px 28px;border-right:1px solid var(--line);position:relative}
-.brand h1{font-size:18px;margin:0}
+.brand h1{font-size:18px;margin:0 0 14px}
 .brand h1 .sub{font-size:13px;font-weight:500;color:var(--muted);margin-left:4px}
-.brand p{margin:2px 0 14px;color:var(--muted)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:12px}
 .card h2{font-size:13px;margin:0 0 8px;color:var(--muted);font-weight:600;letter-spacing:.04em}
 .row{display:flex;gap:8px;align-items:center;margin-top:8px}
@@ -64,6 +63,7 @@ code{font:12px ui-monospace,Consolas,monospace;background:#f2eee6;padding:0 3px;
 .notes{margin:4px 0 0;padding-left:18px}
 .face-tools input{flex:none;width:64px}
 .port-row input{flex:none;width:84px}
+.host-intro{margin-top:0}
 .port-row>label{white-space:nowrap}
 .faces{margin-top:8px}
 .faces table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
@@ -96,8 +96,12 @@ code{font:12px ui-monospace,Consolas,monospace;background:#f2eee6;padding:0 3px;
 .checks li.error{border-color:var(--err)}
 .checks li.warn{border-color:var(--warn)}
 .checks li.fixed{border-color:var(--ok)}
-.checks li b{font-weight:600;margin-right:4px}
+.checks li b{font-weight:600;margin-right:6px}
 .checks li button{margin-left:6px;font-size:12px}
+.checks li details{margin:0}
+.checks li summary{color:inherit;font-size:13px}
+.checks li .detail{margin:4px 0 0;font-size:12px;color:var(--muted);white-space:pre-line}
+.checks li details button{margin:6px 0 0}
 
 .stage{flex:1;min-width:0;height:100%;overflow:auto;padding:20px;position:relative}
 .banner{padding:10px 14px;border-radius:8px;background:#fff;border:1px solid var(--line);margin-bottom:14px}

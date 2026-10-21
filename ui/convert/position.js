@@ -108,11 +108,11 @@ export function convertPositions(doc, root, findings) {
     el.style.removeProperty('z-index');
     if (z < 0 || !yieldLaterLayers(el)) zLost.push(el); else zKept++;
   }
-  if (plan.length) findings.fixed('定位改写', `${plan.length} 个定位元素已改成浮动 + 位移（微信会删掉 position）` + (relocated ? `，其中 ${relocated} 个移出了 flex/grid 容器` : ''));
-  if (flexified.size) findings.fixed('层叠顺序', `${flexified.size} 个容器改成纵向 flex，以保住 z-index 层叠`);
-  if (zLost.length) findings.warn('层叠顺序', `${zLost.length} 个重叠元素的上下顺序没能保留（z-index 丢失），现在代码里靠后的盖住靠前的；遮挡不对的话，在原稿里调整这些元素的先后顺序`, zLost);
-  if (fixed.length) findings.warn('固定定位', `${fixed.length} 个固定在屏幕上的元素（position: fixed）会跟着正文一起滚走`, fixed);
-  if (clipped.length) findings.warn('裁切', `${clipped.length} 个定位元素在改写定位时移出了原来裁切它的容器（overflow），原本被裁掉的部分可能会露出来；要保住裁切效果，可以在原稿里把图片或图形本身裁好`, clipped);
+  if (plan.length) findings.fixed('定位改写', `${plan.length} 个定位元素改成浮动加位移`, '公众号会删掉 position。' + (relocated ? `其中 ${relocated} 个移出了 flex/grid 容器。` : ''));
+  if (flexified.size) findings.fixed('层叠顺序', `${flexified.size} 个容器改成纵向 flex，以保留 z-index`);
+  if (zLost.length) findings.warn('层叠顺序', `${zLost.length} 个重叠元素的上下顺序没能保留`, 'z-index 失效，代码里靠后的元素盖住靠前的。遮挡不对时，在原稿里调整这些元素的先后顺序。', zLost);
+  if (fixed.length) findings.warn('固定定位', `${fixed.length} 个 position: fixed 的元素会随正文滚动`, fixed);
+  if (clipped.length) findings.warn('裁切', `${clipped.length} 个定位元素移出了裁切它的容器`, '原来被 overflow 裁掉的部分可能露出来。要保留裁切效果，在原稿里把图片或图形本身裁好。', clipped);
   return layers;
 }
 

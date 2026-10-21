@@ -209,7 +209,7 @@ async function uiRoute(req, res) {
     try { if (article.file) mtime = fs.statSync(article.file).mtimeMs; } catch { /* 文件被删 */ }
     const hits = {};
     for (const [id, a] of assets) if (a.hits) hits[id] = a.hits;
-    return json(res, 200, { app: 'wxpaste', article: { ...article, mtime }, host: { ...host, pick: pickBase() }, hits, imgPort: IMG_PORT });
+    return json(res, 200, { app: 'html2gzh', article: { ...article, mtime }, host: { ...host, pick: pickBase() }, hits, imgPort: IMG_PORT });
   }
   if (p === '/api/article') {
     if (!article.file) return json(res, 404, { error: '尚未打开文章' });
@@ -306,7 +306,7 @@ async function handOver() {
   const base = `http://127.0.0.1:${UI_PORT}`;
   try {
     const s = await (await fetch(base + '/api/state', { signal: AbortSignal.timeout(2000) })).json();
-    if (s.app !== 'wxpaste') throw new Error();
+    if (s.app !== 'html2gzh') throw new Error();
   } catch {
     console.error(`页面端口 ${UI_PORT} 被别的程序占用了。换一组端口再启动，例如 ${LAUNCH} --port 40000（取图用 40000，页面用 40001）`);
     process.exit(1);
