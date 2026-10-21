@@ -53,6 +53,9 @@ code{font:12px ui-monospace,Consolas,monospace;background:#f2eee6;padding:0 3px;
 .legend dd{margin:0}
 .notes{margin:4px 0 0;padding-left:18px}
 .face-tools input{flex:none;width:64px}
+.shrink-row{flex-wrap:wrap}
+.shrink-row label{display:flex;gap:6px;align-items:center;cursor:pointer}
+.shrink-row input[type=number]{flex:none;width:72px}
 .host-intro{margin:0 0 8px}
 .faces{margin-top:8px}
 .faces table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
@@ -124,6 +127,7 @@ code{font:12px ui-monospace,Consolas,monospace;background:#f2eee6;padding:0 3px;
 .host-help p{margin:0}
 .host-help ul{margin:4px 0 0;padding-left:1.2em}
 .host-help li{margin-top:3px}
+.host-help .help-tail{margin-top:6px}
 .tag{font-size:12px;padding:0 6px;border-radius:9px;white-space:nowrap;margin-left:6px}
 .tag.ok{color:var(--ok);background:#e6f2ea}
 .tag.no{color:var(--warn);background:#f6ecdc}

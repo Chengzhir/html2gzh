@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { handleGlyphs } from './lib/glyphs.mjs';
+import { shrink } from './lib/shrink.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(HERE, 'ui');
@@ -49,6 +50,8 @@ const stamp = () => new Date().toLocaleTimeString('zh-CN', { hour12: false });
 const assets = new Map();
 /** 绝对路径 → { id, mtime, size }，避免同一文件反复哈希 */
 const pathCache = new Map();
+/** "id|scale|max" → /api/shrink 的结果。同一张图同样的参数只压缩一次 */
+const shrunk = new Map();
 function register(buf, ext, name) {
   const id = crypto.createHash('sha256').update(buf).digest('hex').slice(0, 16) + ext;
   if (!assets.has(id)) assets.set(id, { buf, ext, name, fetches: [], lastUA: '' });
@@ -150,7 +153,7 @@ async function checkHosts() {
       const base = baseOf(PUB.host), ok = (await pingN(base)) > 0;
       if (g !== gen) return;
       Object.assign(host, { manual: { base, ok }, list: [], probes: 0, checkedAt: Date.now() });
-      console.log(`${stamp()}  取图地址  ${base}  ${ok ? '自测通过' : '自测未通过'}`);
+      console.log(`${stamp()}  取图地址  ${base}  ${ok ? '可以访问' : '无法访问'}`);
       return;
     }
     const jobs = [];
@@ -169,7 +172,7 @@ async function checkHosts() {
     // 上一轮见过、这轮没探到的出口先留着（可能只是这轮没分到），标成 stale
     const old = host.list.filter(h => !seen.has(h.ip)).map(h => ({ ...h, seen: 0, stale: true }));
     Object.assign(host, { list: [...fresh, ...old].sort((a, b) => b.ok - a.ok || b.seen - a.seen), manual: null, probes: jobs.length, checkedAt: Date.now() });
-    for (const h of fresh) console.log(`${stamp()}  取图地址  ${h.base}  ${h.ok ? '自测通过' : '自测未通过'}  （${jobs.length} 次查询中有 ${h.seen} 次查到这个 IP）`);
+    for (const h of fresh) console.log(`${stamp()}  取图地址  ${h.base}  ${h.ok ? '可以访问' : '无法访问'}  （${jobs.length} 次查询中有 ${h.seen} 次查到这个 IP）`);
     if (!fresh.length) console.log(`${stamp()}  取图地址  没有检测到公网 IP`);
   } finally {
     host.checking = false;
@@ -288,6 +291,28 @@ async function uiRoute(req, res) {
     const ext = '.' + String(url.searchParams.get('ext') || '').toLowerCase().replace(/^\./, '');
     if (!ASSET_EXT.has(ext)) return json(res, 400, { error: '不支持的文件类型 ' + ext });
     return json(res, 200, { id: register(body, ext, url.searchParams.get('name') || 'blob' + ext) });
+  }
+  if (p === '/api/shrink') {
+    // { id, scale, max }：压缩已登记的图片，结果另行登记（原文件与原 id 不变）
+    let b;
+    try { b = j(); } catch { return json(res, 400, { error: '请求不是 JSON' }); }
+    const a = assets.get(String(b.id || ''));
+    const max = Math.floor(Number(b.max));
+    const scale = b.scale == null ? null : Number(b.scale);
+    if (!a || !PUBLIC_EXT.has(a.ext)) return json(res, 404, { error: '图片不存在' });
+    if (!(max >= 1024) || scale != null && !(scale > 0)) return json(res, 400, { error: '参数有误' });
+    const key = `${b.id}|${scale}|${max}`;
+    if (!shrunk.has(key)) {
+      let r;
+      try { r = await shrink(a.buf, { scale, max }); } catch (e) { return json(res, 500, { error: '压缩失败：' + e.message }); }
+      const base = a.name.replace(/\.[^.]+$/, '');
+      shrunk.set(key, r.skip ? { skip: r.skip, size: a.buf.length } : {
+        id: register(r.buf, r.ext, `${base}（压缩）${r.ext}`), size: r.buf.length, srcSize: a.buf.length, how: r.how,
+        width: r.width, height: r.height, srcWidth: r.srcWidth, srcHeight: r.srcHeight, over: r.over,
+      });
+      if (shrunk.size > 200) shrunk.delete(shrunk.keys().next().value);
+    }
+    return json(res, 200, shrunk.get(key));
   }
   if (p === '/api/glyphs') {
     let req2;

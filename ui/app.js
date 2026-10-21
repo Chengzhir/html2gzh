@@ -4,6 +4,7 @@ import { WHY_TEXT } from './convert/outline.js';
 import { setTip } from './tip.js';
 import { readerDoc, darkHtml, SIDE } from './phone.js';
 import { readerImages } from './convert/reader.js';
+import { imageScales } from './convert/images.js';
 
 const $ = id => document.getElementById(id);
 // Windows 上用 serve.cmd 启动；别的系统在终端里跑 node server.mjs
@@ -441,27 +442,102 @@ function fontBytes(url) {
 }
 /** 正文里由本机提供的图片 id（去重） */
 const imageIdsIn = html => [...new Set([...html.matchAll(/\/a\/([0-9a-f]{16}\.[a-z0-9]+)/g)].map(m => m[1]))];
+
+/* ---------- 大图 ---------- */
 // 微信服务器下载一张图最多等约 0.5 秒，超时隔 0.5 秒再试，三次都超时就放弃（2026-10-21 实测）。
-// 能否下完取决于这台电脑的上传速度和同时下载的张数，1 MB 是按常见宽带估的界线，不是平台规定
-const BIG_IMAGE = 1 << 20;
-/** 超过 BIG_IMAGE 的本地图片：[{ name, size }]。大小取自本机服务的 HEAD 响应 */
-async function bigImages(payload, names) {
-  const out = [];
+// 能否下完取决于这台电脑的上传速度和同时下载的张数，默认 1000 KB 是按常见宽带估的界线，不是平台规定
+const SHRINK_KEY = 'wxc.shrink';
+const SHRINK_DEFAULT = { on: false, kb: 1000 };
+function loadShrink() {
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem(SHRINK_KEY) || '{}') || {}; } catch { /* 坏数据当没存 */ }
+  return { on: s.on === true, kb: Number.isInteger(s.kb) && s.kb >= 1 && s.kb <= 20000 ? s.kb : SHRINK_DEFAULT.kb };
+}
+let shrinkOpts = loadShrink();
+const limitBytes = () => shrinkOpts.kb * 1024;
+/** 本地图片的大小（字节）：Map<id, size>，取自本机服务的 HEAD 响应 */
+async function imageSizes(payload) {
+  const sizes = new Map();
   await Promise.all(imageIdsIn(payload).map(async id => {
     const r = await fetch('/a/' + id, { method: 'HEAD', cache: 'no-store' }).catch(() => null);
-    const size = r && r.ok ? +r.headers.get('content-length') : 0;
-    if (size > BIG_IMAGE) out.push({ name: names.get(id) || '转换生成的位图', size });
+    sizes.set(id, r && r.ok ? +r.headers.get('content-length') : 0);
   }));
-  return out.sort((a, b) => b.size - a.size);
+  return sizes;
 }
-const mb = n => (n / (1 << 20)).toFixed(1) + ' MB';
+/** 超过 limit 字节的本地图片：[{ id, name, size }]，从大到小 */
+async function bigImages(payload, names, limit = limitBytes(), sizes = null) {
+  sizes = sizes || await imageSizes(payload);
+  return [...sizes].filter(([, s]) => s > limit).map(([id, size]) => ({ id, name: names.get(id) || '转换生成的位图', size })).sort((a, b) => b.size - a.size);
+}
+const kb = n => n >= 1 << 20 ? (n / (1 << 20)).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB';
+const SKIP_WHY = { vector: 'SVG 不压缩', animated: '动图不压缩', unreadable: '格式无法读取', noGain: '无法再缩小' };
+let shrinkSeq = 0;
+/**
+ * 按当前的上限与开关，从转换结果的原始成品（base）得出最终的成品：超过上限的图片换成压缩后的副本。
+ * 结果写回 state.result 的 payload、preview 与 report.big / report.shrunk。返回 false 表示被更新的一次调用取代
+ */
+async function applyShrink() {
+  const r = state.result, seq = ++shrinkSeq;
+  if (!r) return false;
+  const { base } = r, limit = limitBytes();
+  let payload = base.payload, preview = base.preview;
+  const sizes = await imageSizes(base.payload);
+  const big = await bigImages(base.payload, r.report.names, limit, sizes);
+  const shrunk = [], left = [];
+  if (shrinkOpts.on && big.length) {
+    for (let i = 0; i < big.length; i++) {
+      notice('all', `正在压缩图片（${i + 1}/${big.length}）…`);
+      const b = big[i];
+      const scale = r.scales.has(b.id) ? r.scales.get(b.id) : null;
+      const res = await api('/api/shrink', { id: b.id, scale, max: limit }).catch(e => ({ error: e.message }));
+      if (seq !== shrinkSeq) return false;
+      if (res.error || res.skip) { left.push({ ...b, why: res.skip ? SKIP_WHY[res.skip] : res.error }); continue; }
+      payload = payload.split('/a/' + b.id).join('/a/' + res.id);
+      preview = preview.split('/a/' + b.id).join('/a/' + res.id);
+      r.report.names.set(res.id, b.name);
+      sizes.set(res.id, res.size);
+      shrunk.push({ ...b, ...res, id: res.id });
+      if (res.over) left.push({ ...b, id: res.id, size: res.size, why: '已缩小到正文显示所需的分辨率，仍超过上限' });
+    }
+  } else left.push(...big);
+  if (seq !== shrinkSeq) return false;
+  Object.assign(r, { payload, preview });
+  Object.assign(r.report, { big: left, shrunk, sizes });
+  return true;
+}
+function renderShrinkOpts() {
+  $('shrinkOn').checked = shrinkOpts.on;
+  if (document.activeElement !== $('shrinkKb')) $('shrinkKb').value = shrinkOpts.kb;
+}
+let shrinkAgain = false;
+/** 改了压缩设置：不用重新转换，只按新设置从原始成品重新得出最终成品。转换进行中时等它结束再做 */
+function saveShrink(patch) {
+  shrinkOpts = { ...shrinkOpts, ...patch };
+  localStorage.setItem(SHRINK_KEY, JSON.stringify(shrinkOpts));
+  renderShrinkOpts();
+  if (state.busy) shrinkAgain = true; else reshrink();
+}
+async function reshrink() {
+  if (!state.result) return;
+  state.copiedAt = null; state.shrinking = true;
+  refreshCopy();
+  try {
+    if (!await applyShrink()) return;
+    notice('all', '');
+    renderChecks(); renderFetch();
+    await renderReader();
+  } finally { state.shrinking = false; refreshCopy(); }
+}
+$('shrinkOn').onchange = () => saveShrink({ on: $('shrinkOn').checked });
+$('shrinkKb').onchange = () => { const v = Math.round(+$('shrinkKb').value); if (v >= 1 && v <= 20000) saveShrink({ kb: v }); else renderShrinkOpts(); };
+renderShrinkOpts();
 let again = false;
 /** 转换进行中又改了设置：等这一轮结束再按新设置转一次 */
 function rerun() { if (state.busy) again = true; else run(); }
 
 async function run() {
   if (!state.src || state.busy) return;
-  state.busy = true; state.copiedAt = null; again = false;
+  state.busy = true; state.copiedAt = null; again = false; shrinkAgain = false;
   $('copy').disabled = true; $('fetchLine').hidden = true;
   srcNote('');
   notice('all', '正在转换…');
@@ -482,8 +558,10 @@ async function run() {
     const prep = await prepare(html, entry);
     if (o.paths.length) notice('all', '正在转换…（首次转为 SVG 路径时需要读取本机的字体目录，耗时较长）');
     const res = await convert(prep.html, { width: w, frame: $('scratch'), verifyFrame: $('verify'), opts: o, glyphs, raster, fontBytes });
-    prep.report.big = await bigImages(res.payload, prep.report.names);
-    state.result = { ...res, report: prep.report, paths: o.paths, width: w };
+    // 转换结束时 #verify 停在所选宽度的成品上，并已跑过阅读页的图片脚本：在这里量每张图需要的分辨率
+    const scales = imageIdsIn(res.payload).length ? await imageScales($('verify').contentDocument, w) : new Map();
+    state.result = { ...res, report: prep.report, paths: o.paths, width: w, scales, base: { payload: res.payload, preview: res.preview } };
+    await applyShrink();
     state.error = '';
     $('paneA').style.width = w + 'px';
     $('paneA').srcdoc = res.original;
@@ -501,6 +579,7 @@ async function run() {
     refreshCopy();
     syncFaces();
     if (again) run();
+    else if (shrinkAgain) { shrinkAgain = false; reshrink(); }
   }
 }
 
@@ -518,8 +597,21 @@ function renderChecks() {
   const add = (level, title, text, detail = '', ids = []) => ({ level, title, text, detail, ids });
   if (report.missing.length) items.unshift(add('error', '图片缺失', `${report.missing.length} 张图片不存在：${few(report.missing)}`, `粘贴后，这些图片的位置会显示粘贴失败的提示，草稿无法保存。请将图片放入文章文件夹中的对应位置，然后${redo}。`));
   if (report.badData) items.push(add('warn', '内嵌图片', `${report.badData} 张 data: 图片的格式无法识别，没有转为文件`, `公众号不接受 data: 地址的图片，粘贴后这些图片无法显示。请把它们另存为 PNG 或 JPEG 文件放入文章文件夹，在原稿中改为引用文件，然后${redo}。`));
-  if (report.big.length) items.push(add('warn', '图片过大', `${report.big.length} 张图片超过 1 MB：${few(report.big.map(b => `${b.name}（${mb(b.size)}）`))}`,
-    `粘贴后，微信服务器从本机下载图片，每次最多等待约 0.5 秒，连续三次超时即放弃。图片较大或这台电脑的上传速度较慢时，这些图片的位置会显示“系统繁忙”，草稿无法保存。请把这些图片压缩到 1 MB 以内（通过内网穿透提供图片时，下载速度通常更慢，需要压缩得更小），然后${redo}。`));
+  const big = report.big || [], shrunk = (report.shrunk || []).filter(s => !s.over);
+  const limitKb = `${shrinkOpts.kb} KB`;
+  if (big.length) {
+    const why = '粘贴后，微信服务器从本机下载图片，每次最多等待约 0.5 秒，连续三次超时即放弃。图片较大或这台电脑的上传速度较慢时，这些图片的位置会显示“系统繁忙”，草稿无法保存。';
+    const fix = shrinkOpts.on
+      ? `超长的图片可以在原稿中拆成几张；动图可以降低尺寸或帧数。处理后${redo}。`
+      : `勾选“复制到剪贴板”下方的“压缩超过上限的图片”，即可自动压缩这些图片（原文件不变）；也可以自行压缩，然后${redo}。`;
+    items.push(add('warn', '图片过大', `${big.length} 张图片超过上限（${limitKb}）：${few(big.map(b => `${b.name}（${kb(b.size)}${b.why ? '，' + b.why : ''}）`))}`,
+      why + fix + '通过内网穿透提供图片时，下载速度通常更慢，可以把上限调得更低。'));
+  }
+  if (shrunk.length) {
+    const line = s => `· ${s.name}：${kb(s.srcSize)} → ${kb(s.size)}，` + (s.width === s.srcWidth ? `尺寸不变，${s.how}` : `${s.srcWidth}×${s.srcHeight} → ${s.width}×${s.height}，${s.how}`);
+    items.push(add('fixed', '图片压缩', `${shrunk.length} 张超过上限的图片压缩到了 ${limitKb} 以内`,
+      shrunk.slice(0, 8).map(line).join('\n') + (shrunk.length > 8 ? `\n等 ${shrunk.length} 张` : '') + '\n每张图片先在原尺寸下降低画质；仍超过上限时，才缩小到上限内放得下的最大尺寸，且不小于正文显示所需的分辨率。只压缩提供给微信服务器的副本，原文件不变。'));
+  }
   if (report.sheets.length) items.push(add('warn', '样式表', `${report.sheets.length} 个样式表无法读取：${few(report.sheets)}`, '可能的原因：本地样式表的文件不存在；站外样式表所在的网站不允许跨域读取，或者无法访问。两侧预览中都没有这些样式表的效果。'));
   if (report.refs.length) items.push(add('warn', '引用的文件', `样式或 SVG 引用的 ${report.refs.length} 个文件不存在：${few(report.refs)}`, `这些文件多为字体与背景图，两侧预览中均未加载。请将文件放入文章文件夹中的对应位置，然后${redo}。`));
   if (report.dataUri) items.push(add('fixed', '内嵌图片', `${report.dataUri} 张 data: 图片转为了文件`, '公众号不接受 data: 地址的图片。这些图片与文章文件夹中的图片一样，通过取图地址提供给微信服务器。'));
@@ -629,25 +721,25 @@ $('hostForm').onsubmit = async e => {
     if (state.server) state.server.host = j.host;
     fillHostForm(j.host.config);
     hostSig = JSON.stringify(j.host.config);
-    note.className = 'note ok'; note.textContent = '已保存，正在自测';
+    note.className = 'note ok'; note.textContent = '已保存，正在检测';
     renderHost(); refreshCopy();
   } catch (err) { note.className = 'note err'; note.textContent = err.message; }
   finally { btn.disabled = false; }
 };
-const TAG = { ok: ['ok', '自测通过'], no: ['no', '自测未通过'], wait: ['wait', '自测中'] };
+const TAG = { ok: ['ok', '可以访问'], no: ['no', '无法访问'], wait: ['wait', '正在检测'] };
 function tag(kind) { const [cls, text] = TAG[kind]; return elem('span', 'tag ' + cls, text); }
-const ROUTER_LOOP = '部分路由器不支持从内网访问自己的公网地址，此时自测不会通过，但外网仍可能正常访问。可以先复制、粘贴一次，观察“复制到剪贴板”下方显示的已下载图片数是否增加。';
-/** 自测未通过、没有检测到公网 IP 时的说明：一句结论，加上可能的原因 */
+// 从本机访问自己的公网地址要靠路由器回环，有的路由器不支持，所以本机检测不通不等于外网不通
+const NOT_SURE = '检测结果不一定准确，以粘贴后显示的已下载图片数为准。';
+/** 无法访问、没有检测到公网 IP 时的说明：[开头一句, 可能的原因, 结尾一句] */
 function hostHelpFor(h, c) {
-  if (!h.pick) return h.checking ? null : ['这台电脑可能没有联网，或者无法访问查询 IP 的网站（使用需要登录的校园网时，登录前也会如此）。可以在“公网地址”中直接填写域名或 IP。', []];
+  if (!h.pick) return h.checking ? null : ['这台电脑可能没有联网，或者无法访问查询 IP 的网站。可以在“公网地址”中直接填写域名或 IP。', [], ''];
   if (h.pick.ok !== false || h.checking) return null;
-  if (c.host) return ['从这台电脑无法访问这个地址，微信服务器可能也无法下载图片。请检查：', [
-    `使用内网穿透时：内网穿透工具是否正在运行，是否把本机的 ${c.imgPort} 端口映射到了这个地址，“公网地址”“公网端口”“协议”是否与内网穿透工具提供的一致。`,
-    `使用端口转发时：路由器是否把公网端口转发到了这台电脑的 ${c.imgPort} 端口。` + ROUTER_LOOP]];
-  return ['从这台电脑无法访问这个地址，微信服务器可能也无法下载图片。常见原因：', [
-    '使用校园网或移动宽带：检测到的是学校或运营商的出口 IP，外网无法通过它访问这台电脑。请改用内网穿透，见“填写说明”。',
-    `有公网 IP，但路由器没有把端口转发到这台电脑的 ${c.imgPort} 端口，或者防火墙阻止了外网的连接。`,
-    ROUTER_LOOP]];
+  if (c.host) return ['可能的原因：', [
+    `使用内网穿透时：内网穿透工具没有运行，没有把本机的 ${c.imgPort} 端口映射到这个地址，或者“公网地址”“公网端口”“协议”与内网穿透工具提供的不一致。`,
+    `使用端口转发时：路由器没有把公网端口转发到这台电脑的 ${c.imgPort} 端口，或者防火墙阻止了外网的连接。`], NOT_SURE];
+  return ['可能的原因：', [
+    '没有公网 IP：请改用内网穿透，见“填写说明”。',
+    `有公网 IP，但路由器没有把端口转发到这台电脑的 ${c.imgPort} 端口，或者防火墙阻止了外网的连接。`], NOT_SURE];
 }
 let exitSig = '', helpSig = '';
 function renderHelp(help, content) {
@@ -656,12 +748,14 @@ function renderHelp(help, content) {
   if (sig === helpSig) return;
   helpSig = sig;
   if (!content) { help.replaceChildren(); return; }
-  const [lead, items] = content;
+  const [lead, items, tail] = content;
   help.replaceChildren(elem('p', null, lead));
-  if (!items.length) return;
-  const ul = elem('ul');
-  ul.append(...items.map(t => elem('li', null, t)));
-  help.appendChild(ul);
+  if (items.length) {
+    const ul = elem('ul');
+    ul.append(...items.map(t => elem('li', null, t)));
+    help.appendChild(ul);
+  }
+  if (tail) help.appendChild(elem('p', 'help-tail', tail));
 }
 function renderHost() {
   const h = state.server && state.server.host;
@@ -719,7 +813,7 @@ function refreshCopy() {
     note.textContent = checking ? `文中有 ${imgs.length} 张本地图片。正在检测公网 IP，检测完成后即可复制。` : `文中有 ${imgs.length} 张本地图片，还没有可用的取图地址，请在下方“取图地址”中填写。`;
     return;
   }
-  btn.disabled = state.busy;
+  btn.disabled = state.busy || !!state.shrinking;
   if (state.copiedAt) { note.textContent = copiedNote(); return; }
   const errs = state.result.findings.filter(f => f.level === 'error').length + (state.result.report.missing.length ? 1 : 0);
   note.textContent = (errs ? `有 ${errs} 项必须处理（见下方检查结果），否则草稿可能无法保存。` : '')
@@ -775,8 +869,13 @@ function renderFetch() {
   el.hidden = false;
   el.className = 'status ' + (failed.length ? 'err' : got === ids.length ? 'ok' : got ? 'warn' : '');
   if (failed.length) {
+    // 超时的图里最小的一张，在这条线路上都没能在时限内下完：上限要比它小
+    const sizes = state.result.report.sizes || new Map();
+    const least = Math.min(...failed.map(id => sizes.get(id) || Infinity));
+    const lead = shrinkOpts.on ? '请' : '请勾选“压缩超过上限的图片”，并';
+    const fix = Number.isFinite(least) ? `${lead}把单张上限调到 ${kb(least)} 以下（这条线路上，这么大的图片没能在时限内下载完），` : `${lead}调低单张上限，`;
     el.textContent = `微信已下载 ${got}/${ids.length} 张图片。${failed.length} 张图片连续三次下载超时：${listed.slice(0, 4).join('、')}${listed.length > 4 ? ' 等' : ''}。`
-      + `编辑器中这些图片的位置会显示“系统繁忙”，草稿无法保存。请压缩这些图片（一般压缩到 1 MB 以内；通过内网穿透提供图片时需要更小），${redoHint()}，然后删除已粘贴的正文，重新复制、粘贴。`;
+      + `编辑器中这些图片的位置会显示“系统繁忙”，草稿无法保存。${fix}然后删除已粘贴的正文，重新复制、粘贴。`;
   } else if (got === ids.length) {
     el.textContent = `微信已下载全部 ${got} 张图片，可以关闭${SERVICE}。${SAVE_TWICE}`;
   } else {

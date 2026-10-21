@@ -40,6 +40,13 @@
     <button type="button" id="copy" class="primary" disabled>复制到剪贴板</button>
     <p id="copyNote" class="muted" aria-live="polite">载入文章后可复制。</p>
     <p id="fetchLine" class="status" aria-live="polite" hidden></p>
+    <div class="row small shrink-row">
+      <label><input type="checkbox" id="shrinkOn"> 压缩超过上限的图片</label>
+      <label for="shrinkKb">单张上限</label>
+      <input id="shrinkKb" type="number" min="1" max="20000" step="50" inputmode="numeric">
+      <span>KB</span>
+      <button type="button" class="help" data-tip="微信服务器下载每张图片最多等待约 0.5 秒，图片越大越容易超时。超过上限的图片会列入检查结果。勾选后，这些图片在上限内尽量保留原图的尺寸：微信转存图片时保留上传的分辨率，但会重新压缩画质，因此先在原尺寸下逐级降低画质（JPEG 最低到质量 70）；仍超过上限时，才缩小到上限内放得下的最大尺寸，且不小于正文显示所需的分辨率（正文中的图片至少 1290px 宽，读者点开全屏查看时仍然清晰）。有透明部分的图片存为 PNG。只压缩提供给微信服务器的副本，文章文件夹中的原文件不变。动图、SVG 与 BMP 不压缩。">?</button>
+    </div>
     <div class="row small">
       <label for="width">预览屏宽</label>
       <select id="width">
@@ -118,11 +125,11 @@
         <dt>有公网 IP</dt>
         <dd>在路由器上添加端口转发：外部端口填写“公网端口”的值（留空时与本机端口相同），内部 IP 填写这台电脑的局域网 IP，内部端口填写“本机端口”的值（当前为 <span class="guide-port">38960</span>）。“公网地址”可以留空，由本工具自动检测；有域名时也可以填写域名。Windows 防火墙弹出提示时，请允许 Node.js 在当前网络中通信。</dd>
         <dt>没有公网 IP</dt>
-        <dd>校园网和多数移动宽带属于这种情况：检测到的公网 IP 是学校或运营商的出口 IP，外网无法通过它访问这台电脑。请使用 frp、cpolar 等内网穿透工具，把本机的 <span class="guide-port">38960</span> 端口映射到外网，再将内网穿透工具提供的地址、端口与协议分别填入对应的输入框。以 http:// 或 https:// 开头的完整地址（如 https://abc.example.com）可以整体粘贴到“公网地址”中，将自动拆分为协议、公网地址与公网端口。</dd>
+        <dd>请使用 frp、cpolar 等内网穿透工具，把本机的 <span class="guide-port">38960</span> 端口映射到外网，再将内网穿透工具提供的地址、端口与协议分别填入对应的输入框。以 http:// 或 https:// 开头的完整地址（如 https://abc.example.com）可以整体粘贴到“公网地址”中，将自动拆分为协议、公网地址与公网端口。</dd>
         <dt>公网端口</dt>
         <dd>留空时，协议为 http 则与本机端口相同，为 https 则使用 443。本工具只提供 http；选择 https 时，由内网穿透工具或反向代理负责加密。</dd>
-        <dt>自测</dt>
-        <dd>保存后，本工具从这台电脑访问一次取图地址，检查能否连通；页面打开期间每 5 分钟重新检测。内网穿透的地址通过自测，一般说明外网也能访问。端口转发的地址需要路由器把这台电脑发出的请求转回本机，部分路由器不支持这一功能，此时自测不会通过，但外网仍可能正常访问；可以先复制、粘贴一次，观察“复制到剪贴板”下方显示的已下载图片数是否增加。</dd>
+        <dt>检测</dt>
+        <dd>保存后，本工具从这台电脑访问一次取图地址，检测能否访问；页面打开期间每 5 分钟重新检测。检测结果不一定准确，以粘贴后显示的已下载图片数为准。</dd>
         <dt>安全</dt>
         <dd>无论使用端口转发还是内网穿透，本机端口都会对外网开放。这个端口不设认证，只提供已载入文章中引用的图片；文件名为内容的哈希值，外部难以猜测。关闭本工具后即停止提供。</dd>
       </dl>

@@ -15,7 +15,8 @@
   "dependencies": {
     "fontkit": "2.0.4",
     "fontverter": "2.0.0",
-    "puppeteer-core": "25.13.0"
+    "puppeteer-core": "25.13.0",
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "subset-font": "2.9.0"

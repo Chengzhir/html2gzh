@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
+import sharp from 'sharp';
 import { findChrome } from '../lib/chrome.mjs';
 import { alignUnits } from './align.mjs';
 import { previewDoc, readerImages } from '../ui/convert/reader.js';
@@ -453,7 +454,81 @@ try {
     const big = await raw(UI, '/api/blob?ext=png&name=big.png', { method: 'POST', headers: { host: '127.0.0.1:' + UI, origin: 'http://127.0.0.1:' + UI }, body: Buffer.alloc(1100000) });
     const bid = JSON.parse(big.body).id;
     const found = await page.evaluate(id => window.__wxcBig(`<img src="/a/${id}"><img src="/a/${id}">`, new Map([[id, 'img/big.png']])), bid);
-    check(found.length === 1 && found[0].name === 'img/big.png' && found[0].size === 1100000, '超过 1 MB 的图片按名字和大小列出（同一张只算一次）', JSON.stringify(found));
+    check(found.length === 1 && found[0].name === 'img/big.png' && found[0].size === 1100000, '超过上限（默认 1000 KB）的图片按名字和大小列出（同一张只算一次）', JSON.stringify(found));
+  }
+
+  // 大图压缩：服务端按所需分辨率缩小、在上限内选编码；页面按版面量出每张图需要的分辨率；勾选后成品换成压缩后的副本
+  console.log('\n大图压缩');
+  {
+    const blob = async (buf, ext, name) => JSON.parse((await raw(UI, `/api/blob?ext=${ext}&name=${name}`, { method: 'POST', headers: { host: '127.0.0.1:' + UI, origin: 'http://127.0.0.1:' + UI }, body: buf })).body).id;
+    const shrinkApi = async body => JSON.parse((await raw(UI, '/api/shrink', { method: 'POST', headers: { host: '127.0.0.1:' + UI, origin: 'http://127.0.0.1:' + UI }, body: JSON.stringify(body) })).body);
+    // 像照片的图：渐变加伪随机噪点（固定种子，每次相同）
+    const W = 2400, H = 1600, px = Buffer.alloc(W * H * 3);
+    let seed = 7;
+    for (let i = 0; i < px.length; i++) { seed = (seed * 1103515245 + 12345) & 0x7fffffff; const x = (i / 3 | 0) % W, y = i / 3 / W | 0; px[i] = 128 + 90 * Math.sin((x + (i % 3) * 40) / 83) * Math.cos(y / 57) + (seed % 48) - 24; }
+    const photo = await sharp(px, { raw: { width: W, height: H, channels: 3 } }).jpeg({ quality: 95 }).toBuffer();
+    const photoId = await blob(photo, 'jpg', 'photo.jpg');
+    // 尽量少压：先在原尺寸下降画质；仍放不下才缩小到放得下的最大尺寸（用到上限的 75% 以上），但不小于所需分辨率（这里是一半）
+    const r1 = await shrinkApi({ id: photoId, scale: 0.5, max: 400 << 10 });
+    check(r1.id && r1.width >= 1200 && r1.width <= W && /\.jpg$/.test(r1.id) && r1.size <= 400 << 10 && (r1.width === W || r1.size >= 300 << 10) && r1.srcSize === photo.length && !r1.over,
+      '照片在上限内保留尽量大的尺寸（先降画质，后缩尺寸），不小于所需分辨率，存为 JPEG', `${photo.length} → ${r1.size} 字节，${r1.width}×${r1.height}，${r1.how}`);
+    const roomy = await shrinkApi({ id: photoId, scale: 0.5, max: photo.length - 1024 });
+    check(roomy.width === W && roomy.height === H && !roomy.over, '上限放得下原尺寸时不缩小尺寸，只重新编码', `${roomy.width}×${roomy.height}，${roomy.how}，${roomy.size} 字节`);
+    const served = r1.id ? await raw(IMG, '/a/' + r1.id) : { status: 0, headers: {} };
+    check(served.status === 200 && served.headers['content-type'] === 'image/jpeg', '压缩后的副本由取图端口提供', `${served.status} ${served.headers['content-type']}`);
+    const alpha = await sharp({ create: { width: 1600, height: 1600, channels: 4, background: { r: 200, g: 30, b: 60, alpha: 0.5 } } }).png({ compressionLevel: 0 }).toBuffer();
+    const r2 = await shrinkApi({ id: await blob(alpha, 'png', 'alpha.png'), scale: 0.5, max: 400 << 10 });
+    const r2meta = r2.id ? await sharp(Buffer.from(await (await fetch(`http://127.0.0.1:${UI}/a/${r2.id}`)).arrayBuffer())).metadata() : {};
+    check(/\.png$/.test(r2.id || '') && r2meta.hasAlpha && r2.width === 1600, '有透明部分的图片存为 PNG，保留透明；放得下时保留原尺寸', JSON.stringify({ id: r2.id, w: r2.width, alpha: r2meta.hasAlpha, how: r2.how }));
+    const r3 = await shrinkApi({ id: await blob(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'), 'svg', 'v.svg'), scale: 0.5, max: 1024 });
+    check(r3.skip === 'vector', 'SVG 不压缩', JSON.stringify(r3));
+
+    // 所需分辨率：显示宽度 × 屏幕缩放 × (677×2 / 正文宽)；正文里的 <img> 至少保留 1290px 宽；量不出来的为 null
+    const wide = await blob(await sharp({ create: { width: 2000, height: 1000, channels: 3, background: '#88a' } }).png().toBuffer(), 'png', 'wide.png');
+    const huge = await blob(await sharp({ create: { width: 4000, height: 4000, channels: 3, background: '#a88' } }).png().toBuffer(), 'png', 'huge.png');
+    const hid = await blob(await sharp({ create: { width: 900, height: 900, channels: 3, background: '#8a8' } }).png().toBuffer(), 'png', 'hid.png');
+    const edge = await blob(await sharp({ create: { width: 700, height: 700, channels: 3, background: '#aa8' } }).png().toBuffer(), 'png', 'edge.png');
+    const mp = await browser.newPage();
+    await mp.goto(`http://127.0.0.1:${UI}/__blank`);
+    await mp.setContent(`<div class="rich_media_content" style="width:335px">
+      <img src="/a/${wide}" style="display:block;width:100%">
+      <div style="width:300px;height:200px;background:url(/a/${huge}) center/cover no-repeat"></div>
+      <img src="/a/${hid}" style="display:none">
+      <div style="border:4px solid;border-image:url(/a/${edge}) 30 stretch;width:50px;height:50px"></div></div>`, { waitUntil: 'networkidle0' });
+    const sc = await mp.evaluate(async ids => {
+      const { imageScales } = await import('/convert/images.js');
+      const m = await imageScales(document, 335);
+      return ids.map(id => m.has(id) ? m.get(id) : 'missing');
+    }, [wide, huge, hid, edge]);
+    await mp.close();
+    const near = (v, x) => typeof v === 'number' && Math.abs(v - x) < x * 0.01;
+    check(near(sc[0], 335 / 2000 * 1354 / 335) && near(sc[1], 200 / 4000 * 1354 / 335 * 1.5) && sc[2] === null && sc[3] === null,
+      '按版面量出所需分辨率：img 按显示宽度、background-size: cover 按铺满的比例，隐藏的与 border-image 记为未知', JSON.stringify(sc));
+
+    // 页面：把照片放进成品，勾选“压缩超过上限的图片”、上限 400 KB → 成品里换成压缩后的副本；取消勾选后换回原图
+    const saved = await page.evaluate(id => {
+      const r = window.__wxc.result, keep = { base: r.base, scales: [...r.scales] };
+      const tag = `<img src="${location.origin}/a/${id}" style="display:block;width:100%">`;
+      r.base = { payload: r.base.payload + tag, preview: r.base.preview + tag };
+      r.scales = new Map([[id, 0.5]]);
+      r.report.names.set(id, 'img/photo.jpg');
+      return keep;
+    }, photoId);
+    const setShrink = (on, kbv) => page.evaluate((on, kbv) => {
+      const k = document.getElementById('shrinkKb'); k.value = String(kbv); k.dispatchEvent(new Event('change'));
+      const c = document.getElementById('shrinkOn'); c.checked = on; c.dispatchEvent(new Event('change'));
+    }, on, kbv);
+    await setShrink(true, 400);
+    await page.waitForFunction(id => { const r = window.__wxc.result; return !window.__wxc.shrinking && r.report.shrunk && r.report.shrunk.length && !r.payload.includes('/a/' + id); }, { timeout: 30000 }, photoId).catch(() => {});
+    const on = await page.evaluate(id => { const r = window.__wxc.result; return { has: r.payload.includes('/a/' + id), shrunk: (r.report.shrunk || []).map(s => s.id), check: document.getElementById('checks').textContent.includes('图片压缩') }; }, photoId);
+    check(!on.has && on.shrunk.length === 1 && on.shrunk[0] === r1.id && on.check, '勾选后成品中的大图换成压缩后的副本，检查结果列出“图片压缩”', JSON.stringify(on));
+    await setShrink(false, 1000);
+    await page.waitForFunction(id => !window.__wxc.shrinking && window.__wxc.result.payload.includes('/a/' + id), { timeout: 30000 }, photoId).catch(() => {});
+    const off = await page.evaluate(id => { const r = window.__wxc.result; return { has: r.payload.includes('/a/' + id), big: (r.report.big || []).map(b => b.name) }; }, photoId);
+    check(off.has && off.big.includes('img/photo.jpg'), '取消勾选后换回原图，超过上限的图片列为“图片过大”', JSON.stringify(off));
+    await page.evaluate(keep => { const r = window.__wxc.result; r.base = keep.base; r.scales = new Map(keep.scales); }, saved);
+    await page.evaluate(() => { const c = document.getElementById('shrinkOn'); c.checked = false; c.dispatchEvent(new Event('change')); });
+    await page.waitForFunction(() => !window.__wxc.shrinking, { timeout: 30000 }).catch(() => {});
   }
 
   // 取图地址：本机端口立即换绑并存进设置文件，被占时保持原端口；公网地址、端口、协议拼成取图地址（放在最后：之后图床口不在 IMG 上了）
@@ -488,9 +563,10 @@ try {
     const p3 = await page.evaluate(() => ({ base: window.__wxc.server.host.pick.base, ph: hfPubPort.placeholder }));
     check(p3.base === 'https://pic.example.invalid' && /443/.test(p3.ph), 'https 时公网端口留空使用 443', JSON.stringify(p3));
     await page.waitForFunction(() => window.__wxc.server.host.pick.ok === false, { timeout: 30000 }).catch(() => {});
-    check(await page.evaluate(() => window.__wxc.server.host.pick.ok === false && /自测未通过/.test(document.getElementById('hostLine').textContent)), '连不通的地址显示“自测未通过”');
+    check(await page.evaluate(() => window.__wxc.server.host.pick.ok === false && /无法访问/.test(document.getElementById('hostLine').textContent)), '连不通的地址显示“无法访问”');
     const helpNow = await page.evaluate(() => { const h = document.getElementById('hostHelp'); return { shown: !h.hidden, items: h.querySelectorAll('li').length, text: h.textContent }; });
-    check(helpNow.shown && helpNow.items >= 2 && /内网穿透/.test(helpNow.text) && helpNow.text.includes(String(NEW)), '自测未通过时列出可能的原因（含本机端口）', JSON.stringify(helpNow).slice(0, 160));
+    check(helpNow.shown && helpNow.items >= 2 && /内网穿透/.test(helpNow.text) && helpNow.text.includes(String(NEW)) && /以粘贴后显示的已下载图片数为准/.test(helpNow.text),
+      '无法访问时列出可能的原因（含本机端口），并说明以实际下载为准', JSON.stringify(helpNow).slice(0, 160));
     const taken = await post({ imgPort: IMG + 3, host: '', port: '', proto: 'http' });
     const stay = id ? (await raw(NEW, '/a/' + id)).status : 200;
     check(taken.status === 409 && stay === 200, '本机端口被占用时报错并保持原端口', `${taken.status} ${JSON.parse(taken.body).error || ''}`);
