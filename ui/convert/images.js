@@ -2,22 +2,20 @@ import { splitTop } from './util.js';
 
 /** 本机服务提供的图片地址里的 id */
 export const ASSET_ID_RE = /\/a\/([0-9a-f]{16}\.[a-z0-9]+)/;
-// 需要的设备像素按电脑上的阅读页算：正文宽 677px、2 倍屏（手机正文最宽约 400px × 3 倍屏 = 1200，比它小）
+// 需要的设备像素按电脑上的阅读页算：正文宽 677px、2 倍屏（手机正文最宽约 400px × 3 倍屏 = 1200，比它小）。
+// 服务端再按读者拿到的最宽 1080px 封顶
 const NEED_W = 677 * 2;
-// 读者点开正文里的图片时全屏查看：宽度至少保留到 430 宽 3 倍屏手机的宽度
-const VIEWER_W = 1290;
 const ANIM = 'animate,animateTransform,animateMotion,set';
 
 /**
  * 成品中每张本地图片需要的分辨率与原图之比（≥ 1 表示原图的分辨率全都用得上），量不出来的为 null（比如 border-image、
- * 隐藏的元素、随动画缩放的 SVG 里的图）。doc 是按正文宽 width 渲染、跑过阅读页图片脚本的成品文档。
- * 同一张图用在几处时取最大值。返回 Map<id, number | null>
+ * 随动画缩放的 SVG 里的图）。doc 是按正文宽 width 渲染的成品文档。同一张图用在几处时取最大值。返回 Map<id, number | null>
  */
 export async function imageScales(doc, width) {
   const win = doc.defaultView, root = doc.querySelector('.rich_media_content') || doc.body;
   const k = NEED_W / width;
   const need = new Map();
-  // 有一处量不出来就整张图记为 null：宁可按长边上限处理，也不按别处的小尺寸缩小
+  // 有一处量不出来就整张图记为 null：宁可按读者拿到的尺寸处理，也不按别处的小尺寸缩小
   const note = (id, v) => {
     const cur = need.get(id);
     if (cur === null) return;
@@ -32,19 +30,8 @@ export async function imageScales(doc, width) {
   const crisp = c => /pixelated|crisp-edges/.test(c.imageRendering);
   const px = v => parseFloat(v) || 0;
 
-  for (const img of root.querySelectorAll('img')) {
-    const id = idOf(img.currentSrc || img.src);
-    if (!id) continue;
-    const c = win.getComputedStyle(img);
-    const nw = img.naturalWidth, nh = img.naturalHeight;
-    const bw = img.offsetWidth - px(c.paddingLeft) - px(c.paddingRight) - px(c.borderLeftWidth) - px(c.borderRightWidth);
-    const bh = img.offsetHeight - px(c.paddingTop) - px(c.paddingBottom) - px(c.borderTopWidth) - px(c.borderBottomWidth);
-    if (!nw || !nh || bw <= 0 || bh <= 0 || moving(img) || crisp(c)) { note(id, null); continue; }
-    const sx = bw / nw, sy = bh / nh;
-    const fit = c.objectFit;
-    const s = fit === 'cover' ? Math.max(sx, sy) : fit === 'contain' ? Math.min(sx, sy) : fit === 'none' ? 1 : fit === 'scale-down' ? Math.min(1, sx, sy) : Math.max(sx, sy);
-    note(id, Math.max(s * screen(img) * k, Math.min(1, VIEWER_W / nw)));
-  }
+  // 正文里的 <img> 读者点开就是全屏的 1080 宽版本，不管它在版面里显示多大
+  for (const img of root.querySelectorAll('img')) { const id = idOf(img.currentSrc || img.src); if (id) note(id, 1); }
 
   const sizes = new Map();
   const natural = url => {

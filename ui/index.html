@@ -41,11 +41,11 @@
     <p id="copyNote" class="muted" aria-live="polite">载入文章后可复制。</p>
     <p id="fetchLine" class="status" aria-live="polite" hidden></p>
     <div class="row small shrink-row">
-      <label><input type="checkbox" id="shrinkOn"> 压缩超过上限的图片</label>
+      <label><input type="checkbox" id="shrinkOn"> 压缩大图</label>
       <label for="shrinkKb">单张上限</label>
       <input id="shrinkKb" type="number" min="1" max="20000" step="50" inputmode="numeric">
       <span>KB</span>
-      <button type="button" class="help" data-tip="微信服务器下载每张图片最多等待约 0.5 秒，图片越大越容易超时。超过上限的图片会列入检查结果。勾选后，这些图片在上限内尽量保留原图的尺寸：微信转存图片时保留上传的分辨率，但会重新压缩画质，因此先在原尺寸下逐级降低画质（JPEG 最低到质量 70）；仍超过上限时，才缩小到上限内放得下的最大尺寸，且不小于正文显示所需的分辨率（正文中的图片至少 1290px 宽，读者点开全屏查看时仍然清晰）。有透明部分的图片存为 PNG。只压缩提供给微信服务器的副本，文章文件夹中的原文件不变。动图、SVG 与 BMP 不压缩。">?</button>
+      <button type="button" class="help" data-tip="读者在微信里看到、点开保存的图片最宽 1080px，更宽的图片由微信自己缩小、重新压缩，画质较差。勾选后，比 1080px 宽的图片先用 Lanczos 算法缩到 1080px 宽，画质从高到低逐级尝试，直到不超过单张上限；不到 1080px 宽但超过上限的图片，在原尺寸下降低画质。微信服务器下载每张图片最多等待约 0.5 秒，图片越大越容易超时；超过上限的图片会列入检查结果。有透明部分的图片存为 PNG。只压缩提供给微信服务器的副本，文章文件夹中的原文件不变。动图、SVG 与 BMP 不处理。">?</button>
     </div>
     <div class="row small">
       <label for="width">预览屏宽</label>
