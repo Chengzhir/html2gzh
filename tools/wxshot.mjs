@@ -9,8 +9,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import puppeteer from 'puppeteer-core';
-import { findChrome } from '../lib/chrome.mjs';
-import { NEUTRAL } from '../ui/convert/reader.js';
+import { findChrome } from '../lib/chrome.ts';
+import { NEUTRAL } from '../ui/convert/reader.ts';
 import { pixelDiff } from '../test/pixeldiff.mjs';
 
 const pos = [], AT = [];

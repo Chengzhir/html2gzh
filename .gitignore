@@ -3,3 +3,4 @@ test/out/
 .cache/
 settings.json
 test/fixture-webfont/fonts/
+ui/dist/

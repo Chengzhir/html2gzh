@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
-import { findChrome } from '../lib/chrome.mjs';
-import { previewDoc, readerImages } from '../ui/convert/reader.js';
+import { findChrome } from '../lib/chrome.ts';
+import { previewDoc, readerImages } from '../ui/convert/reader.ts';
 
 const VIEW_H = 900;
 // origin：先打开本机服务的一个页面再写入内容，原稿引用的本地字体（/a/…）与页面同源，不用跨域

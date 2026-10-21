@@ -1,6 +1,6 @@
 // 公众号阅读页模拟：正文外面套上阅读页的框架（标题、作者行、阅读数、底栏），浅色或深色。
 // 深色用微信公开的转换算法 mp-darkmode（ui/vendor）：在只允许脚本、不同源的隐藏 iframe 里跑，结果拿回来放进不允许脚本的预览 iframe
-import { READER_CSS, NEUTRAL, readerImages } from './convert/reader.js';
+import { READER_CSS, NEUTRAL, readerImages } from './convert/reader.ts';
 
 /** 正文区左右各 20px，阅读页不让正文铺满屏宽 */
 export const SIDE = 20;

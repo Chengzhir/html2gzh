@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
-import { findChrome } from '../lib/chrome.mjs';
+import { findChrome } from '../lib/chrome.ts';
 import { pickDefault } from '../test/ui.mjs';
 import { startServer } from '../test/serve.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));

@@ -3,7 +3,7 @@
 // boxes.txt 第一行是编辑器里根容器的宽度，第二行是 "标签,x,y,w,h" 空格分隔，坐标为相对根容器左上角
 import fs from 'node:fs';
 import puppeteer from 'puppeteer-core';
-import { findChrome } from '../lib/chrome.mjs';
+import { findChrome } from '../lib/chrome.ts';
 
 const W = +(process.argv[2] || 578);
 const file = process.argv[3] || 'test/out/wxboxes.txt';

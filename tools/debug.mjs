@@ -1,6 +1,6 @@
 // 原稿与成品逐元素偏差超过 0.2px 的列出来，附两边的 HTML 片段。用法：node tools/debug.mjs [文章路径]   默认用 test/fixture
 import puppeteer from 'puppeteer-core';
-import { findChrome } from '../lib/chrome.mjs';
+import { findChrome } from '../lib/chrome.ts';
 import { startServer } from '../test/serve.mjs';
 const ART = process.argv[2] || 'test/fixture';
 const srv = await startServer({ article: ART, img: 48970, ui: 48971 });

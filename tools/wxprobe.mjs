@@ -6,7 +6,7 @@
 //   node tools/wxprobe.mjs diff <预览链接> [发出的正文]      → 转换器成品整份比对：存下来的正文与发出的有哪些差异（合并计数），另存 test/out/diff-result.json
 import fs from 'node:fs';
 import puppeteer from 'puppeteer-core';
-import { findChrome } from '../lib/chrome.mjs';
+import { findChrome } from '../lib/chrome.ts';
 
 const OUT = 'test/out';
 const box = 'width:200px;height:36px;background:#dde5ef;color:#1f2937;font-size:13px;line-height:36px;padding:0 6px;margin:4px 0';

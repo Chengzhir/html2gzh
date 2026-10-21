@@ -6,10 +6,13 @@
   "license": "GPL-3.0-or-later",
   "type": "module",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
-    "start": "node server.mjs",
+    "build": "vite build",
+    "start": "node server.ts",
+    "check": "tsc -p .",
+    "pretest": "npm run build",
     "test": "node test/e2e.mjs && node test/e2e.mjs --svg && node test/e2e.mjs test/fixture-svg && node test/e2e.mjs test/fixture-webfont --svg"
   },
   "dependencies": {
@@ -19,6 +22,9 @@
     "sharp": "0.35.5"
   },
   "devDependencies": {
-    "subset-font": "2.9.0"
+    "@types/node": "26.6.5",
+    "subset-font": "2.9.0",
+    "typescript": "6.0.3",
+    "vite": "8.3.5"
   }
 }

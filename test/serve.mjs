@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.mjs');
+const SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.ts');
 
 /** → { proc, log(): 服务的输出, stop() } */
 export async function startServer({ article, img, ui, settings }) {

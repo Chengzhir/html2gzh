@@ -1,16 +1,16 @@
-import { convert } from './convert/index.js';
-import { DEFAULT_OPTS, parseRules } from './convert/fonts.js';
-import { WHY_TEXT } from './convert/outline.js';
+import { convert } from './convert/index.ts';
+import { DEFAULT_OPTS, parseRules } from './convert/fonts.ts';
+import { WHY_TEXT } from './convert/outline.ts';
 import { setTip } from './tip.js';
 import { readerDoc, darkHtml, SIDE } from './phone.js';
-import { readerImages } from './convert/reader.js';
-import { imageScales } from './convert/images.js';
-import { ASSET_ID, assetIdsIn } from './convert/assetid.js';
+import { readerImages } from './convert/reader.ts';
+import { imageScales } from './convert/images.ts';
+import { ASSET_ID, assetIdsIn } from './convert/assetid.ts';
 
 const $ = id => document.getElementById(id);
-// Windows 上用 serve.cmd 启动；别的系统在终端里跑 node server.mjs
+// Windows 上用 serve.cmd 启动；别的系统在终端里跑 node server.ts
 const WIN = /Windows/.test(navigator.userAgent);
-const SERVICE = WIN ? ' serve.cmd 窗口' : '运行 server.mjs 的终端';
+const SERVICE = WIN ? ' serve.cmd 窗口' : '运行 server.ts 的终端';
 if (!WIN) $('dropCmd').hidden = true;
 const ORIGIN = location.origin;
 const state = {
@@ -1033,4 +1033,5 @@ for (const id of ['paneA', 'paneB']) {
 window.__wxc = state;
 window.__wxcNotice = notice;
 window.__wxcBig = bigImages;
+window.__wxcScales = imageScales;
 poll();

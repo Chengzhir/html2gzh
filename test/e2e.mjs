@@ -6,15 +6,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import sharp from 'sharp';
-import { findChrome } from '../lib/chrome.mjs';
+import { findChrome } from '../lib/chrome.ts';
 import { alignUnits } from './align.mjs';
-import { previewDoc, readerImages } from '../ui/convert/reader.js';
-import { WX_ANIM_OK } from '../ui/convert/svg/dom.js';
+import { previewDoc, readerImages } from '../ui/convert/reader.ts';
+import { WX_ANIM_OK } from '../ui/convert/svg/dom.ts';
 import { settled, pickDefault } from './ui.mjs';
 import { buildWebfontFixture, serveRemote } from './webfonts.mjs';
 import { startServer } from './serve.mjs';
 import { pixelDiff as diffIn } from './pixeldiff.mjs';
-import { assetIdsIn } from '../ui/convert/assetid.js';
+import { assetIdsIn } from '../ui/convert/assetid.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -377,7 +377,7 @@ try {
   const ids = assetIdsIn(p).filter(id => /\.(png|jpe?g|gif|webp|svg)$/.test(id));
   if (ids.length) check((await raw(IMG, '/a/' + ids[0])).status === 200, '图床口能取到已登记图片');
   check((await raw(IMG, '/api/state')).status === 404, '图床口不暴露 API');
-  check((await raw(IMG, '/a/..%2f..%2fserver.mjs')).status === 404, '图床口路径穿越 404');
+  check((await raw(IMG, '/a/..%2f..%2fserver.ts')).status === 404, '图床口路径穿越 404');
   check((await raw(IMG, '/a/0000000000000000.png')).status === 404, '图床口未登记 id 404');
   const css = assetIdsIn(p).filter(id => id.endsWith('.css'));
   if (css.length) check((await raw(IMG, '/a/' + css[0])).status === 404, '图床口不出非图片文件');
@@ -472,19 +472,23 @@ try {
     const huge = await blob(await sharp({ create: { width: 4000, height: 4000, channels: 3, background: '#a88' } }).png().toBuffer(), 'png', 'huge.png');
     const hid = await blob(await sharp({ create: { width: 900, height: 900, channels: 3, background: '#8a8' } }).png().toBuffer(), 'png', 'hid.png');
     const edge = await blob(await sharp({ create: { width: 700, height: 700, channels: 3, background: '#aa8' } }).png().toBuffer(), 'png', 'edge.png');
-    const mp = await browser.newPage();
-    await mp.goto(`http://127.0.0.1:${UI}/__blank`);
-    await mp.setContent(`<div class="rich_media_content" style="width:335px">
+    const html = `<div class="rich_media_content" style="width:335px">
       <img src="/a/${wide}" style="display:block;width:100%">
       <div style="width:300px;height:200px;background:url(/a/${huge}) center/cover no-repeat"></div>
       <img src="/a/${hid}" style="display:none">
-      <div style="border:4px solid;border-image:url(/a/${edge}) 30 stretch;width:50px;height:50px"></div></div>`, { waitUntil: 'networkidle0' });
-    const sc = await mp.evaluate(async ids => {
-      const { imageScales } = await import('/convert/images.js');
-      const m = await imageScales(document, 335);
+      <div style="border:4px solid;border-image:url(/a/${edge}) 30 stretch;width:50px;height:50px"></div></div>`;
+    // 在页面里另开一个 iframe 放这段内容，用页面构建进去的 imageScales 量
+    const sc = await page.evaluate(async (html, ids) => {
+      const f = document.createElement('iframe');
+      f.style.cssText = 'position:fixed;left:-9999px;top:0;width:400px;height:600px;border:0';
+      document.body.appendChild(f);
+      await new Promise(r => { f.onload = r; f.srcdoc = html; });
+      const doc = f.contentDocument;
+      await Promise.all([...doc.images].map(i => i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r; })));
+      const m = await window.__wxcScales(doc, 335);
+      f.remove();
       return ids.map(id => m.has(id) ? m.get(id) : 'missing');
-    }, [wide, huge, hid, edge]);
-    await mp.close();
+    }, html, [wide, huge, hid, edge]);
     const near = (v, x) => typeof v === 'number' && Math.abs(v - x) < x * 0.01;
     check(sc[0] === 1 && near(sc[1], 200 / 4000 * 1354 / 335 * 1.5) && sc[2] === 1 && sc[3] === null,
       '按版面量出所需分辨率：正文 <img> 记为 1（含隐藏的），background-size: cover 按铺满的比例，border-image 记为未知', JSON.stringify(sc));
