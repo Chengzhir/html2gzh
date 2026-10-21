@@ -6,6 +6,8 @@ import { mergeWidths, annotateContainerWidths, stripTool, markIgnoreWidth } from
 import { DEFAULT_OPTS, parseRules, mobileNote } from './fonts.js';
 import { selectUnits, outline, decide, finalize, listFaces, webFamilies, webIn } from './outline.js';
 import { READER_CSS, NEUTRAL, previewDoc, readerImages, pinImages } from './reader.js';
+import { prepareSvgs, convertSvgs } from './svg/index.js';
+import { wechatClean, webkitFilter } from './wechat.js';
 
 /** 阅读页直接给这几个标签上色、不从父级继承（在线上文章正文里逐个标签实测得出）：转换时把继承到的颜色写到它们自己身上。
  *  blockquote 不在此列：预览/发表时它身上的 color 会被删，所以 structure.js 直接把它改成 section */
@@ -27,10 +29,11 @@ const FLOW = /^(block|flow-root|list-item)$/;
  * 输入已改写好图片地址的 HTML。按 width 与另一个宽度各转换一遍，合并成随宽度等比缩放的成品，
  * 再在多个正文宽度下与原稿逐元素比对。payload 里的本地图片地址由调用方换成公网地址。
  */
-export async function convert(html, { width, frame, verifyFrame, opts = {}, glyphs = null }) {
+export async function convert(html, { width, frame, verifyFrame, opts = {}, glyphs = null, raster = null }) {
   const o = { ...DEFAULT_OPTS, ...opts };
   const { rules: fontRules, bad: badRules } = parseRules(o.rules);
-  const ctx = { o, fontRules, glyphs, units: null, faces: null, web: null, pins: new Map(), notes: { miss: new Map(), server: '' } };
+  const ctx = { o, fontRules, glyphs, units: null, faces: null, web: null, pins: new Map(), notes: { miss: new Map(), server: '' },
+    svg: { raster, rasterCache: new Map(), spline: false } };
   const wb = width < 400 ? width + 64 : width - 64;
   const A = await convertAt(html, width, frame, ctx);
   const B = await convertAt(html, wb, frame, ctx);
@@ -54,7 +57,8 @@ export async function convert(html, { width, frame, verifyFrame, opts = {}, glyp
   // 内容结构检测就在 375/585/677 三个宽度下来量（见其 xr 数组），超出正文区的节点会被判"存在溢出问题"
   const overIds = new Set();
   for (const w of CHECK_WIDTHS.filter(w => w > 460 || w === 375)) for (const id of overflowing(await loadFrame(verifyFrame, previewDoc(mergedRaw), w))) overIds.add(id);
-  const { html: merged, n: ignored } = markIgnoreWidth(mergedRaw, [...overIds]);
+  const { html: marked, n: ignored } = markIgnoreWidth(mergedRaw, [...overIds]);
+  const merged = wechatClean(marked);
   if (ignored) F.fixed('超出版面', `${overIds.size} 处故意超出版面的元素（出血图、旋转色块等，原稿里被裁切）和它们的外层容器加了 data-ignore-width，免得粘贴后后台弹出的“内容结构检测”把它们报成溢出`, [...overIds]);
 
   // 主宽度排最后：verifyFrame 就是界面右边的预览窗，循环结束时它要停在用户选的宽度上
@@ -80,9 +84,10 @@ export async function convert(html, { width, frame, verifyFrame, opts = {}, glyp
   if (others.length) F.list.push({ level: 'warn', title: '其他宽度', text: others.map(([w, b]) => `正文 ${w}px 宽时 ${b.length} 个元素和原稿差了 1.5px 以上`).join('；'), ids: [...new Set(others.flatMap(([, b]) => b))] });
   else F.info('其他宽度', `换成其他常见手机（正文 ${phones.join('/')}px）和更宽的屏幕（${rest.join('/')}px，含公众号内容结构检测用的宽度）也逐元素和原稿一致`);
 
+  const payload = webkitFilter(stripTool(merged));
   return {
-    payload: stripTool(merged), preview: merged, original: A.original, findings: F.list, fonts: ctx.faces,
-    stats: { chars: stripTool(merged).length, elements: A.n, moved: A.moved, visualBad, verified, others,
+    payload, preview: merged, original: A.original, findings: F.list, fonts: ctx.faces,
+    stats: { chars: payload.length, elements: A.n, moved: A.moved, visualBad, verified, others,
       outline: outlineStat && { units: outlineStat.units, kept: outlineStat.kept, chars: outlineStat.chars, bytes: outlineStat.bytes } },
     debug: { tv: [...A.targetV], v: [...V], approx: stat.where,
       verdicts: outlineStat && outlineStat.verdicts.map((v, i) => ({ ...v, id: ctx.units[i].id, run: ctx.units[i].from != null, text: ctx.units[i].text.slice(0, 40) })) },
@@ -188,7 +193,7 @@ async function convertAt(html, width, frame, ctx) {
   const box = el => { const r = layoutBox(el), c = cs(el); return { pw: r.width - parseFloat(c.borderLeftWidth) - parseFloat(c.borderRightWidth), ph: r.height - parseFloat(c.borderTopWidth) - parseFloat(c.borderBottomWidth), c }; };
   const contentW = el => { const { pw, c } = box(el); return pw - parseFloat(c.paddingLeft) - parseFloat(c.paddingRight); };
   const envFor = (el, pseudoAbs) => ({
-    hit, rem, vw: win.innerWidth, fontRules: ctx.fontRules,
+    hit, rem, vw: win.innerWidth, fontRules: ctx.fontRules, svg: el.namespaceURI === 'http://www.w3.org/2000/svg' && pseudoAbs === undefined,
     cq: () => {
       for (let a = pseudoAbs !== undefined ? el : el.parentElement; a; a = a.parentElement) {
         if (cs(a).containerType !== 'normal') { const { ph, c } = box(a); return { w: contentW(a), h: ph - parseFloat(c.paddingTop) - parseFloat(c.paddingBottom) }; }
@@ -207,7 +212,7 @@ async function convertAt(html, width, frame, ctx) {
   const forcedOf = c => Object.fromEntries(FORCED.map(k => [k, c.getPropertyValue(k)]));
   const want = new Map();
   const selfColor = new Map();
-  for (const el of doc.body.querySelectorAll(SELF_COLORED)) selfColor.set(el, cs(el).color);
+  for (const el of doc.body.querySelectorAll(SELF_COLORED)) if (isHtmlEl(el)) selfColor.set(el, cs(el).color);
   const plans = [], pseudos = [];
   for (const el of doc.body.querySelectorAll('*')) {
     const b = matched.get(el);
@@ -226,6 +231,10 @@ async function convertAt(html, width, frame, ctx) {
       pseudos.push({ el, slot, text, style, forced: forcedOf(pc) });
     }
   }
+
+  // 样式表删掉之前：读下 SVG 里的 CSS 动画（要改写成 SMIL），数一下 HTML 元素上的 CSS 动画（公众号里不会动）
+  const svgState = prepareSvgs(doc);
+  const htmlAnims = new Set(doc.getAnimations().filter(a => a instanceof win.CSSAnimation && isHtmlEl(a.effect.target)).map(a => a.effect.target)).size;
 
   // 根容器只带上作者在 html/body 上声明过的继承属性，外加行高/字号/对齐（否则会被微信默认值顶掉）
   const declared = new Set(['line-height', 'font-size', 'text-align']);
@@ -269,6 +278,8 @@ async function convertAt(html, width, frame, ctx) {
     el.style.setProperty('color', color); colorFixed++;
   }
   dropVisuallyHidden(doc, F);
+  const svg = await convertSvgs(doc, svgState, ctx.svg);
+  for (const [level, title, text, els] of svg.findings) F[level](title, text, els);
   // 根容器自身是查询容器：原稿里没有容器祖先的 cqw 相对视口，成品里相对正文宽度，两者一致
   const root = doc.createElement('section');
   root.setAttribute(ID, 'root');
@@ -353,7 +364,7 @@ async function convertAt(html, width, frame, ctx) {
   if (hit.font) F.fixed('手机字体', `${hit.font} 处字体栈补上了 iOS/安卓自带的近似字体（公众号用不了网页字体，读者手机上也没有电脑上的字体）`);
   if (ws > 200) F.fixed('空白', `清掉 ${ws} 个标签间的空白字符（手机端会把它们显示成多出来的空行）`);
   if (notes.fontface) F.warn('网页字体', `${notes.fontface} 个 @font-face 字体用不了，读者看到的是手机自带字体；字宽不同，换行位置可能和原稿不一样`);
-  if (notes.keyframes) F.warn('动画', `${notes.keyframes} 个动画（@keyframes）在公众号里不会动，元素停在没有动画时的样子；原稿如果靠动画淡入，粘贴后可能直接看不见，在右边预览里核对一下`);
+  if (htmlAnims) F.warn('动画', `${htmlAnims} 个 HTML 元素的 CSS 动画在公众号里不会动，元素停在没有动画时的样子；原稿如果靠动画淡入，粘贴后可能直接看不见，在右边预览里核对一下（SVG 里的动画已改写成 SMIL，不在此列）`);
   if (notes.dynamic) F.warn('交互样式', `${notes.dynamic} 条 :hover/:focus 等交互样式没有效果，已忽略`);
   if (notes.otherPseudo) F.warn('伪元素', `${notes.otherPseudo} 条 ::marker/::first-line 等规则无法转换，已忽略`);
   if (notes.unreadable || notes.imports) F.warn('样式表', `${notes.unreadable + notes.imports} 个样式表或 @import 读不到，相关样式缺失`);

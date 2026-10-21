@@ -147,7 +147,8 @@ export const DROP = /^(content|container-name|transition(-.*)?|animation(-.*)?|w
 export function toStyle(sorted, cs, env, tmp) {
   tmp.removeAttribute('style');
   for (const d of sorted) {
-    if (d.prop.startsWith('--') || DROP.test(d.prop)) continue;
+    // SVG 里 pointer-events 决定点哪儿能触发动画，要留着
+    if (d.prop.startsWith('--') || DROP.test(d.prop) && !(env.svg && d.prop === 'pointer-events')) continue;
     let v = d.pending ? cs.getPropertyValue(d.prop) : substVars(d.value, cs);
     if (v == null || v === '') { env.hit.badVar++; continue; }
     v = convertUnits(d.prop, v, env);

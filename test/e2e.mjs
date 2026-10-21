@@ -9,6 +9,7 @@ import puppeteer from 'puppeteer-core';
 import { findChrome } from '../lib/chrome.mjs';
 import { alignUnits } from './align.mjs';
 import { previewDoc, readerImages } from '../ui/convert/reader.js';
+import { WX_ANIM_OK } from '../ui/convert/svg/dom.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -123,6 +124,19 @@ try {
   const wrongColor = Object.keys(ca).filter(k => k in cb && ca[k] !== cb[k]);
   check(!wrongColor.length, '文字颜色与原稿一致', wrongColor.slice(0, 4).map(k => `${k}: ${ca[k]} → ${cb[k]}`).join(' | '));
   check(count(/<(style|script|link)\b/g) === 0, '没有 style/script/link');
+  const svgLeft = await page.evaluate(([html, ok]) => {
+    const d = document.createElement('div'); d.innerHTML = html;
+    const out = [];
+    for (const e of d.querySelectorAll('svg, svg *')) {
+      if (e.hasAttribute('id') || e.hasAttribute('class')) out.push(`${e.localName} 有 id/class`);
+      if (/^(animate|set)$/.test(e.localName) && !ok.includes(e.getAttribute('attributeName'))) out.push(`${e.localName} ${e.getAttribute('attributeName')}`);
+      if (e.namespaceURI === 'http://www.w3.org/1999/xhtml' && /^(animate|set|animatetransform|animatemotion)$/.test(e.localName)) out.push('foreignObject 里的动画');
+      for (const a of e.attributes) if (/url\(\s*["']?#/.test(a.value) || a.name === 'href' && a.value.startsWith('#') || a.name.startsWith('xlink:')) out.push(`${e.localName} ${a.name}`);
+      if (e.localName === 'image' && !/^https?:\/\/mmbiz\./.test(e.getAttribute('href') || '')) out.push('非 mmbiz 的 <image>');
+    }
+    return out;
+  }, [p, [...WX_ANIM_OK]]);
+  check(!svgLeft.length, 'SVG 不依赖公众号会删的东西（id/class/xlink、url(#)、白名单外的动画、本机 <image>）', svgLeft.slice(0, 4).join(' | '));
   check(count(/href="#/g) === 0, '没有页内锚点');
   check(count(/data-wxc/g) === 0, '没有工具属性');
   check(!r.findings.some(f => f.title === '动画') && !/extfake|extvar/.test(p), '忽略非文章样式表（扩展注入）');
@@ -175,39 +189,36 @@ try {
   // 逐像素：原稿与成品各截一张整页图，在页面里用 canvas 比
   const width = await page.$eval('#width', e => +e.value);
   const prevHtml = previewDoc(r.preview);
-  // masks 只在截成品时传：成品要先跑一遍阅读页的图片尺寸脚本（小数宽度版，见 readerImages 的 exact）
-  const shot = async (html, w, masks) => {
+  // masks 只在截成品时传：成品要先跑一遍阅读页的图片尺寸脚本（小数宽度版，见 readerImages 的 exact）。
+  // 动画一律冻结在时刻 t（默认 0）：CSS 动画暂停并跳到 t，每个 svg（嵌套的有自己的时间线）的 SMIL 也跳到 t；
+  // use 影子树里的 CSS 动画 getAnimations 拿不到，靠 CDP 把整页时间线的播放速度设成 0（只能停在 0）。
+  // clicks：先点一遍标了 data-click 的元素，再跳到这个时刻。非 0 时刻时，标了 data-sample-skip 的也屏蔽
+  const shot = async (html, w, masks, t = 0, clicks = null) => {
     const pg = await browser.newPage();
     await pg.setViewport({ width: w, height: 800 });
+    const cdp = await pg.createCDPSession();
+    await cdp.send('Animation.enable').then(() => cdp.send('Animation.setPlaybackRate', { playbackRate: 0 })).catch(() => {});
     await pg.setContent(html, { waitUntil: 'networkidle0' });
     await pg.evaluate(() => document.fonts.ready);
     if (masks) await pg.evaluate(`(${readerImages})(document, true)`);
+    const freeze = t => pg.evaluate(t => {
+      for (const a of document.getAnimations()) { a.pause(); a.currentTime = t * 1000; }
+      for (const s of document.querySelectorAll('svg')) { s.pauseAnimations(); s.setCurrentTime(t); }
+    }, t);
+    await freeze(t);
+    if (clicks != null) {
+      for (const h of await pg.$$('[data-click]')) await h.click().catch(() => {});
+      await freeze(clicks);
+    }
     // 不比像素的区域：轮廓（另做逐单元对位检查），以及测试稿里标了 data-pixel-skip 的元素
-    if (masks) masks.push(...await pg.evaluate(() => [...document.querySelectorAll('svg[data-wxc-unit]')].map(s => s.parentElement)
-      .concat([...document.querySelectorAll('[data-pixel-skip]')])
-      .map(e => { const b = e.getBoundingClientRect(); return [b.left + scrollX, b.top + scrollY, b.width, b.height]; })));
+    if (masks) masks.push(...await pg.evaluate(sampled => [...document.querySelectorAll('svg[data-wxc-unit]')].map(s => s.parentElement)
+      .concat([...document.querySelectorAll(sampled ? '[data-pixel-skip],[data-sample-skip]' : '[data-pixel-skip]')])
+      .map(e => { const b = e.getBoundingClientRect(); return [b.left + scrollX, b.top + scrollY, b.width, b.height]; }), !!(t || clicks != null)));
     const b = await pg.screenshot({ fullPage: true, encoding: 'base64' });
     await pg.close();
     return b;
   };
-  if (SVG_MODE) {
-    // 轮廓区域单独量：逐个单元的亚像素偏移与墨量（3 倍像素密度，接近手机）。
-    // 偏移门槛：Chrome 把 svg 盒子对齐到整 CSS 像素而字形保留小数位置，横向差最多 0.5px；纵向文字基线也取整，两次取整最多差 1px
-    console.log('\n轮廓对位（3x）');
-    const al = await alignUnits(browser, r.original, prevHtml, width, 3);
-    const off = al.filter(a => Math.abs(a.dx) > 0.55 || Math.abs(a.dy) > 1.1 || a.ink < 0.85 || a.ink > 1.15);
-    if (al.length) check(!off.length, '每个轮廓与原稿字形对齐（横向 ≤0.55px、纵向 ≤1.1px、墨量差 ≤15%）',
-      off.length ? off.slice(0, 4).map(a => `#${a.unit} dx${a.dx} dy${a.dy} ink${a.ink}`).join(' | ')
-        : `${al.length} 段，最大 |dx| ${Math.max(...al.map(a => Math.abs(a.dx))).toFixed(2)}、|dy| ${Math.max(...al.map(a => Math.abs(a.dy))).toFixed(2)}，墨量 ${Math.min(...al.map(a => a.ink)).toFixed(2)}–${Math.max(...al.map(a => a.ink)).toFixed(2)}`);
-  }
-  console.log('\n逐像素');
-  for (const w of [width, 320, 460, 637]) {
-  const sfx = w === width ? '' : '-' + w;
-  const masks = [];
-  const [a, b] = [await shot(r.original, w), await shot(prevHtml, w, masks)];
-  fs.writeFileSync(path.join(OUT, `original${sfx}.png`), Buffer.from(a, 'base64'));
-  fs.writeFileSync(path.join(OUT, `converted${sfx}.png`), Buffer.from(b, 'base64'));
-  const diff = await page.evaluate(async (a, b, masks) => {
+  const pixelDiff = (a, b, masks) => page.evaluate(async (a, b, masks) => {
     const load = s => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = 'data:image/png;base64,' + s; });
     const [ia, ib] = await Promise.all([load(a), load(b)]);
     const w = Math.min(ia.width, ib.width), h = Math.min(ia.height, ib.height);
@@ -233,12 +244,48 @@ try {
     let s = ''; for (const v of buf) s += String.fromCharCode(v);
     return { bad, area, total: w * h, ha: ia.height, hb: ib.height, png: btoa(s) };
   }, a, b, masks);
+  if (SVG_MODE) {
+    // 轮廓区域单独量：逐个单元的亚像素偏移与墨量（3 倍像素密度，接近手机）。
+    // 偏移门槛：Chrome 把 svg 盒子对齐到整 CSS 像素而字形保留小数位置，横向差最多 0.5px；纵向文字基线也取整，两次取整最多差 1px
+    console.log('\n轮廓对位（3x）');
+    const al = await alignUnits(browser, r.original, prevHtml, width, 3);
+    const off = al.filter(a => Math.abs(a.dx) > 0.55 || Math.abs(a.dy) > 1.1 || a.ink < 0.85 || a.ink > 1.15);
+    if (al.length) check(!off.length, '每个轮廓与原稿字形对齐（横向 ≤0.55px、纵向 ≤1.1px、墨量差 ≤15%）',
+      off.length ? off.slice(0, 4).map(a => `#${a.unit} dx${a.dx} dy${a.dy} ink${a.ink}`).join(' | ')
+        : `${al.length} 段，最大 |dx| ${Math.max(...al.map(a => Math.abs(a.dx))).toFixed(2)}、|dy| ${Math.max(...al.map(a => Math.abs(a.dy))).toFixed(2)}，墨量 ${Math.min(...al.map(a => a.ink)).toFixed(2)}–${Math.max(...al.map(a => a.ink)).toFixed(2)}`);
+  }
+  console.log('\n逐像素');
+  for (const w of [width, 320, 460, 637]) {
+  const sfx = w === width ? '' : '-' + w;
+  const masks = [];
+  const [a, b] = [await shot(r.original, w), await shot(prevHtml, w, masks)];
+  fs.writeFileSync(path.join(OUT, `original${sfx}.png`), Buffer.from(a, 'base64'));
+  fs.writeFileSync(path.join(OUT, `converted${sfx}.png`), Buffer.from(b, 'base64'));
+  const diff = await pixelDiff(a, b, masks);
   fs.writeFileSync(path.join(OUT, `diff${sfx}.png`), Buffer.from(diff.png, 'base64'));
   const ratio = diff.bad / (diff.total - diff.area);
   check(Math.abs(diff.ha - diff.hb) <= 2, `${w}px 页面高度一致`, `${diff.ha} vs ${diff.hb}`);
   // 主宽度要求 0.3%；其他宽度下图片重采样、斜排文字的亚像素位置不同，放宽到 0.5%（逐元素比对另有 1.5px 硬门槛）
   check(ratio < (w === width ? 0.003 : 0.005), `${w}px 差异像素 < ${w === width ? '0.3' : '0.5'}%` + (diff.area ? `（不含屏蔽区域 ${(diff.area / diff.total * 100).toFixed(1)}%）` : ''),
     `${(ratio * 100).toFixed(3)}%（test/out/diff${sfx}.png）`);
+  }
+
+  // SVG 动画：主宽度下再冻结在几个时刻比一次，最后点一遍 data-click 元素看点击动画
+  if (/<(animate|set|animateTransform|animateMotion)\b|@keyframes/.test(r.original)) {
+    console.log('\n动画采样');
+    const bad = [];
+    for (const [t, clicks] of [[0.37, null], [1.13, null], [2.71, null], [0.5, 0.75], [0.5, 1.7]]) {
+      const masks = [];
+      const [a, b] = [await shot(r.original, width, null, t, clicks), await shot(prevHtml, width, masks, t, clicks)];
+      const d = await pixelDiff(a, b, masks);
+      const ratio = d.bad / (d.total - d.area);
+      if (ratio >= 0.003) {
+        const tag = clicks == null ? `t=${t}s` : `点击后 ${Math.round((clicks - t) * 100) / 100}s`;
+        bad.push(`${tag} ${(ratio * 100).toFixed(2)}%`);
+        fs.writeFileSync(path.join(OUT, `diff-anim-${t}-${clicks ?? 'x'}.png`), Buffer.from(d.png, 'base64'));
+      }
+    }
+    check(!bad.length, '动画在各采样时刻与原稿一致（差异像素 < 0.3%）', bad.join(' | ') || '5 个时刻');
   }
 
   if (SVG_MODE) {

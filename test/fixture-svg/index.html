@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>svg fixture</title>
+<!-- SVG 兼容的测试稿：每段一种写法。data-click：e2e 在暂停的时间线上点它再采样；
+     data-sample-skip：原稿的动画在 use 影子树里或写在最外层 svg 上，e2e 控制不了它的时间，只比 t=0；data-pixel-skip：转换后必然不同（近似） -->
+<style>
+body{margin:8px;font:15px/1.6 sans-serif;color:#222}
+.page{container-type:inline-size}
+.case{margin:0 0 4cqw}
+.case p{margin:0 0 1cqw;font-size:12px;color:#666}
+.case svg{display:block;width:100%;height:auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.2}}
+@keyframes draw{from{stroke-dashoffset:300}to{stroke-dashoffset:0}}
+@keyframes tint{from{fill:#2f6db3}to{fill:#dc2626}}
+@keyframes float{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(12px,-10%) scale(1.2)}}
+@keyframes slide{from{cx:20px}to{cx:180px}}
+@keyframes bob{50%{transform:translateY(-6px)}}
+.spin{transform-box:fill-box;transform-origin:center;animation:spin 2s linear infinite}
+.pulse{animation:pulse 1.6s ease-in-out .3s infinite alternate}
+.draw{stroke-dasharray:300;animation:draw 2.4s cubic-bezier(.2,.8,.2,1) .5s both}
+.tint{animation:tint 2s steps(4,end) forwards}
+.float{transform-origin:50% 50%;animation:float 3s ease infinite}
+.slide{animation:slide 2.5s ease-in-out infinite alternate}
+.blade{transform-origin:12px 12px;animation:spin 3s linear infinite}
+.bob{animation:bob 2s ease-in-out infinite}
+</style></head>
+<body><div class="page">
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="star" viewBox="0 0 24 24"><path d="M12 2l3 6.5 7 .9-5.1 4.8 1.3 7L12 17.8 5.8 21.2l1.3-7L2 9.4l7-.9z"/></symbol>
+  <symbol id="fan" viewBox="0 0 24 24"><path class="blade" d="M12 2 L14 12 L10 12Z" fill="#dc2626"/><circle cx="12" cy="12" r="2" fill="#333"/></symbol>
+</svg>
+
+<section class="case"><p>SMIL：点击变色、循环淡入淡出、绕中心旋转</p>
+<svg viewBox="0 0 200 60"><rect data-click x="10" y="10" width="40" height="40" fill="#dc2626"><animate attributeName="fill" to="#2f6db3" begin="click" dur="0.6s" fill="freeze"/></rect>
+<circle cx="100" cy="30" r="16" fill="#2a2"><animate attributeName="opacity" values="1;.2;1" dur="1.6s" repeatCount="indefinite"/></circle>
+<rect x="150" y="14" width="32" height="32" fill="#e90"><animateTransform attributeName="transform" type="rotate" from="0 166 30" to="360 166 30" dur="2s" repeatCount="indefinite"/></rect></svg></section>
+
+<section class="case"><p>use 引用 symbol（href 与 xlink:href）</p>
+<svg viewBox="0 0 200 60"><use href="#star" x="10" y="5" width="50" height="50" fill="#dc2626"/><use xlink:href="#star" x="70" y="5" width="50" height="50" fill="#2f6db3" transform="rotate(10 95 30)"/></svg></section>
+
+<section class="case" data-sample-skip><p>use 引用的 symbol 里有 CSS 动画</p>
+<svg viewBox="0 0 200 60"><use href="#fan" x="10" y="5" width="50" height="50"/><use href="#fan" x="140" y="5" width="50" height="50"/></svg></section>
+
+<section class="case"><p>CSS 动画：fill-box 中心旋转、带延迟的往返淡出、steps 变色、view-box 原点的平移缩放</p>
+<svg viewBox="0 0 200 60"><rect class="spin" x="10" y="15" width="40" height="30" fill="#dc2626"/><circle class="pulse" cx="80" cy="30" r="16" fill="#2a2"/>
+<rect class="tint" x="110" y="15" width="30" height="30"/><g class="float"><rect x="155" y="18" width="24" height="24" fill="#e90"/></g></svg></section>
+
+<section class="case"><p>CSS 动画：画线（cubic-bezier、延迟、both）、圆心 cx</p>
+<svg viewBox="0 0 200 60"><path class="draw" d="M10 15 H190" stroke="#2f6db3" stroke-width="4" fill="none"/><circle class="slide" cx="20" cy="42" r="8" fill="#dc2626"/></svg></section>
+
+<section class="case"><p>SMIL 白名单外的属性：cx、display、stroke-dasharray</p>
+<svg viewBox="0 0 200 60"><circle cx="20" cy="15" r="8" fill="#dc2626"><animate attributeName="cx" values="20;180;20" dur="3s" repeatCount="indefinite"/></circle>
+<rect data-click x="10" y="30" width="24" height="24" fill="#333"><set attributeName="display" to="none" begin="click"/></rect>
+<path d="M50 42 H190" stroke="#2f6db3" stroke-width="4" fill="none" stroke-dasharray="0 140"><animate attributeName="stroke-dasharray" values="0 140;140 0" dur="2s" fill="freeze"/></path></svg></section>
+
+<section class="case"><p>时间依赖：a1.end+0.2s、本元素点击接力；点别的元素触发（会报出来）</p>
+<svg viewBox="0 0 200 60"><rect x="10" y="10" width="30" height="30" fill="#dc2626"><animate id="a1" attributeName="x" values="10;60" begin="0.5s" dur="1s" fill="freeze"/><animate attributeName="y" values="10;25" begin="a1.end+0.2s" dur="0.6s" fill="freeze"/></rect>
+<circle id="k" data-click cx="120" cy="30" r="14" fill="#2a2"><animate id="k1" attributeName="r" to="22" begin="k.click" dur="0.3s" fill="freeze"/><animate attributeName="fill" to="#dc2626" begin="k1.end" dur="0.4s" fill="freeze"/></circle>
+<rect id="btn" x="160" y="6" width="30" height="24" fill="#999"/><circle cx="175" cy="48" r="6" fill="#e90"><animate attributeName="r" to="10" begin="btn.click" dur="0.3s" fill="freeze"/></circle></svg></section>
+
+<section class="case"><p>依赖 id 的静态效果：线性/径向渐变、投影滤镜、圆形裁切图片、渐变文字</p>
+<svg viewBox="0 0 200 60"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#dc2626"/><stop offset="1" stop-color="#2f6db3"/></linearGradient>
+<radialGradient id="rg"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#2a2"/></radialGradient>
+<filter id="sh" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur in="SourceAlpha" stdDeviation="1.5"/><feOffset dx="2" dy="2" result="o"/><feFlood flood-color="#000" flood-opacity=".45"/><feComposite in2="o" operator="in"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+<clipPath id="cc"><circle cx="150" cy="30" r="22"/></clipPath></defs>
+<rect x="6" y="8" width="40" height="44" rx="6" fill="url(#lg)"/><circle cx="72" cy="30" r="20" fill="url(#rg)"/><rect x="100" y="12" width="20" height="36" fill="#e90" filter="url(#sh)"/>
+<image href="pic.png" x="128" y="8" width="44" height="44" preserveAspectRatio="xMidYMid slice" clip-path="url(#cc)"/>
+<text x="178" y="36" font-size="14" font-weight="700" fill="url(#lg)">字</text></svg></section>
+
+<section class="case"><p>有动画又依赖 id：自转的渐变块（整体动画→位图）、动 fill 的投影（→CSS 滤镜）、矩形裁切擦除、动半径的多边形裁切</p>
+<svg viewBox="0 0 200 60"><defs><linearGradient id="lg2"><stop offset="0" stop-color="#e90"/><stop offset="1" stop-color="#dc2626"/></linearGradient>
+<filter id="sh2" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur in="SourceAlpha" stdDeviation="1.5"/><feOffset dx="2" dy="2" result="o"/><feFlood flood-color="#000" flood-opacity=".45"/><feComposite in2="o" operator="in"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+<clipPath id="wipe"><rect x="90" y="8" width="0" height="44"><animate attributeName="width" values="0;50" dur="2s" fill="freeze"/></rect></clipPath>
+<clipPath id="tri"><polygon points="160,6 196,54 124,54"/></clipPath></defs>
+<rect x="8" y="12" width="36" height="36" fill="url(#lg2)"><animateTransform attributeName="transform" type="rotate" from="0 26 30" to="360 26 30" dur="3s" repeatCount="indefinite"/></rect>
+<rect x="56" y="12" width="22" height="36" filter="url(#sh2)" fill="#2a2"><animate attributeName="fill" values="#2a2;#2f6db3" dur="2s" fill="freeze"/></rect>
+<g clip-path="url(#wipe)"><rect x="90" y="8" width="50" height="44" fill="#2f6db3"/><circle cx="115" cy="30" r="12" fill="#fff"/></g>
+<circle cx="160" cy="36" r="10" fill="#dc2626" clip-path="url(#tri)"><animate attributeName="r" values="10;30;10" dur="2.4s" repeatCount="indefinite"/></circle></svg></section>
+
+<section class="case" data-pixel-skip><p>有动画的渐变图形（只能换成平均色，近似）</p>
+<svg viewBox="0 0 200 60"><defs><linearGradient id="lg3"><stop offset="0" stop-color="#dc2626"/><stop offset="1" stop-color="#2f6db3"/></linearGradient></defs>
+<circle cx="30" cy="30" r="14" fill="url(#lg3)"><animate attributeName="r" values="14;22;14" dur="2s" repeatCount="indefinite"/></circle></svg></section>
+
+<section class="case"><p>图片（slice 裁切、x 动画）、触摸触发、mpath 路径动画、链接、普通文字</p>
+<svg viewBox="0 0 200 60"><image href="pic.png" x="4" y="6" width="50" height="48" preserveAspectRatio="xMidYMid slice"><animate attributeName="x" values="4;14;4" dur="2s" repeatCount="indefinite"/></image>
+<rect x="64" y="10" width="20" height="20" fill="#e90"><animate attributeName="opacity" to="0.3" begin="touchstart" dur="0.4s" fill="freeze"/></rect>
+<path id="track" d="M100 50 C 120 0, 160 0, 180 50" fill="none" stroke="#ccc"/><circle r="5" fill="#dc2626"><animateMotion dur="2.5s" repeatCount="indefinite"><mpath href="#track"/></animateMotion></circle>
+<a href="https://example.com/"><rect x="64" y="36" width="20" height="16" fill="#2f6db3"/></a>
+<text x="10" y="58" font-size="7" fill="#333">普通文字留成矢量</text></svg></section>
+
+<section class="case" data-sample-skip><p>写在最外层 svg 上的 CSS 动画（公众号里留不下，会报出来）</p>
+<svg class="bob" viewBox="0 0 200 40"><rect x="80" y="10" width="40" height="20" fill="#2f6db3"/></svg></section>
+</div></body></html>

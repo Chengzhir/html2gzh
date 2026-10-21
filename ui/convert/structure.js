@@ -80,7 +80,8 @@ export function keepShapes(doc, root, findings) {
   const win = doc.defaultView;
   let shapes = 0, dropped = 0;
   for (const el of [...root.querySelectorAll('*')].reverse()) {
-    if (!isHtmlEl(el) || VOID.has(el.localName) || el === root) continue;
+    // foreignObject 里的 HTML 由 SVG 自己排版，不按段落规则改
+    if (!isHtmlEl(el) || VOID.has(el.localName) || el === root || el.closest('svg')) continue;
     if (el.children.length || el.textContent.replace(/\u00a0/g, ' ').trim()) continue;
     const r = el.getBoundingClientRect();
     const c = win.getComputedStyle(el);
@@ -160,7 +161,8 @@ export function keepNoWrap(doc, root) {
     if (!isHtmlEl(el) || !nowrap(el) || (el.parentElement && el.parentElement !== root && nowrap(el.parentElement))) continue;
     const walker = doc.createTreeWalker(el, 4);
     const texts = [];
-    while (walker.nextNode()) if (walker.currentNode.data) texts.push(walker.currentNode);
+    // SVG 文字按字定位（x 列表一个值对应一个字），插连接符会错位
+    while (walker.nextNode()) if (walker.currentNode.data && isHtmlEl(walker.currentNode.parentElement)) texts.push(walker.currentNode);
     texts.forEach((t, i) => {
       const chars = [...t.data.replace(/ /g, '\u00a0')];
       t.data = chars.join(WJ) + (i < texts.length - 1 ? WJ : '');

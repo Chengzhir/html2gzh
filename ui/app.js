@@ -80,7 +80,7 @@ async function prepare(html, entryRel) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const baseDir = dirOf(entryRel);
   // missing 只放 <img> 的图（粘贴后变错误卡片、草稿存不了）；样式表、CSS 与 svg <image> 引用的文件缺了只影响效果
-  const report = { missing: [], sheets: [], refs: [], remote: 0, dataUri: 0, svgImage: 0, local: 0 };
+  const report = { missing: [], sheets: [], refs: [], remote: 0, dataUri: 0, local: 0 };
 
   const sheets = [];
   for (const link of [...doc.querySelectorAll('link[rel~="stylesheet"][href]')]) {
@@ -131,7 +131,7 @@ async function prepare(html, entryRel) {
     if (e.hasAttribute('src')) e.setAttribute('src', swap(e.getAttribute('src'), baseDir));
   });
   doc.querySelectorAll('image').forEach(e => {
-    for (const a of ['href', 'xlink:href']) if (e.hasAttribute(a)) { e.setAttribute(a, swap(e.getAttribute(a), baseDir, report.refs)); report.svgImage++; }
+    for (const a of ['href', 'xlink:href']) if (e.hasAttribute(a)) e.setAttribute(a, swap(e.getAttribute(a), baseDir, report.refs));
   });
   doc.querySelectorAll('[style]').forEach(e => e.setAttribute('style', swapCss(e.getAttribute('style'), baseDir)));
   // 打标记：转换时只认文章自己的样式表，浏览器扩展往 iframe 里注入的样式不算
@@ -240,6 +240,8 @@ $('rulesReset').onclick = () => { $('rules').value = DEFAULT_OPTS.rules; saveOpt
 renderOpts();
 
 const glyphs = body => api('/api/glyphs', body);
+/** SVG 里依赖 id 的部分画成的位图：登记到图床口，返回地址（复制时和其他图片一起换成取图地址） */
+const raster = async uri => { const id = await uploadDataUri(uri); if (!id) throw new Error('位图登记失败'); return ORIGIN + '/a/' + id; };
 let again = false;
 /** 转换进行中又改了设置：等这一轮结束再按新设置转一次 */
 function rerun() { if (state.busy) again = true; else run(); }
@@ -263,7 +265,7 @@ async function run() {
     showCurrent(label, where);
     const prep = await prepare(html, entry);
     banner(opts.fontMode === 'svg' ? '转换中…（大字转轮廓第一次要启动字体服务，稍慢）' : '转换中…');
-    const res = await convert(prep.html, { width: width(), frame: $('scratch'), verifyFrame: $('paneB'), opts, glyphs });
+    const res = await convert(prep.html, { width: width(), frame: $('scratch'), verifyFrame: $('paneB'), opts, glyphs, raster });
     state.result = { ...res, report: prep.report };
     for (const f of [$("paneA"), $("paneB")]) { f.style.width = width() + "px"; f.style.height = ""; }
     $('paneA').srcdoc = res.original;
@@ -296,7 +298,6 @@ function renderChecks() {
   if (report.sheets.length) items.push({ level: 'warn', title: '样式表', text: `${report.sheets.length} 个样式表没有载入（站外的不会载入，本地的没找到）：${few(report.sheets)}。两边预览里都没有它的效果`, ids: [] });
   if (report.refs.length) items.push({ level: 'warn', title: '引用的文件', text: `样式或 SVG 里引用的 ${report.refs.length} 个文件找不到（字体、背景图等）：${few(report.refs)}`, ids: [] });
   if (report.dataUri) items.push({ level: 'fixed', title: '内嵌图片', text: `${report.dataUri} 张 data: 图片转成了文件（微信不收 data: 图片）`, ids: [] });
-  if (report.svgImage) items.push({ level: 'warn', title: 'SVG 里的图片', text: `${report.svgImage} 张放在 SVG 里的图片（<image>）粘贴后显示不出来，微信会删掉它们的地址；能改的话换成普通的 <img>`, ids: [] });
   if (report.remote) items.push({ level: 'info', title: '网络图片', text: `${report.remote} 张网络图片由微信直接去原网址取，对方开了防盗链就取不到`, ids: [] });
   if (stats.visualBad.length) items.push({ level: 'warn', title: '和原稿不一致', text: `${stats.visualBad.length} 个元素粘贴后的位置或尺寸与原稿相差超过 1.5px`, ids: stats.visualBad });
   else {

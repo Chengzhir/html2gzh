@@ -10,7 +10,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node test/e2e.mjs && node test/e2e.mjs --svg"
+    "test": "node test/e2e.mjs && node test/e2e.mjs --svg && node test/e2e.mjs test/fixture-svg"
   },
   "dependencies": {
     "fontkit": "2.0.4",
