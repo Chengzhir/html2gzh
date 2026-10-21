@@ -3,8 +3,8 @@ import { collectRules, matchRules, cascadeOrder, toStyle } from './cascade.js';
 import { convertPositions, correctOffsets, INHERITED } from './position.js';
 import { cleanStructure, keepShapes, squashWhitespace, keepNoWrap, cleanAttributes } from './structure.js';
 import { mergeWidths, annotateContainerWidths, stripTool, markIgnoreWidth } from './responsive.js';
-import { DEFAULT_OPTS, parseRules, mobileNote } from './fonts.js';
-import { selectUnits, outline, decide, finalize, listFaces, webFamilies, webIn } from './outline.js';
+import { DEFAULT_OPTS, REF_W, parseRules, phoneFonts } from './fonts.js';
+import { planFonts, outline, decide, finalize, webFamilies, WHY_TEXT } from './outline.js';
 import { READER_CSS, NEUTRAL, previewDoc, readerImages, pinImages } from './reader.js';
 import { prepareSvgs, convertSvgs } from './svg/index.js';
 import { wechatClean, webkitFilter } from './wechat.js';
@@ -32,9 +32,16 @@ const FLOW = /^(block|flow-root|list-item)$/;
 export async function convert(html, { width, frame, verifyFrame, opts = {}, glyphs = null, raster = null }) {
   const o = { ...DEFAULT_OPTS, ...opts };
   const { rules: fontRules, bad: badRules } = parseRules(o.rules);
-  const ctx = { o, fontRules, glyphs, units: null, faces: null, web: null, pins: new Map(), notes: { miss: new Map(), server: '' },
-    svg: { raster, rasterCache: new Map(), spline: false } };
+  const ctx = { o, fontRules, glyphs, plan: null, web: null, pins: new Map(), notes: { miss: new Map(), server: '' },
+    sizes: { A: null, B: null }, svg: { raster, rasterCache: new Map(), spline: false } };
   const wb = width < 400 ? width + 64 : width - 64;
+  // 字体表的字号按 335px 正文宽折算：在两个转换宽度下量原稿字号，线性插值。主宽度就是 335 时不用量
+  if (width !== REF_W) {
+    const pd = await loadFrame(frame, withNeutral(html), wb);
+    tagIds(pd);
+    ctx.sizes.B = readSizes(pd);
+  }
+  ctx.sizes.t = (REF_W - width) / (wb - width);
   const A = await convertAt(html, width, frame, ctx);
   const B = await convertAt(html, wb, frame, ctx);
   let pa = A.preview, pb = B.preview, outlineStat = null;
@@ -43,14 +50,13 @@ export async function convert(html, { width, frame, verifyFrame, opts = {}, glyp
     pa = finalize(pa, A.outlined, verdicts);
     pb = finalize(pb, B.outlined, verdicts);
     outlineStat = { units: verdicts.length, verdicts, kept: 0, chars: 0, bytes: 0 };
-    const byKey = new Map(ctx.faces.map(f => [f.key, f]));
     verdicts.forEach((v, i) => {
       if (!v.keep) return;
       const r = A.outlined[i];
       outlineStat.kept++; outlineStat.chars += r.chars; outlineStat.bytes += r.bytes;
-      for (const [k, n] of Object.entries(r.faces)) if (byKey.has(k)) byKey.get(k).outlined += n;
     });
   }
+  const fonts = fontRows(ctx, outlineStat && outlineStat.verdicts);
   const { html: mergedRaw, stat } = mergeWidths(pa, pb);
   const F = A.F;
   if (outlineStat) outlineFindings(F, outlineStat, ctx);
@@ -86,38 +92,73 @@ export async function convert(html, { width, frame, verifyFrame, opts = {}, glyp
 
   const payload = webkitFilter(stripTool(merged));
   return {
-    payload, preview: merged, original: A.original, findings: F.list, fonts: ctx.faces,
+    payload, preview: merged, original: A.original, findings: F.list, fonts,
     stats: { chars: payload.length, elements: A.n, moved: A.moved, visualBad, verified, others,
       outline: outlineStat && { units: outlineStat.units, kept: outlineStat.kept, chars: outlineStat.chars, bytes: outlineStat.bytes } },
     debug: { tv: [...A.targetV], v: [...V], approx: stat.where,
-      verdicts: outlineStat && outlineStat.verdicts.map((v, i) => ({ ...v, id: ctx.units[i].id, run: ctx.units[i].from != null, text: ctx.units[i].text.slice(0, 40) })) },
+      verdicts: outlineStat && outlineStat.verdicts.map((v, i) => ({ ...v, id: ctx.plan.units[i].id, run: ctx.plan.units[i].from != null, text: ctx.plan.units[i].text.slice(0, 40) })) },
   };
 }
 
-/** 没转成轮廓的原因，接在"N 段"后面读 */
-const WHY = {
-  font: '取不到原字体的字形', layout: '换成轮廓后周围的元素会挪位', reflow: '的换行或缩放方式随屏宽变化，轮廓没法跟着变',
-  shaping: '的连字或上下文字形和浏览器的排法对不上', baseline: '量不准文字基线', server: '取字形失败',
-  mismatch: '换个屏宽排版结构就变了', missing: '换个屏宽排版结构就变了', ineligible: '换个屏宽就不再符合转换条件（比如字号不够大了）',
-};
+/** 字体表：每行的字数、转为路径的字数、没转的原因（原因代码 → 字数），以及手机上的字体栈 */
+function fontRows(ctx, verdicts) {
+  const { rows, units, skip } = ctx.plan;
+  const out = new Map(rows.map(r => [r.key, { ...r, done: 0, why: Object.fromEntries(skip.get(r.key) || []), phone: phoneFonts(r.stack, r.weight, ctx.fontRules) }]));
+  (verdicts || []).forEach((v, i) => {
+    for (const [k, n] of Object.entries(units[i].rows)) {
+      const r = out.get(k);
+      if (v.keep) r.done += n;
+      else if (ctx.o.paths.includes(k) && !r.web) r.why[v.why] = (r.why[v.why] || 0) + n;
+    }
+  });
+  return [...out.values()];
+}
+
+/** 每个字号（含 ::before/::after）：data-wxc → px；'' 是 body 的 */
+function readSizes(doc) {
+  const win = doc.defaultView, out = new Map([['', parseFloat(win.getComputedStyle(doc.body).fontSize)]]);
+  for (const el of doc.querySelectorAll(`[${ID}]`)) {
+    const id = el.getAttribute(ID);
+    out.set(id, parseFloat(win.getComputedStyle(el).fontSize));
+    if (!isHtmlEl(el)) continue;
+    for (const slot of ['before', 'after']) out.set(`${id}::${slot}`, parseFloat(win.getComputedStyle(el, '::' + slot).fontSize));
+  }
+  return out;
+}
+/**
+ * 元素的字号折算到 335px 正文宽：找最近的、两个宽度下都量过的原稿元素，按它字号随宽度的变化比例换算。
+ * 原稿元素在转换中拆出来的工具元素（伪元素改成的 span 记在 pseudoSrc 里，包装元素没有 id）跟着这个比例走
+ */
+function sizeAtRef(sizes, pseudoSrc) {
+  return el => {
+    const px = parseFloat(el.ownerDocument.defaultView.getComputedStyle(el).fontSize);
+    if (!sizes.B) return px;
+    for (let a = el; a; a = a.parentElement) {
+      const id = a.getAttribute && a.getAttribute(ID);
+      const k = a === a.ownerDocument.body ? '' : id && (pseudoSrc.get(id) || id);
+      if (k == null || !sizes.A.has(k) || !sizes.B.has(k) || !sizes.A.get(k)) continue;
+      return px * (1 + sizes.t * (sizes.B.get(k) / sizes.A.get(k) - 1));
+    }
+    return px;
+  };
+}
+
 function outlineFindings(F, s, ctx) {
-  if (s.kept) F.fixed('大字转轮廓', `${s.kept} 段大字（${s.chars} 个字）画成了 SVG 轮廓，手机上和原稿字形一致` + (ctx.o.svgCopy ? '，上面叠了透明文字，读者仍能选中复制' : '，读者不能选中复制') + `；代码多出约 ${Math.round(s.bytes / 1024)} KB`);
+  if (s.kept) F.fixed('SVG 路径', `${s.kept} 段（${s.chars} 个字）转为 SVG 路径，手机上字形与原稿一致` + (ctx.o.svgCopy ? '，上面叠了透明文字，读者仍能选中复制' : '，读者不能选中复制') + `；代码多出约 ${Math.round(s.bytes / 1024)} KB`);
+  if (ctx.notes.server) return F.warn('SVG 路径', `取字形失败（${ctx.notes.server}），勾选的字仍是文字，手机上显示为备用字体`);
   // 按显示出来的原因合并计数（几种内部原因说法相同）；没有可见字的段不算问题
   const why = new Map(), left = [];
   s.verdicts.forEach((v, i) => {
     if (v.keep || v.why === 'empty') return;
-    const k = v.why === 'font' ? 'font' : WHY[v.why] || v.why;
-    why.set(k, (why.get(k) || 0) + 1); left.push(ctx.units[i].id);
+    const k = WHY_TEXT[v.why] || v.why;
+    why.set(k, (why.get(k) || 0) + 1); left.push(ctx.plan.units[i].id);
   });
-  if (ctx.notes.server) F.warn('大字转轮廓', `取字形失败（${ctx.notes.server}），大字仍是文字，手机上显示为备用字体`);
-  else if (why.size) {
-    const miss = [...ctx.notes.miss.keys()];
-    const fonts = miss.length ? `（${miss.slice(0, 3).join('；')}）` : '';
-    // 字由、Adobe Fonts 一类工具激活的字体不装进系统字体目录，浏览器能用，字形接口找不到文件
-    const hint = miss.some(k => k.includes('不在本机字体目录')) ? '；用 Adobe Fonts 等工具临时激活的字体要正式安装后才能转' : '';
-    F.warn('大字转轮廓', `${left.length} 段大字没能转成轮廓，手机上显示为备用字体：` + [...why].map(([k, n]) => `${n} 段${k === 'font' ? WHY.font + fonts : k}`).join('；') + hint, left);
-  }
-  if (!s.units) F.info('大字转轮廓', `没有要转的字：没有字号达到 ${ctx.o.svgMin}px（按 375 宽的 iPhone 算）的字，也没有设成“全部转轮廓”的字体`);
+  if (!why.size) return;
+  const miss = [...ctx.notes.miss.keys()];
+  const fonts = miss.length ? `（${miss.slice(0, 3).join('；')}）` : '';
+  // 字由、Adobe Fonts 一类工具激活的字体不装进系统字体目录，浏览器能用，字形接口找不到文件
+  const hint = miss.some(k => k.includes('不在本机字体目录')) ? '；用 Adobe Fonts 等工具临时激活的字体要正式安装后才能转' : '';
+  F.warn('SVG 路径', `${left.length} 段勾选的字没能转为路径，手机上显示为备用字体：` + [...why].map(([k, n]) => `${n} 段${k}${k === WHY_TEXT.font ? fonts : ''}`).join('；') + hint, left);
 }
 
 /** 与内容结构检测同一判据：盒子左右任一侧超出正文区 1px 以上、且不是左右对称居中 */
@@ -165,18 +206,26 @@ function keepMaxWidth(doc, root) {
   return n;
 }
 /** 按一个固定正文宽度转换：所有长度量成 px，供 mergeWidths 拟合 */
+const withNeutral = html => /<head[\s>]/i.test(html) ? html.replace(/<head(\s[^>]*)?>/i, `<head$1><style data-wxc-tool>${NEUTRAL}</style>`)
+  : `<head><style data-wxc-tool>${NEUTRAL}</style></head>` + html;
+/** 给 body 里的 HTML 元素和 svg 元素编号（data-wxc）；同一份 HTML 装载几次，编号都一样 */
+function tagIds(doc) {
+  let n = 0;
+  for (const el of doc.body.querySelectorAll('*')) if (isHtmlEl(el) || el.localName === 'svg') el.setAttribute(ID, 'e' + n++);
+  return n;
+}
+
 async function convertAt(html, width, frame, ctx) {
   const F = collector();
-  const src = html.replace(/<head(\s[^>]*)?>/i, `<head$1><style data-wxc-tool>${NEUTRAL}</style>`);
-  const doc = await loadFrame(frame, /<head[\s>]/i.test(src) ? src : `<head><style data-wxc-tool>${NEUTRAL}</style></head>` + src, width);
+  const doc = await loadFrame(frame, withNeutral(html), width);
   const win = doc.defaultView;
   const cs = el => win.getComputedStyle(el);
 
-  let n = 0;
-  for (const el of doc.body.querySelectorAll('*')) if (isHtmlEl(el) || el.localName === 'svg') el.setAttribute(ID, 'e' + n++);
+  const n = tagIds(doc);
   const original = '<!DOCTYPE html>' + doc.documentElement.outerHTML;
   const S0 = measure(doc, true), S0v = measure(doc, false);
   if (!ctx.web) ctx.web = webFamilies(doc);
+  if (!ctx.plan && ctx.sizes.B) ctx.sizes.A = readSizes(doc);
 
   // 层叠：逐元素算出生效声明，伪元素同理
   const notes = { media: 0, fontface: 0, keyframes: 0, imports: 0, container: 0, unreadable: 0, nested: 0, otherPseudo: 0, dynamic: 0, badSel: 0 };
@@ -263,9 +312,11 @@ async function convertAt(html, width, frame, ctx) {
   for (const [el, style] of plans) { if (style) el.setAttribute('style', style); else el.removeAttribute('style'); }
   doc.body.querySelectorAll('[class]').forEach(e => e.removeAttribute('class'));
   let pn = 0;
+  const pseudoSrc = new Map();
   for (const p of pseudos) {
     const s = doc.createElement('span');
     const id = 'p' + pn++;
+    pseudoSrc.set(id, `${p.el.getAttribute(ID)}::${p.slot}`);
     s.setAttribute(ID, id); s.setAttribute('data-wxc-pseudo', p.slot);
     if (p.style) s.setAttribute('style', p.style);
     if (p.text) s.textContent = p.text; else s.setAttribute('aria-hidden', 'true');
@@ -341,16 +392,10 @@ async function convertAt(html, width, frame, ctx) {
   const { moved, stuck } = correctOffsets(doc, root, target, layers);
   const pinned = pinImages(doc, root, ctx.pins);
   annotateContainerWidths(doc, root);
-  // 轮廓放在最后：逐字位置要在最终布局里量；主宽度选单元，另一个宽度沿用同一组描述
+  // 路径放在最后：逐字位置要在最终布局里量。主宽度定字体表和单元，另一个宽度沿用同一组描述
   let outlined = null;
-  if (!ctx.faces) ctx.faces = listFaces(doc, root).map(f => {
-    const web = !!webIn(f.stack, ctx.web);
-    return { ...f, web, note: web ? '网页字体（用 @font-face 引用的字体文件）：公众号不支持，只能留成文字，手机上显示为备用字体。想转轮廓，把这款字体装到电脑上，并去掉原稿里的 @font-face' : mobileNote(f.family, f.weight, ctx.fontRules) };
-  });
-  if (ctx.o.fontMode === 'svg') {
-    if (!ctx.units) ctx.units = selectUnits(doc, root, ctx.o, ctx.web);
-    outlined = await outline(doc, root, ctx.units, ctx, ctx.notes);
-  }
+  if (!ctx.plan) ctx.plan = planFonts(doc, root, { picked: new Set(ctx.o.paths), web: ctx.web, sizeAt: sizeAtRef(ctx.sizes, pseudoSrc) });
+  if (ctx.plan.units.length) outlined = await outline(doc, root, ctx.plan.units, ctx, ctx.notes);
 
   root.querySelectorAll('[data-wxc-float],[data-wxc-pseudo]').forEach(e => { e.removeAttribute('data-wxc-float'); e.removeAttribute('data-wxc-pseudo'); });
   const preview = root.outerHTML;

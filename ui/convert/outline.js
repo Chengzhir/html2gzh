@@ -1,12 +1,11 @@
 import { ID, isHtmlEl, measure, diffBoxes, splitTop } from './util.js';
-import { faceKey, faceDefault } from './fonts.js';
+import { faceKey } from './fonts.js';
 import { annotateContainerWidths } from './responsive.js';
 
-// 大字转 SVG 轮廓：字形取自本机字体文件（服务端 /api/glyphs），摆在转换帧里实测的逐字位置上；同位叠一层透明 <text> 供选中复制。
+// 字体表里勾选的字转为 SVG 路径：字形取自本机字体文件（服务端 /api/glyphs），摆在转换帧里实测的逐字位置上；同位叠一层透明 <text> 供选中复制。
 // 单元 = 一个块元素的全部内容，或块容器/弹性容器里的一段行内内容（包进一个块级 span 后整体替换）。
 // 两个宽度各转一遍后，只保留"逐字位置按宽度等比缩放（或完全不变）"的单元，其余还原成文字。
 const SVG = 'http://www.w3.org/2000/svg';
-const REF_W = 335;
 const NO_TF = '*{transform:none!important;translate:none!important;rotate:none!important;scale:none!important}';
 const WJ = '\u2060';
 // 零宽字符（零宽空格、连接符、BOM）不画、不进复制层：它们没有字形，送去取字形只会让整段判成缺字
@@ -58,47 +57,20 @@ function plainInline(win, el) {
   if (c.filter !== 'none' || c.mixBlendMode !== 'normal' || c.clipPath !== 'none') return false;
   return [...el.children].every(k => plainInline(win, k));
 }
-/** 文字本身的继承属性：变形、竖排、小型大写、描边阴影、自动断词插入的连字符都画不出来 */
-const textOk = c => c.textTransform === 'none' && c.writingMode === 'horizontal-tb' && c.direction === 'ltr'
-  && c.fontVariantCaps === 'normal' && (c.fontVariantPosition || 'normal') === 'normal' && (c.fontVariantAlternates || 'normal') === 'normal'
-  && !/^optimizespeed$/i.test(c.textRendering || '') && (c.webkitTextSecurity || 'none') === 'none' && parseFloat(c.webkitTextStrokeWidth || 0) === 0
-  && c.textShadow === 'none' && c.hyphens !== 'auto' && c.webkitTextFillColor === c.color && parseFloat(c.fontSize) > 0 && c.visibility === 'visible';
-const boxOk = c => c.textOverflow === 'clip' && (c.webkitLineClamp || 'none') === 'none' && c.backgroundClip !== 'text';
+/** 文字本身的继承属性里画不出来的：变形、竖排、小型大写、描边阴影、自动断词插入的连字符等。返回原因代码，可以画返回 '' */
+function textWhy(c) {
+  if (c.textTransform !== 'none' || c.fontVariantCaps !== 'normal' || (c.fontVariantPosition || 'normal') !== 'normal' || (c.fontVariantAlternates || 'normal') !== 'normal') return 'case';
+  if (c.writingMode !== 'horizontal-tb' || c.direction !== 'ltr') return 'dir';
+  if (parseFloat(c.webkitTextStrokeWidth || 0) !== 0 || c.textShadow !== 'none' || c.webkitTextFillColor !== c.color) return 'effect';
+  if (/^optimizespeed$/i.test(c.textRendering || '') || (c.webkitTextSecurity || 'none') !== 'none' || c.hyphens === 'auto' || !(parseFloat(c.fontSize) > 0) || c.visibility !== 'visible') return 'other';
+  return '';
+}
+const boxWhy = c => c.backgroundClip === 'text' ? 'effect' : c.textOverflow !== 'clip' || (c.webkitLineClamp || 'none') !== 'none' ? 'clip' : '';
 const blockOf = (win, el, root) => {
   let a = el;
   while (a !== root && /^inline/.test(win.getComputedStyle(a).display)) a = a.parentElement;
   return a;
 };
-/** 文中用到的每套字：字数、字号范围（折算到 335px 正文宽）、样例，供设置面板逐套选择。作者自己的 svg 里的字不算（不转） */
-export function listFaces(doc, root) {
-  const win = doc.defaultView;
-  const rootW = contentBox(win, root).w;
-  const rows = new Map();
-  const walker = doc.createTreeWalker(root, 4);
-  const range = doc.createRange();
-  while (walker.nextNode()) {
-    const t = walker.currentNode, el = t.parentElement;
-    if (!el || el.closest('svg')) continue;
-    const text = t.data.split(WJ).join('').replace(/\s+/g, ' ');
-    const n = [...seg.segment(text)].filter(s => visible(s.segment)).length;
-    if (!n) continue;
-    range.selectNodeContents(t);
-    const c = win.getComputedStyle(el);
-    if (!range.getClientRects().length || c.visibility !== 'visible') continue;
-    const f = faceKey(c);
-    let r = rows.get(f.key);
-    if (!r) rows.set(f.key, r = { ...f, stack: c.fontFamily, stretch: c.fontStretch, chars: 0, min: Infinity, max: 0, sample: '', outlined: 0 });
-    const px = parseFloat(c.fontSize) * REF_W / rootW;
-    r.chars += n; r.min = Math.min(r.min, px); r.max = Math.max(r.max, px);
-    // 同一个块里被行内元素切开的几段直接接上（保留原文的空格），换了块才加空格；样例多取一些，显示时由 CSS 省略号截断
-    if (r.sample.length < 40) {
-      const blk = blockOf(win, el, root);
-      r.sample = (r.sample && blk !== r.last ? r.sample.trimEnd() + ' ' + text.trimStart() : r.sample + (r.sample ? text : text.trimStart())).slice(0, 40);
-      r.last = blk;
-    }
-  }
-  return [...rows.values()].sort((a, b) => b.max - a.max).map(({ last, ...r }) => ({ ...r, min: Math.round(r.min), max: Math.round(r.max) }));
-}
 
 /** 单元里的文字节点（浮动元素里的不算：它们留在原处，不进轮廓） */
 function textNodes(nodes) {
@@ -111,62 +83,115 @@ function textNodes(nodes) {
   return out;
 }
 const unitText = nodes => [...seg.segment(textNodes(nodes).map(t => t.data).join(''))].map(s => s.segment).filter(s => !INVISIBLE.test(s)).join('').replace(/\s+/g, ' ').trim();
+const visibleCount = s => [...seg.segment(s.split(WJ).join(''))].filter(x => visible(x.segment)).length;
 
-/** nodes 能不能整体换成轮廓：只含文字、无外观的行内元素、零占位浮动；box 是承载它们的块 */
-function eligible(win, box, nodes, root) {
-  if (!nodes.length || !boxOk(win.getComputedStyle(box))) return false;
+/** nodes 能不能整体换成路径：只含文字、无外观的行内元素、零占位浮动；box 是承载它们的块。能换返回 ''，否则返回原因代码 */
+function ineligible(win, box, nodes, root) {
+  if (!nodes.length) return 'empty';
+  const bw = boxWhy(win.getComputedStyle(box));
+  if (bw) return bw;
   for (const n of nodes) {
     if (n.nodeType === 3 || n.nodeType === 8) continue;
-    if (isFloat(n)) { if (n.textContent.trim()) return false; continue; }
-    if (!plainInline(win, n)) return false;
+    if (isFloat(n)) { if (n.textContent.trim()) return 'other'; continue; }
+    if (!plainInline(win, n)) return 'inline';
   }
   const texts = textNodes(nodes);
-  if (!texts.some(t => [...seg.segment(t.data)].some(s => visible(s.segment)))) return false;
-  if (texts.some(t => /[\u00ad\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(t.data))) return false;
+  if (!texts.some(t => [...seg.segment(t.data)].some(s => visible(s.segment)))) return 'empty';
+  if (texts.some(t => /[\u00ad\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(t.data))) return 'other';
   const seen = new Set();
   for (const t of texts) {
-    if (!textOk(win.getComputedStyle(t.parentElement))) return false;
+    const w = textWhy(win.getComputedStyle(t.parentElement));
+    if (w) return w;
     // 下划线等装饰会从祖先块传到子孙文字上
     for (let a = t.parentElement; a && a !== root.parentElement && !seen.has(a); a = a.parentElement) {
       seen.add(a);
       const c = win.getComputedStyle(a);
-      if (c.textDecorationLine !== 'none' || c.backgroundClip === 'text') return false;
+      if (c.textDecorationLine !== 'none') return 'deco';
+      if (c.backgroundClip === 'text') return 'effect';
     }
   }
-  return true;
+  return '';
 }
+/** 字没转为路径的原因：选单元时的原因代码，加上 outline/decide 的结论代码 */
+export const WHY_TEXT = {
+  vote: '所在段落多数字没勾选（一段整体转或整体不转）',
+  inline: '所在段落里有带背景、边框或上下标的行内元素',
+  deco: '所在段落里有下划线、删除线等装饰线',
+  effect: '所在段落里有描边、阴影或背景裁切文字（background-clip: text）',
+  case: '所在段落里有大小写变换或小型大写（text-transform、font-variant）',
+  dir: '所在段落是竖排或从右到左排',
+  clip: '所在的块用省略号截断（text-overflow、line-clamp）',
+  other: '排版结构不支持', empty: '排版结构不支持',
+  font: '取不到原字体的字形', server: '取字形失败',
+  layout: '换成路径后周围的元素会挪位',
+  reflow: '换行位置或缩放方式随屏宽变化，路径没法跟着变',
+  shaping: '连字或上下文字形和浏览器的排法对不上',
+  baseline: '量不准文字基线',
+  mismatch: '换个屏宽排版结构就变了', missing: '换个屏宽排版结构就变了',
+  ineligible: '换个屏宽就不再符合转换条件',
+};
 
-/** 每个字按它那套字的选择（全部 / 只转大字 / 保留文字）投票，多数要转才整段转；字号折算到 335px 正文宽，两个转换宽度下结论一致 */
-function wanted(win, nodes, o, rootW, web) {
-  let yes = 0, all = 0;
-  for (const t of textNodes(nodes)) {
-    const c = win.getComputedStyle(t.parentElement);
-    const f = faceKey(c);
-    const pick = o.faces[f.key] || faceDefault(f.family);
-    const hit = !webIn(c.fontFamily, web) && (pick === 'all' || pick === 'big' && parseFloat(c.fontSize) * REF_W / rootW >= o.svgMin - 0.01);
-    for (const { segment } of seg.segment(t.data)) {
-      if (!visible(segment)) continue;
-      all++; if (hit) yes++;
+/**
+ * 字体表与要转的单元。
+ * 行：字体 + 字重 + 是否斜体 + 字号（sizeAt 折算到 335px 正文宽）；作者自己的 svg 里的字不算。
+ * 单元：整块，或块容器/弹性容器里的一段行内内容；多数字所在的行勾选了（picked）才转。
+ * 返回 { rows, units, skip }。units 是 [{ id, from?, to?, text, rows: { 行键: 字数 } }]，一段行内内容写父块的 id 与 childNodes 下标；
+ * 只在主宽度下选一次，另一个宽度按同一组描述去找。skip：勾选了却没进单元的字，行键 → 原因代码 → 字数
+ */
+export function planFonts(doc, root, { picked, web, sizeAt }) {
+  const win = doc.defaultView;
+  const rows = new Map(), rowOf = new Map(), cnt = new Map();
+  const range = doc.createRange();
+  const walker = doc.createTreeWalker(root, 4);
+  while (walker.nextNode()) {
+    const t = walker.currentNode, el = t.parentElement;
+    if (!el || el.closest('svg')) continue;
+    const n = visibleCount(t.data);
+    if (!n) continue;
+    range.selectNodeContents(t);
+    const c = win.getComputedStyle(el);
+    if (!range.getClientRects().length || c.visibility !== 'visible') continue;
+    const f = faceKey(c), size = Math.round(sizeAt(el) * 2) / 2;
+    const key = `${f.key}|${size}`;
+    let r = rows.get(key);
+    if (!r) rows.set(key, r = { ...f, face: f.key, key, size, stack: c.fontFamily, stretch: c.fontStretch, web: !!webIn(c.fontFamily, web), chars: 0, sample: '', last: null });
+    r.chars += n; rowOf.set(t, r); cnt.set(t, n);
+    // 同一个块里被行内元素切开的几段直接接上（保留原文的空格），换了块才加空格；样例多取一些，显示时由 CSS 省略号截断
+    if (r.sample.length < 40) {
+      const text = t.data.split(WJ).join('').replace(/\s+/g, ' ');
+      const blk = blockOf(win, el, root);
+      r.sample = (r.sample && blk !== r.last ? r.sample.trimEnd() + ' ' + text.trimStart() : r.sample + (r.sample ? text : text.trimStart())).slice(0, 40);
+      r.last = blk;
     }
   }
-  return all > 0 && yes * 2 >= all;
-}
-/**
- * 选单元。返回描述 [{ id, from?, to?, text }]：整块写 { id }，一段行内内容写 { id: 父块, from, to }（childNodes 下标）。
- * 只在主宽度下选一次，另一个宽度按同一组描述去找，保证两边结构一致。
- */
-export function selectUnits(doc, root, o, web) {
-  const win = doc.defaultView;
-  const rootW = contentBox(win, root).w;
-  const out = [];
-  const ok = (box, nodes) => eligible(win, box, nodes, root) && wanted(win, nodes, o, rootW, web);
+  const isPicked = r => picked.has(r.key) && !r.web;
+  const list = [...rows.values()].map(({ last, ...r }) => r);
+  if (!list.some(isPicked)) return { rows: list, units: [], skip: new Map() };
+
+  // 每个文字节点的去向：{ unit } 或原因代码。先定的为准：行内块里的字先于外层这一段定下
+  const status = new Map();
+  const mark = (nodes, s) => { for (const t of textNodes(nodes)) if (rowOf.has(t) && !status.has(t)) status.set(t, s); };
+  const vote = nodes => {
+    let yes = 0, all = 0;
+    for (const t of textNodes(nodes)) { const r = rowOf.get(t); if (r) { all += cnt.get(t); if (isPicked(r)) yes += cnt.get(t); } }
+    return all > 0 && yes * 2 >= all;
+  };
+  const units = [];
+  const take = (id, nodes, from) => {
+    const counts = {};
+    for (const t of textNodes(nodes)) { const r = rowOf.get(t); if (r) counts[r.key] = (counts[r.key] || 0) + cnt.get(t); }
+    const d = { id, text: unitText(nodes), rows: counts };
+    if (from != null) Object.assign(d, { from, to: from + nodes.length });
+    mark(nodes, { unit: units.length });
+    units.push(d);
+  };
   const visit = el => {
     if (!isHtmlEl(el) || REPLACED.test(el.localName)) return;
     const c = win.getComputedStyle(el);
     if (c.display === 'none' || c.display === 'contents') return;
     const id = el.getAttribute(ID);
     const kids = [...el.childNodes];
-    if (id && BOX_DISPLAY.test(c.display) && ok(el, kids)) { out.push({ id, text: unitText(kids) }); return; }
+    if (id && BOX_DISPLAY.test(c.display) && !ineligible(win, el, kids, root) && vote(kids)) { take(id, kids); return; }
     scan(el, /flex|grid/.test(c.display));
   };
   // 子节点按"行内段"分组：块容器里是匿名块，弹性/网格容器里是匿名项。只有整段都是纯文字的才包起来转
@@ -176,9 +201,11 @@ export function selectUnits(doc, root, o, web) {
     const flush = () => {
       const from = run.findIndex(n => !isFloat(n)), to = run.length - 1 - [...run].reverse().findIndex(n => !isFloat(n));
       const nodes = from < 0 ? [] : run.slice(from, to + 1);
-      if (id && !bad && nodes.length && ok(el, nodes)) {
-        const i0 = [...el.childNodes].indexOf(nodes[0]);
-        out.push({ id, from: i0, to: i0 + nodes.length, text: unitText(nodes) });
+      if (nodes.length) {
+        const why = !id ? 'other' : bad ? 'inline' : ineligible(win, el, nodes, root);
+        if (why) mark(nodes, why);
+        else if (vote(nodes)) take(id, nodes, [...el.childNodes].indexOf(nodes[0]));
+        else mark(nodes, 'vote');
       }
       run = []; bad = false;
     };
@@ -200,7 +227,16 @@ export function selectUnits(doc, root, o, web) {
     flush();
   };
   visit(root);
-  return out;
+
+  const skip = new Map();
+  for (const [t, r] of rowOf) {
+    const s = status.get(t) || 'other';
+    if (!isPicked(r) || typeof s !== 'string') continue;
+    if (!skip.has(r.key)) skip.set(r.key, new Map());
+    const m = skip.get(r.key);
+    m.set(s, (m.get(s) || 0) + cnt.get(t));
+  }
+  return { rows: list, units, skip };
 }
 /** 按描述在本次转换的 DOM 里找到单元；文字对不上或在这个宽度下不再合格就返回原因 */
 function locate(doc, root, d) {
@@ -209,7 +245,7 @@ function locate(doc, root, d) {
   if (!box) return { d, fail: 'missing' };
   const nodes = d.from == null ? [...box.childNodes] : [...box.childNodes].slice(d.from, d.to);
   if (unitText(nodes) !== d.text) return { d, fail: 'mismatch' };
-  if (!eligible(win, box, nodes, root)) return { d, fail: 'ineligible' };
+  if (ineligible(win, box, nodes, root)) return { d, fail: 'ineligible' };
   return { d, box, nodes, outer: box };
 }
 
@@ -271,7 +307,7 @@ function measureChars(doc, u, web) {
     for (let a = el; a && a !== u.box && a !== u.outer; a = a.parentElement) op *= parseFloat(win.getComputedStyle(a).opacity);
     const col = parseColor(c.color);
     const lang = (el.closest('[lang]') || doc.documentElement).getAttribute('lang') || '';
-    s = { face: faceKey(c).key, size: parseFloat(c.fontSize), ls: parseFloat(c.letterSpacing) || 0, fill: col.fill, alpha: col.a * op, family: c.fontFamily,
+    s = { size: parseFloat(c.fontSize), ls: parseFloat(c.letterSpacing) || 0, fill: col.fill, alpha: col.a * op, family: c.fontFamily,
       weight: c.fontWeight, style: c.fontStyle, stretch: c.fontStretch, features: featuresOf(c), variations: c.fontVariationSettings,
       lang, synthW: c.fontSynthesisWeight !== 'none', synthS: c.fontSynthesisStyle !== 'none',
       ligatures: c.fontVariantLigatures, spaced: (parseFloat(c.letterSpacing) || 0) !== 0,
@@ -567,7 +603,6 @@ export async function outline(doc, root, descs, ctx, notes) {
   if (applied.length) annotateContainerWidths(doc, root);
   return units.map(u => u.fail ? { ok: false, fail: u.fail, detail: u.detail } : {
     ok: true, cw: u.cw, w: u.w, h: u.h, html: u.html, chars: u.chars.filter(c => !c.space).length,
-    faces: u.chars.filter(c => !c.space).reduce((m, c) => (m[c.st.face] = (m[c.st.face] || 0) + 1, m), {}),
     sig: u.chars.filter(c => !c.space).map(c => [c.x, c.base, c.st.size]), bytes: u.svg.outerHTML.length - u.html.length,
   });
 }

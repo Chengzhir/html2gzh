@@ -81,9 +81,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const browser = await puppeteer.launch({ executablePath: findChrome(), headless: true });
   try {
     const ui = await browser.newPage();
-    await ui.evaluateOnNewDocument(() => { if (window === window.top) localStorage.setItem('wxc.opts', JSON.stringify({ fontMode: 'svg' })); });
     await ui.goto(`http://127.0.0.1:${UI}/`);
     await ui.waitForFunction(() => window.__wxc.result, { timeout: 180000 });
+    const { pickDefault } = await import('./ui.mjs');
+    await pickDefault(ui);
     const r = await ui.evaluate(() => ({ original: window.__wxc.result.original, preview: window.__wxc.result.preview, verdicts: window.__wxc.result.debug.verdicts }));
     r.preview = previewDoc(r.preview);
     const rows = [];

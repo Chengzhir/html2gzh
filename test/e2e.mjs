@@ -10,6 +10,7 @@ import { findChrome } from '../lib/chrome.mjs';
 import { alignUnits } from './align.mjs';
 import { previewDoc, readerImages } from '../ui/convert/reader.js';
 import { WX_ANIM_OK } from '../ui/convert/svg/dom.js';
+import { settled, pickDefault } from './ui.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -50,11 +51,10 @@ try {
       get() { return d.get.call(this); },
     });
   });
-  await page.evaluateOnNewDocument(svg => {
-    if (window === window.top) localStorage.setItem('wxc.opts', JSON.stringify(svg ? { fontMode: 'svg' } : {}));
-  }, SVG_MODE);
   await page.goto(`http://127.0.0.1:${UI}/`);
   await page.waitForFunction(() => window.__wxc.result || document.querySelector('.banner.err:not([hidden])'), { timeout: 90000 });
+  // --svg：在字体表里勾选测试用的行，等重新转换完
+  if (SVG_MODE && await page.evaluate(() => !!window.__wxc.result)) await pickDefault(page);
   const r = await page.evaluate(() => {
     const s = window.__wxc;
     return s.result ? { findings: s.result.findings, report: s.result.report, stats: s.result.stats, payload: s.result.payload, preview: s.result.preview, original: s.result.original, approx: s.result.debug.approx, verdicts: s.result.debug.verdicts, tv: s.result.debug.tv, v: s.result.debug.v }
@@ -288,22 +288,45 @@ try {
     check(!bad.length, '动画在各采样时刻与原稿一致（差异像素 < 0.3%）', bad.join(' | ') || '5 个时刻');
   }
 
-  if (SVG_MODE) {
-    // 设置面板：每套字一行；把一套已转的字改成"保留文字"，重新转换后这套字一个也不转（放在逐像素之后：会触发重新转换）
-    console.log('\n字体设置面板');
-    const rows = await page.$$eval('#faceList fieldset', fs => fs.length);
+  // 字体表（放在逐像素之后：勾选会触发重新转换）
+  console.log('\n字体表');
+  {
     const fonts = await page.evaluate(() => window.__wxc.result.fonts);
-    check(rows === fonts.length && rows > 0, '每套字列成一行', `${rows} 行：` + fonts.map(f => `${f.family} ${f.weight}（${f.chars} 字，已转 ${f.outlined}）`).join('、'));
-    const target = fonts.findIndex(f => f.outlined > 0);
-    if (target >= 0) {
-      const key = fonts[target].key, before = r.stats.outline.chars;
-      await page.click(`#faceList fieldset:nth-child(${target + 1}) input[value="text"]`);
-      const after = await page.waitForFunction(k => {
-        const s = window.__wxc;
-        const f = !s.busy && s.result && s.result.fonts.find(x => x.key === k);
-        return f && f.outlined === 0 && JSON.parse(localStorage.getItem('wxc.opts')).faces[k] === 'text' && s.result.stats.outline;
-      }, { timeout: 180000 }, key).then(h => h.jsonValue()).catch(() => null);
-      check(!!after && after.chars < before, '改成"保留文字"后重新转换，这套字不再转轮廓', after ? `轮廓字数 ${before} → ${after.chars}` : '超时或没生效');
+    const rows = await page.$$eval('#faceList tr[data-key]', trs => trs.map(t => t.dataset.key));
+    check(rows.length === fonts.length && rows.length > 0 && fonts.every(f => rows.includes(f.key)), '每套字的每个字号列成一行',
+      `${rows.length} 行：` + fonts.slice(0, 8).map(f => `${f.family} ${f.weight} ${f.size}px（${f.chars} 字${f.done ? `，已转 ${f.done}` : ''}）`).join('、') + (fonts.length > 8 ? ' …' : ''));
+    const keyed = sel => `#faceList tr[data-key="${sel.replace(/["\\]/g, '\\$&')}"] input`;
+    if (SVG_MODE) {
+      const t = fonts.find(f => f.done > 0 && !f.web);
+      if (t) {
+        const before = r.stats.outline.chars;
+        await page.click(keyed(t.key));
+        await settled(page);
+        const after = await page.evaluate(k => { const s = window.__wxc.result; return { chars: s.stats.outline ? s.stats.outline.chars : 0, done: s.fonts.find(f => f.key === k).done }; }, t.key);
+        check(after.chars < before && after.done < t.done, '取消勾选一行后重新转换，这一行转为路径的字变少', `${t.family} ${t.weight} ${t.size}px：${t.done} → ${after.done} 字；总计 ${before} → ${after.chars} 字`);
+      }
+    }
+    if (!SVG_MODE) {
+      // 字号按 335px 正文宽折算：换预览宽度，行不变（主宽度不是 335 时走两宽度插值）
+      const w0 = await page.$eval('#width', e => e.value);
+      await page.select('#width', '320');
+      await settled(page);
+      const k320 = await page.evaluate(() => window.__wxc.result.fonts.map(f => f.key));
+      const a = fonts.map(f => f.key).filter(k => !k320.includes(k)), b = k320.filter(k => !fonts.some(f => f.key === k));
+      check(!a.length && !b.length, '换预览宽度后字体表的行不变', a.length || b.length ? `只在 ${w0}px：${a.slice(0, 3).join('，')}；只在 320px：${b.slice(0, 3).join('，')}` : `${k320.length} 行`);
+      await page.select('#width', w0);
+      await settled(page);
+    }
+    if (ARTICLE === path.join(HERE, 'fixture')) {
+      const all = '#faceList input[data-scope="all"]';
+      await page.click(all);
+      await settled(page);
+      if (!await page.$eval(all, c => c.checked)) { await page.click(all); await settled(page); }
+      const on = await page.evaluate(() => { const s = window.__wxc.result; return { paths: s.paths.length, rows: s.fonts.filter(f => !f.web).length, units: s.stats.outline ? s.stats.outline.units : 0 }; });
+      await page.click(all);
+      await settled(page);
+      const off = await page.evaluate(() => ({ paths: window.__wxc.result.paths.length, outline: window.__wxc.result.stats.outline }));
+      check(on.paths === on.rows && on.units > 0 && !off.paths && !off.outline, '表头勾选框全选、全不选', `全选 ${on.paths}/${on.rows} 行、${on.units} 段；全不选后 ${off.paths} 行`);
     }
   }
 

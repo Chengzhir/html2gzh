@@ -1,5 +1,7 @@
 import { convert } from './convert/index.js';
-import { DEFAULT_OPTS, parseRules, faceDefault } from './convert/fonts.js';
+import { DEFAULT_OPTS, parseRules } from './convert/fonts.js';
+import { WHY_TEXT } from './convert/outline.js';
+import { setTip } from './tip.js';
 
 const $ = id => document.getElementById(id);
 // Windows 上用 serve.cmd 启动；别的系统在终端里跑 node server.mjs
@@ -149,92 +151,174 @@ const width = () => +$('width').value;
 /* ---------- 字体设置 ---------- */
 // 只存和默认值不同的项：以后默认规则更新，没改过的人自动用上新的
 const OPTS_KEY = 'wxc.opts';
+const sameType = (a, b) => Array.isArray(b) ? Array.isArray(a) && a.every(x => typeof x === 'string') : typeof a === typeof b;
 function loadOpts() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(OPTS_KEY) || '{}') || {}; } catch { /* 坏数据当没存 */ }
   const o = { ...DEFAULT_OPTS };
-  for (const k of Object.keys(DEFAULT_OPTS)) if (k in saved && typeof saved[k] === typeof DEFAULT_OPTS[k]) o[k] = saved[k];
+  for (const k of Object.keys(DEFAULT_OPTS)) if (k in saved && sameType(saved[k], DEFAULT_OPTS[k])) o[k] = saved[k];
   return o;
 }
 let opts = loadOpts();
-function saveOpts(patch) {
+let rerunTimer = 0;
+/** how：'now' 立刻重新转换；'soon' 停手 600ms 后再转（连点几个勾选框只转一次）；'none' 不用转 */
+function saveOpts(patch, how = 'now') {
   opts = { ...opts, ...patch };
-  const diff = Object.fromEntries(Object.entries(opts).filter(([k, v]) => v !== DEFAULT_OPTS[k]));
+  const diff = Object.fromEntries(Object.entries(opts).filter(([k, v]) => JSON.stringify(v) !== JSON.stringify(DEFAULT_OPTS[k])));
   localStorage.setItem(OPTS_KEY, JSON.stringify(diff));
   renderOpts();
-  rerun();
+  if (how === 'none') return;
+  clearTimeout(rerunTimer);
+  if (how === 'soon') rerunTimer = setTimeout(rerun, 600); else rerun();
 }
 function renderOpts() {
-  for (const r of document.querySelectorAll('input[name="fontMode"]')) r.checked = r.value === opts.fontMode;
-  $('svgOpts').hidden = opts.fontMode !== 'svg';
   if (document.activeElement !== $('svgMin')) $('svgMin').value = opts.svgMin;
   $('svgCopy').checked = opts.svgCopy;
-  renderFaces();
   $('noWrap').checked = opts.noWrap;
   if (document.activeElement !== $('rules')) $('rules').value = opts.rules;
   const { rules, bad } = parseRules(opts.rules);
   $('rulesNote').textContent = (opts.rules === DEFAULT_OPTS.rules ? '默认规则' : '已修改') + `，${rules.length} 条` + (bad.length ? `；第 ${bad.join('、')} 行格式不对，已跳过` : '');
+  renderFaces();
 }
-/* 每套字一行：样例用原字体画、字数与字号范围、手机上会换成什么、三档选择。只在字体集合变了时重建，免得抢走键盘焦点 */
-const PICKS = [['all', '全部转轮廓'], ['big', '只转大字'], ['text', '保留文字']];
+
+/* 字体表：每套字（字体+字重+斜体）一组，组里每个字号一行。样例用原字体画。
+   表格只在行的集合或内容变了时重建（免得抢走键盘焦点），勾选与状态每次就地更新 */
+const fontsOf = () => state.result ? state.result.fonts : [];
+function faceGroups(fonts) {
+  const m = new Map();
+  for (const f of fonts) { if (!m.has(f.face)) m.set(f.face, []); m.get(f.face).push(f); }
+  const gs = [...m.values()].map(rows => rows.sort((a, b) => b.size - a.size));
+  return gs.sort((a, b) => b[0].size - a[0].size);
+}
+const faceName = f => `${f.family} ${f.weight}${f.italic ? ' 斜体' : ''}`;
+const fmtPx = n => String(Math.round(n * 2) / 2);
 let faceSig = '';
-function renderFaces() {
-  const list = $('faceList');
-  const fonts = state.result && state.result.fonts || [];
-  if (!fonts.length) { faceSig = ''; list.innerHTML = '<p class="muted small">载入文章后列出。</p>'; return; }
-  const sig = fonts.map(f => f.key + (f.web ? '|web' : '')).join('\n');
-  if (sig !== faceSig) {
-    faceSig = sig; list.textContent = '';
-    fonts.forEach((f, i) => {
-      const fs = document.createElement('fieldset'); fs.dataset.key = f.key;
-      const lg = document.createElement('legend'); lg.className = 'sr-only';
-      // 样例放在 legend 外：legend 按内容定宽，省略号截不住长样例
-      const sm = document.createElement('p'); sm.className = 'sample'; sm.setAttribute('aria-hidden', 'true');
-      sm.style.setProperty('font-family', f.stack);
-      sm.style.setProperty('font-weight', f.weight);
-      sm.style.setProperty('font-style', f.italic ? 'italic' : 'normal');
-      sm.style.setProperty('font-stretch', f.stretch);
-      sm.textContent = f.sample;
-      lg.textContent = `${f.family} ${f.weight}${f.italic ? ' 斜体' : ''}`;
-      const meta = document.createElement('p'); meta.className = 'meta';
-      const picks = document.createElement('div'); picks.className = 'picks';
-      // 网络字体只能留成文字，不给选项
-      if (!f.web) for (const [v, label] of PICKS) {
-        const lab = document.createElement('label');
-        const r = document.createElement('input'); r.type = 'radio'; r.name = 'face' + i; r.value = v;
-        r.onchange = () => {
-          const faces = { ...opts.faces };
-          if (v === faceDefault(f.family)) delete faces[f.key]; else faces[f.key] = v;
-          saveOpts({ faces });
-        };
-        lab.append(r, document.createTextNode(label));
-        picks.appendChild(lab);
-      }
-      fs.append(lg, sm, meta, picks);
-      list.appendChild(fs);
-    });
-  }
-  for (const fs of list.children) {
-    const f = fonts.find(x => x.key === fs.dataset.key);
-    if (!f) continue;
-    const pick = opts.faces[f.key] || faceDefault(f.family);
-    fs.classList.toggle('changed', f.key in opts.faces);
-    for (const r of fs.querySelectorAll('input')) r.checked = r.value === pick;
-    const svg = opts.fontMode === 'svg' && state.result.stats.outline;
-    const all = svg && f.outlined >= f.chars;
-    const done = all ? '，已全部转成轮廓' : svg && f.outlined ? `，其中 ${f.outlined} 字已转轮廓` : '';
-    const part = svg && f.outlined && !all;
-    const note = all ? '' : (part ? '；其余的字' : '。') + f.note;
-    fs.querySelector('.meta').textContent = `${f.family} ${f.weight}${f.italic ? ' 斜体' : ''} · ${f.chars} 字 · ${f.min === f.max ? f.min : f.min + '–' + f.max}px${done}${note}`;
-  }
+function elem(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
 }
-const debounce = (fn, ms) => { let t = 0; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
-for (const r of document.querySelectorAll('input[name="fontMode"]')) r.onchange = () => saveOpts({ fontMode: r.value });
-$('svgMin').oninput = debounce(() => { const v = parseFloat($('svgMin').value); if (v >= 6 && v <= 200) saveOpts({ svgMin: v }); }, 500);
+function tipButton(cls, text, tip) {
+  const b = elem('button', 'tipbtn ' + cls, text);
+  b.type = 'button';
+  setTip(b, tip);
+  return b;
+}
+function checkbox(scope, label) {
+  const c = elem('input');
+  c.type = 'checkbox'; c.dataset.scope = scope;
+  c.setAttribute('aria-label', label);
+  return c;
+}
+/** 组标题下的一行：不转路径时手机上的备用字体；悬停看完整的字体栈 */
+function phoneLine(f) {
+  const p = elem('div', 'mob');
+  const { names, stack, thin } = f.phone;
+  const tip = (names.length ? '' : '备用字体规则里没有对应项。\n') + `手机上的 font-family（按顺序取第一个已安装的字体）：\n${stack}`;
+  p.append(tipButton('', '备用字体', tip), '：' + (names.length ? names.slice(0, 2).join('、') + (names.length > 2 ? ' 等' : '') : '无'));
+  if (thin) p.append(tipButton('tag', '偏细', `iPhone 上的 PingFang SC 最粗为 600（Semibold），比原稿的 ${f.weight} 细`));
+  if (f.web) p.append(tipButton('tag', '网页字体', '原稿用 @font-face 引用的字体。公众号正文加载不了网页字体；字形服务只读本机装了的字体文件，也转不了路径。要转，把这款字体装到电脑上，并去掉原稿里的 @font-face'));
+  return p;
+}
+function renderFaces() {
+  const box = $('faceList');
+  const fonts = fontsOf();
+  if (!fonts.length) { faceSig = ''; box.innerHTML = '<p class="muted small">载入文章后列出。</p>'; $('pickBig').disabled = true; return; }
+  $('pickBig').disabled = false;
+  const sig = JSON.stringify(fonts.map(f => [f.key, f.chars, f.sample, f.web, f.phone]));
+  if (sig !== faceSig) {
+    faceSig = sig;
+    const t = elem('table');
+    const head = elem('thead'), hr = elem('tr');
+    const all = elem('th'); all.scope = 'col'; all.appendChild(checkbox('all', '全选'));
+    hr.append(all, ...['字号', '样例', '字数', '状态'].map(s => { const th = elem('th', null, s); th.scope = 'col'; return th; }));
+    head.appendChild(hr); t.appendChild(head);
+    for (const g of faceGroups(fonts)) {
+      const tb = elem('tbody'), gr = elem('tr', 'group');
+      const gc = elem('td'); gc.appendChild(checkbox('face:' + g[0].face, faceName(g[0]) + ' 全部'));
+      const gh = elem('th'); gh.scope = 'rowgroup'; gh.colSpan = 4;
+      const name = elem('div', 'gname');
+      name.append(elem('b', null, faceName(g[0])), elem('span', 'muted', `${g.reduce((n, f) => n + f.chars, 0)} 字`));
+      gh.append(name, phoneLine(g[0]));
+      gr.append(gc, gh); tb.appendChild(gr);
+      for (const f of g) {
+        const tr = elem('tr'); tr.dataset.key = f.key;
+        const c = elem('td'); c.appendChild(checkbox('row', `${faceName(f)} ${fmtPx(f.size)}px`));
+        const sm = elem('td', 'sample', f.sample);
+        for (const [k, v] of [['font-family', f.stack], ['font-weight', f.weight], ['font-style', f.italic ? 'italic' : 'normal'], ['font-stretch', f.stretch]]) sm.style.setProperty(k, v);
+        tr.append(c, elem('td', 'num', fmtPx(f.size)), sm, elem('td', 'num', String(f.chars)), elem('td', 'st'));
+        tb.appendChild(tr);
+      }
+      t.appendChild(tb);
+    }
+    box.replaceChildren(t);
+  }
+  syncFaces();
+}
+/** 勾选（含组与全选的三态）、状态列、过期标记 */
+function syncFaces() {
+  const box = $('faceList'), t = box.querySelector('table');
+  if (!t) return;
+  const fonts = fontsOf(), byKey = new Map(fonts.map(f => [f.key, f]));
+  const on = new Set(opts.paths);
+  const tri = (c, rows) => {
+    const n = rows.filter(f => on.has(f.key)).length;
+    c.checked = !!rows.length && n === rows.length; c.indeterminate = n > 0 && n < rows.length; c.disabled = !rows.length;
+  };
+  for (const c of t.querySelectorAll('input[data-scope]')) {
+    const s = c.dataset.scope;
+    if (s === 'all') tri(c, fonts.filter(f => !f.web));
+    else if (s.startsWith('face:')) tri(c, fonts.filter(f => f.face === s.slice(5) && !f.web));
+  }
+  const ran = new Set(state.result.paths);
+  for (const tr of t.querySelectorAll('tr[data-key]')) {
+    const f = byKey.get(tr.dataset.key), c = tr.querySelector('input');
+    c.disabled = f.web; c.checked = !f.web && on.has(f.key);
+    tr.classList.toggle('on', c.checked);
+    statusCell(tr.querySelector('.st'), f, ran.has(f.key) && !f.web);
+  }
+  const ranStr = JSON.stringify([...ran].filter(k => byKey.has(k)).sort()), nowStr = JSON.stringify(opts.paths.filter(k => byKey.has(k)).sort());
+  box.classList.toggle('stale', state.busy || ranStr !== nowStr);
+}
+/** 状态列按上一次转换的结果写：picked 是那次转换时这一行勾没勾 */
+function statusCell(td, f, picked) {
+  let text = '', tip = '', cls = '';
+  const left = f.chars - f.done;
+  const why = Object.entries(f.why).filter(([, n]) => n > 0).map(([k, n]) => `${n} 字：${WHY_TEXT[k] || k}`).join('\n');
+  const along = '这一行没勾选。所在段落多数字勾选了，随段落一起转（一段整体转或整体不转）';
+  if (f.done && !left) { text = '已转'; cls = 'ok'; tip = picked ? '' : along; }
+  else if (f.done) { text = `已转 ${f.done}/${f.chars}`; cls = 'part'; tip = picked ? `其余 ${left} 字没转：\n` + why : along; }
+  else if (picked) { text = '未转'; cls = 'no'; tip = '没转为路径：\n' + why; }
+  const want = tip ? 'BUTTON' : 'SPAN';
+  let s = td.firstElementChild;
+  if (!s || s.tagName !== want) { s = want === 'BUTTON' ? tipButton('', '', '') : elem('span'); td.replaceChildren(s); }
+  s.textContent = text;
+  s.className = (tip ? 'tipbtn ' : '') + cls;
+  if (tip) setTip(s, tip);
+}
+
+$('faceList').addEventListener('change', e => {
+  const c = e.target;
+  if (!(c instanceof HTMLInputElement) || !c.dataset.scope) return;
+  const fonts = fontsOf().filter(f => !f.web);
+  const s = c.dataset.scope;
+  const keys = s === 'all' ? fonts.map(f => f.key) : s.startsWith('face:') ? fonts.filter(f => f.face === s.slice(5)).map(f => f.key) : [c.closest('tr').dataset.key];
+  const set = new Set(opts.paths);
+  for (const k of keys) { if (c.checked) set.add(k); else set.delete(k); }
+  saveOpts({ paths: [...set] }, 'soon');
+});
+$('pickBig').onclick = () => {
+  const fonts = fontsOf().filter(f => !f.web);
+  const set = new Set(opts.paths);
+  for (const f of fonts) { if (f.size >= opts.svgMin - 0.01) set.add(f.key); else set.delete(f.key); }
+  saveOpts({ paths: [...set] });
+};
+$('svgMin').oninput = () => { const v = parseFloat($('svgMin').value); if (v > 0 && v <= 400) saveOpts({ svgMin: v }, 'none'); };
 $('svgMin').onblur = () => renderOpts();
-$('facesReset').onclick = () => saveOpts({ faces: {} });
 $('svgCopy').onchange = () => saveOpts({ svgCopy: $('svgCopy').checked });
 $('noWrap').onchange = () => saveOpts({ noWrap: $('noWrap').checked });
+const debounce = (fn, ms) => { let t = 0; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 $('rules').oninput = debounce(() => saveOpts({ rules: $('rules').value }), 700);
 $('rulesReset').onclick = () => { $('rules').value = DEFAULT_OPTS.rules; saveOpts({ rules: DEFAULT_OPTS.rules }); };
 renderOpts();
@@ -251,6 +335,8 @@ async function run() {
   state.busy = true; state.copiedAt = null; again = false;
   $('copy').disabled = true; $('fetchLine').hidden = true;
   banner('转换中…');
+  syncFaces();
+  const o = opts, w = width();
   try {
     let html, entry, label, where;
     if (state.src.kind === 'path') {
@@ -264,10 +350,10 @@ async function run() {
     }
     showCurrent(label, where);
     const prep = await prepare(html, entry);
-    banner(opts.fontMode === 'svg' ? '转换中…（大字转轮廓第一次要启动字体服务，稍慢）' : '转换中…');
-    const res = await convert(prep.html, { width: width(), frame: $('scratch'), verifyFrame: $('paneB'), opts, glyphs, raster });
-    state.result = { ...res, report: prep.report };
-    for (const f of [$("paneA"), $("paneB")]) { f.style.width = width() + "px"; f.style.height = ""; }
+    banner(o.paths.length ? '转换中…（第一次转 SVG 路径要读取本机字体目录，稍慢）' : '转换中…');
+    const res = await convert(prep.html, { width: w, frame: $('scratch'), verifyFrame: $('paneB'), opts: o, glyphs, raster });
+    state.result = { ...res, report: prep.report, paths: o.paths, width: w };
+    for (const f of [$('paneA'), $('paneB')]) { f.style.width = w + 'px'; f.style.height = ''; }
     $('paneA').srcdoc = res.original;
     $('panes').hidden = false; $('empty').hidden = true;
     renderChecks();
@@ -279,6 +365,7 @@ async function run() {
   } finally {
     state.busy = false;
     refreshCopy();
+    syncFaces();
     if (again) run();
   }
 }
@@ -566,7 +653,7 @@ $('reload').onclick = run;
 $('copy').onclick = copy;
 const W_KEY = 'wxc.width';
 $('width').value = localStorage.getItem(W_KEY) || '335';
-$('width').onchange = () => { localStorage.setItem(W_KEY, $('width').value); run(); };
+$('width').onchange = () => { localStorage.setItem(W_KEY, $('width').value); rerun(); };
 
 // 两个预览同步滚动（按比例）
 let syncing = false;

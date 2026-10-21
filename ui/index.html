@@ -54,28 +54,34 @@
 
   <section class="card" aria-labelledby="fontTitle">
     <h2 id="fontTitle">字体</h2>
-    <fieldset class="modes">
-      <legend class="sr-only">读者手机上没有原稿字体时怎么办</legend>
-      <label><input type="radio" name="fontMode" value="fallback"> <span><b>备用字体</b><span class="muted">全部保留为文字，读者手机上换成自带的相近字体</span></span></label>
-      <label><input type="radio" name="fontMode" value="svg"> <span><b>大字转轮廓</b><span class="muted">标题、编号等大字按原稿字形画成 SVG 图形，手机上和原稿一样；这些字在公众号后台改不了，要改就改原稿再复制一次。正文仍用备用字体</span></span></label>
-    </fieldset>
-    <div id="svgOpts" class="sub-opts">
-      <div class="row small">
-        <label for="svgMin">字号不小于</label>
-        <input id="svgMin" type="number" min="6" max="200" step="0.5" inputmode="decimal" aria-describedby="svgMinHint">
-        <span id="svgMinHint" class="muted">px 的算大字（按 375 宽的 iPhone 算）</span>
-      </div>
-      <div id="faceBox">
-        <p class="muted small">文中用到的字按字体、粗细（字重）、是否斜体分行列出，每行可以单独选怎么处理。选择会记住，下一篇用到同样的字时沿用。</p>
-        <div id="faceList" class="faces"></div>
-        <div class="row small"><button type="button" id="facesReset">全部恢复默认</button></div>
-      </div>
-      <label class="check small"><input type="checkbox" id="svgCopy"> 叠一层透明文字，读者能选中、复制、搜索</label>
+    <dl class="legend small">
+      <dt>勾选</dt><dd>转为 SVG 路径：手机上字形与原稿一致，在公众号后台不能编辑</dd>
+      <dt>不勾选</dt><dd>保留为文字：手机上显示为备用字体</dd>
+    </dl>
+    <p class="muted small">字号单位 px，按 375 宽的 iPhone（正文 335px）折算。</p>
+    <div class="row small face-tools">
+      <label for="svgMin">字号 ≥</label>
+      <input id="svgMin" type="number" min="1" max="400" step="0.5" inputmode="decimal">
+      <span>px</span>
+      <button type="button" id="pickBig" data-tip="勾选字号不小于这个值的行，其余的行取消勾选">按字号勾选</button>
     </div>
-    <label class="check small"><input type="checkbox" id="noWrap"> 原稿设了不换行（white-space: nowrap）的文字，手机上也不换行</label>
+    <div id="faceList" class="faces"><p class="muted small">载入文章后列出。</p></div>
+    <div class="check small">
+      <label><input type="checkbox" id="svgCopy"> 路径上叠透明文字</label>
+      <button type="button" class="help" data-tip="读者长按能选中、复制这些字。不叠则只能看">?</button>
+    </div>
+    <div class="check small">
+      <label><input type="checkbox" id="noWrap"> 保留不换行（white-space: nowrap）</label>
+      <button type="button" class="help" data-tip="公众号会删掉 white-space: nowrap。勾选后，这些文字里的空格换成不换行空格，字与字之间插入 U+2060（单词连接符），手机上照样不换行。后台的“正文字数”会把 U+2060 也算进去">?</button>
+    </div>
     <details id="rulesBox">
       <summary>备用字体规则</summary>
-      <p class="muted small">一行一条：<code>原稿字体, … =&gt; 备用字体, …</code>。字体名要写全名，不分大小写，<code>*</code> 匹配任意字符，<code>#</code> 开头的行是注释。备用字体插在字体栈里 sans-serif 等通用字体名之前。</p>
+      <p class="muted small">一行一条：<code>原稿字体, … =&gt; 备用字体, …</code></p>
+      <ul class="muted small notes">
+        <li>字体名写全名，不分大小写</li>
+        <li><code>*</code> 匹配任意字符，<code>#</code> 开头的行是注释</li>
+        <li>备用字体插在字体栈里 sans-serif 等通用字体名之前</li>
+      </ul>
       <label for="rules" class="sr-only">备用字体规则</label>
       <textarea id="rules" rows="9" spellcheck="false" autocomplete="off"></textarea>
       <div class="row small">

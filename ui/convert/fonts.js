@@ -14,13 +14,14 @@ SimSun, 宋体, NSimSun, 新宋体, Noto Serif CJK SC, Noto Serif SC, Source Han
 KaiTi, 楷体, STKaiti, 华文楷体, Kaiti SC => Kaiti SC, STKaiti`;
 
 export const DEFAULT_OPTS = {
-  fontMode: 'fallback',          // 'fallback' 只补备用字体 | 'svg' 按每套字的选择转 SVG 轮廓
   rules: DEFAULT_RULES,
   noWrap: true,                  // nowrap 文字用不换行空格 + U+2060 禁止折行
-  svgMin: 18,                    // "大字"：375 宽 iPhone（正文 335px）上不小于这个字号
-  svgCopy: true,                 // 轮廓上叠一层透明文字，读者能选中复制
-  faces: {},                     // 每套字（字体+字重+斜体）怎么处理：'all' 全部转轮廓 | 'big' 只转大字 | 'text' 保留文字
+  paths: [],                     // 转为 SVG 路径的字体表行（planFonts 的行键）；跨文章沿用
+  svgMin: 18,                    // 字体表"按字号选择"的下限，px
+  svgCopy: true,                 // 路径上叠一层透明文字，读者能选中复制
 };
+/** 字体表的字号按这个正文宽度（375 宽 iPhone）折算，和预览宽度无关 */
+export const REF_W = 335;
 
 const toRe = names => new RegExp('^(' + names.map(n => n.trim().replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')).join('|') + ')$', 'i');
 const bare = n => n.trim().replace(/^["']|["']$/g, '');
@@ -40,14 +41,6 @@ export function parseRules(text) {
   return { rules, bad };
 }
 
-/** "A, B C" → 匹配这些字体名（整名、不分大小写、* 通配）的函数 */
-export function fontMatcher(text) {
-  const names = splitTop(String(text || '')).map(bare).filter(Boolean);
-  if (!names.length) return () => false;
-  const re = toRe(names);
-  return name => re.test(bare(name));
-}
-
 const GENERIC = /^(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-[a-z-]+|-apple-system|emoji|math|fangsong)$/i;
 export function mobileFonts(stack, rules) {
   if (!rules || !rules.length) return stack;
@@ -63,26 +56,20 @@ export function mobileFonts(stack, rules) {
   return [...names.slice(0, at), ...add, ...names.slice(at)].join(', ');
 }
 
-/** 一套字的键：作者写的首选字体 + 字重 + 是否斜体。字号不进键（cqw 下有几十种），按"大字"阈值另分 */
+/** 一套字的键：作者写的首选字体 + 字重 + 是否斜体 */
 export function faceKey(cs) {
   const family = bare(splitTop(cs.fontFamily)[0] || '');
   const italic = cs.fontStyle !== 'normal';
   return { key: `${family.toLowerCase()}|${cs.fontWeight}|${italic ? 'i' : ''}`, family, weight: cs.fontWeight, italic };
 }
-// 手机上没有、也没有相近替代的展示字体：默认不论大小都转
-const ALWAYS = fontMatcher('Bahnschrift, Bahnschrift *, DIN, DIN *, DINPro*');
-export const faceDefault = family => ALWAYS(family) ? 'all' : 'big';
 
-const ZH_NAME = { 'pingfang sc': '苹方', 'noto sans cjk sc': '思源黑体', 'songti sc': '宋体-简', 'noto serif cjk sc': '思源宋体', 'kaiti sc': '楷体-简', stkaiti: '华文楷体' };
-const shown = f => ZH_NAME[f.toLowerCase()] ? `${ZH_NAME[f.toLowerCase()]}（${f}）` : f;
-
-/** 补上的备用字体里有苹方、而字重超过 600：iPhone 上会偏细（苹方最粗只有中粗） */
-export function mobileNote(family, weight, rules) {
-  if (GENERIC.test(family)) return '手机上用系统默认字体';
-  const added = mobileFonts(`"${family}"`, rules).split(',').slice(1).map(bare).filter(f => !GENERIC.test(f));
-  if (!added.length) return '手机上没有这款字体，读者看到的是手机自带的默认字体';
-  const w = parseInt(weight, 10);
-  const thin = added.includes('PingFang SC') && w > 600 ? `；苹方最粗只到 600（中粗），iPhone 上会比原稿的 ${w} 细一些` : '';
-  const names = added.slice(0, 2).map(shown).join('、');
-  return `手机上显示为${/^[A-Za-z]/.test(names) ? ' ' : ''}${names}${added.length > 2 ? ' 等' : ''}${thin}`;
+/**
+ * 手机上的字体栈（原稿字体栈按规则补上备用字体）、栈里出自规则右边的字体名（手机字体），
+ * 以及 iPhone 上会不会比原稿细：PingFang SC 最粗为 600（Semibold）
+ */
+export function phoneFonts(stack, weight, rules) {
+  const out = mobileFonts(stack, rules);
+  const known = new Set(rules.flatMap(r => r.fonts.map(f => f.toLowerCase())));
+  const names = splitTop(out).map(bare).filter(f => known.has(f.toLowerCase()) && !GENERIC.test(f));
+  return { stack: out, names, thin: names.some(f => /^pingfang sc$/i.test(f)) && parseInt(weight, 10) > 600 };
 }
