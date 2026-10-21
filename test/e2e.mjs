@@ -31,7 +31,10 @@ const raw = (port, p, opts = {}) => new Promise(res => {
   req.end(opts.body);
 });
 
-const srv = spawn(process.execPath, [path.join(HERE, '..', 'server.mjs'), ARTICLE, '--port', String(IMG), '--ui', String(UI), '--no-open'], { stdio: ['ignore', 'pipe', 'pipe'] });
+// 设置文件放 test/out：测试里改端口不碰用户的 settings.json
+const SETTINGS = path.join(OUT, 'e2e-settings.json');
+fs.rmSync(SETTINGS, { force: true });
+const srv = spawn(process.execPath, [path.join(HERE, '..', 'server.mjs'), ARTICLE, '--port', String(IMG), '--ui', String(UI), '--settings', SETTINGS, '--no-open'], { stdio: ['ignore', 'pipe', 'pipe'] });
 let log = '';
 srv.stdout.on('data', d => { log += d; }); srv.stderr.on('data', d => { log += d; });
 for (let i = 0; i < 50 && !log.includes('页面'); i++) await new Promise(r => setTimeout(r, 100));
@@ -334,7 +337,7 @@ try {
   console.log('\n阅读页模拟');
   {
     const errs0 = errors.length;
-    const frameOk = () => page.waitForFunction(() => { const d = document.getElementById('paneB').contentDocument; return d && d.getElementById('js_content') && d.readyState === 'complete'; }, { timeout: 30000 });
+    const frameOk = () => page.waitForFunction(() => { const d = document.getElementById('paneB').contentDocument; return !!(d && d.documentElement && d.getElementById('js_content') && d.readyState === 'complete'); }, { timeout: 30000 });
     await frameOk();
     const light = await page.evaluate(() => {
       const f = document.getElementById('paneB'), d = f.contentDocument, c = d.getElementById('js_content').getBoundingClientRect();
@@ -346,7 +349,7 @@ try {
     check(light.verify > 0, '比对用的隐藏 iframe 里有正文（复制时的纯文本取自这里）', `${light.verify} 字`);
     await page.screenshot({ path: path.join(OUT, `stage-light${SVG_MODE ? '-svg' : ''}.png`) });
     await page.click('#dark');
-    await page.waitForFunction(() => { const d = document.getElementById('paneB').contentDocument; return d && d.documentElement.classList.contains('data_color_scheme_dark') && d.readyState === 'complete'; }, { timeout: 60000 }).catch(() => {});
+    await page.waitForFunction(() => { const d = document.getElementById('paneB').contentDocument; return !!(d && d.documentElement && d.documentElement.classList.contains('data_color_scheme_dark') && d.readyState === 'complete'); }, { timeout: 60000 }).catch(() => {});
     const dark = await page.evaluate(() => {
       const d = document.getElementById('paneB').contentDocument;
       return { cls: d.documentElement.classList.contains('data_color_scheme_dark'), bg: getComputedStyle(d.body).backgroundColor, scripts: d.querySelectorAll('script').length,
@@ -392,6 +395,30 @@ try {
     const outside = path.relative(dir, path.join(HERE, '..', 'ui', 'app.css')).split(path.sep).join('/');
     const r2 = await raw(UI, '/api/assets', { method: 'POST', headers: { host: '127.0.0.1:' + UI, origin: 'http://127.0.0.1:' + UI }, body: JSON.stringify({ refs: [outside] }) });
     check(r2.status === 200 && JSON.parse(r2.body)[outside] === null, '不登记文章文件夹以外的文件', outside);
+  }
+
+  // 在页面里改取图端口：立即换绑并存进设置文件；新端口被占时保持原端口（放在最后：之后图床口不在 IMG 上了）
+  console.log('\n取图端口');
+  {
+    const post = body => raw(UI, '/api/port', { method: 'POST', headers: { host: '127.0.0.1:' + UI, origin: 'http://127.0.0.1:' + UI }, body: JSON.stringify(body) });
+    const NEW = IMG + 2;
+    const busy = http.createServer().listen(IMG + 3, '0.0.0.0');
+    await new Promise(r => busy.once('listening', r));
+    await page.$eval('#portInput', (e, v) => { e.value = String(v); }, NEW);
+    await page.click('#portForm button[type="submit"]');
+    await page.waitForFunction(p => window.__wxc.server && window.__wxc.server.imgPort === p, { timeout: 10000 }, NEW).catch(() => {});
+    const imgNow = await page.evaluate(() => window.__wxc.server && window.__wxc.server.imgPort);
+    const id = ids[0];
+    const onNew = id ? (await raw(NEW, '/a/' + id)).status : 0, onOld = id ? (await raw(IMG, '/a/' + id)).status : 0;
+    const saved = (() => { try { return JSON.parse(fs.readFileSync(SETTINGS, 'utf8')).imgPort; } catch { return null; } })();
+    check(imgNow === NEW && saved === NEW && (!id || onNew === 200 && onOld === 0), '页面里改取图端口：立即换绑、旧端口关闭、存进设置文件',
+      `端口 ${imgNow}，设置文件 ${saved}` + (id ? `，新端口取图 ${onNew}，旧端口 ${onOld || '连不上'}` : ''));
+    const taken = await post({ port: IMG + 3 });
+    const stay = id ? (await raw(NEW, '/a/' + id)).status : 200;
+    check(taken.status === 409 && stay === 200, '新端口被占用时报错并保持原端口', `${taken.status} ${JSON.parse(taken.body).error || ''}`);
+    const bad = await Promise.all([{ port: 80 }, { port: UI }, { port: 'x' }].map(post));
+    check(bad.every(r => r.status === 400), '端口不合法（<1024、与页面端口相同、不是数字）时拒绝', bad.map(r => r.status).join(','));
+    busy.close();
   }
 } catch (e) {
   if (e.message !== 'stop') { console.error(e); fails++; }

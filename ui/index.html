@@ -105,6 +105,12 @@
       <button type="button" id="recheck">重新检测</button>
       <span id="hostWhen" class="muted"></span>
     </div>
+    <form id="portForm" class="row small port-row">
+      <label for="portInput">本机取图端口</label>
+      <input id="portInput" type="number" min="1024" max="65535" step="1" inputmode="numeric">
+      <button type="submit">更改</button>
+      <button type="button" class="help" data-tip="微信从这个端口取图，外网要能连上：路由器端口转发或内网穿透都要对准它。改后立即生效，重启后沿用（存在工具目录的 settings.json）">?</button>
+    </form>
     <details>
       <summary>没有公网 IP？用内网穿透</summary>
       <p class="muted small">用 frp、cpolar 等内网穿透工具，把本机的 <span id="imgPortHint">38960</span> 端口映射出去，再把得到的地址填在这里。</p>

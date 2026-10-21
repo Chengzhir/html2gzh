@@ -463,6 +463,7 @@ function renderHost() {
   const c = chosen();
   const opts = hostOptions(h);
   $('imgPortHint').textContent = state.server.imgPort;
+  if (document.activeElement !== $('portInput')) $('portInput').value = state.server.imgPort;
   if (!opts.length) {
     line.className = h.checking ? 'status' : 'status err';
     line.textContent = h.checking ? '正在检测取图地址…' : '查不到本机的公网 IP';
@@ -639,6 +640,18 @@ $('pathForm').onsubmit = async e => {
   if (!p) return;
   try { await api('/api/open', { path: p }); banner('打开中…'); }
   catch (err) { banner(err.message, true); }
+};
+$('portForm').onsubmit = async e => {
+  e.preventDefault();
+  const port = Number($('portInput').value);
+  const btn = $('portForm').querySelector('button[type="submit"]');
+  btn.disabled = true;
+  try {
+    const j = await api('/api/port', { port });
+    hostSig = '';
+    banner(`取图端口已改为 ${j.imgPort}。路由器端口转发或内网穿透要对准新端口，改完重新复制粘贴。`);
+  } catch (err) { banner(err.message, true); }
+  finally { btn.disabled = false; $('portInput').blur(); }
 };
 $('customForm').onsubmit = async e => {
   e.preventDefault();

@@ -14,11 +14,25 @@ const UI_DIR = path.join(HERE, 'ui');
 const argv = process.argv.slice(2);
 const opt = (k, d) => { const i = argv.indexOf('--' + k); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const flag = k => argv.includes('--' + k);
-const IMG_PORT = +opt('port', 38960);
-const UI_PORT = +opt('ui', IMG_PORT + 1);
+// 页面上改的设置（取图端口、内网穿透地址）存在这里，重启后沿用；命令行参数优先
+const SETTINGS = path.resolve(opt('settings', path.join(HERE, 'settings.json')));
+function loadSettings() {
+  try { const s = JSON.parse(fs.readFileSync(SETTINGS, 'utf8')); return s && typeof s === 'object' ? s : {}; } catch { return {}; }
+}
+const settings = loadSettings();
+function saveSettings(patch) {
+  Object.assign(settings, patch);
+  try { fs.writeFileSync(SETTINGS, JSON.stringify(settings, null, 2) + '\n'); }
+  catch (e) { console.error(`${stamp()}  设置没存上（${e.message}）`); }
+}
+const validPort = n => Number.isInteger(n) && n >= 1024 && n <= 65535;
+const UI_PORT = +opt('ui', opt('port') ? +opt('port') + 1 : 38961);
+const DEFAULT_IMG = 38960;
+const savedImg = validPort(settings.imgPort) && settings.imgPort !== UI_PORT ? settings.imgPort : 0;
+let IMG_PORT = opt('port') ? +opt('port') : savedImg || DEFAULT_IMG;
 const NO_OPEN = flag('no-open');
 const LAUNCH = process.platform === 'win32' ? 'serve.cmd' : 'node server.mjs';
-const initialArg = argv.find((a, i) => !a.startsWith('--') && !['--port', '--ui'].includes(argv[i - 1]));
+const initialArg = argv.find((a, i) => !a.startsWith('--') && !['--port', '--ui', '--settings'].includes(argv[i - 1]));
 
 const TOKEN = crypto.randomBytes(8).toString('hex');
 const ASSET_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.avif', '.woff', '.woff2', '.ttf', '.otf', '.css']);
@@ -76,7 +90,8 @@ function openArticle(input) {
 
 /* ---------- 公网出口 ---------- */
 // list: [{ base, ip, seen, ok, passes, stale }]，seen = 本轮多少次探测落在这个出口
-const host = { checking: false, list: [], custom: null, checkedAt: 0, probes: 0 };
+const host = { checking: false, list: [], custom: typeof settings.custom === 'string' && settings.custom ? { base: settings.custom, ok: false } : null, checkedAt: 0, probes: 0 };
+let recheck = false;
 const IP_SRCS = ['https://myip.ipip.net', 'http://ddns.oray.com/checkip', 'https://ip.3322.net', 'http://members.3322.org/dyndns/getip',
   'https://api-ipv4.ip.sb/ip', 'https://ifconfig.me/ip', 'https://checkip.amazonaws.com', 'https://v4.ident.me', 'https://ipv4.icanhazip.com'];
 const ROUNDS = 3;
@@ -115,7 +130,8 @@ async function pingN(base, n = 3) {
   return r.filter(Boolean).length;
 }
 async function checkHosts() {
-  if (host.checking) return;
+  // 检测进行中又要求检测（比如刚换了端口）：这一轮结束后再测一轮
+  if (host.checking) { recheck = true; return; }
   host.checking = true;
   try {
     const jobs = [];
@@ -138,7 +154,10 @@ async function checkHosts() {
     host.checkedAt = Date.now();
     for (const h of fresh) console.log(`${stamp()}  出口  ${h.base}  ${h.ok ? '外网可达' : '不通'}  （${h.seen}/${jobs.length} 次探测走这条）`);
     if (!fresh.length) console.log(`${stamp()}  出口  查不到公网 IP`);
-  } finally { host.checking = false; }
+  } finally {
+    host.checking = false;
+    if (recheck) { recheck = false; checkHosts(); }
+  }
 }
 function pickBase() {
   if (host.custom && host.custom.ok) return { base: host.custom.base, ok: true };
@@ -243,11 +262,21 @@ async function uiRoute(req, res) {
     catch (e) { return json(res, 400, { error: e.message }); }
   }
   if (p === '/api/recheck') { await checkHosts(); return json(res, 200, { ok: true }); }
+  if (p === '/api/port') {
+    let port;
+    try { port = Number(j().port); } catch { return json(res, 400, { error: '请求不是 JSON' }); }
+    if (!validPort(port)) return json(res, 400, { error: '端口应为 1024–65535 之间的整数' });
+    if (port === UI_PORT) return json(res, 400, { error: `${port} 是本页面在用的端口` });
+    if (port === IMG_PORT) return json(res, 200, { imgPort: IMG_PORT });
+    try { await changeImgPort(port); return json(res, 200, { imgPort: IMG_PORT }); }
+    catch (e) { return json(res, 409, { error: e.code === 'EADDRINUSE' ? `端口 ${port} 被别的程序占用了，仍用 ${IMG_PORT}` : `换不了端口（${e.message}），仍用 ${IMG_PORT}` }); }
+  }
   if (p === '/api/custom') {
     const base = String(j().base || '').trim().replace(/\/+$/, '');
     if (!base) host.custom = null;
     else if (!/^https?:\/\/[^\s/]+$/i.test(base)) return json(res, 400, { error: '地址格式应为 http(s)://主机[:端口]' });
     else host.custom = { base, ok: await ping(base) };
+    saveSettings({ custom: host.custom ? host.custom.base : '' });
     return json(res, 200, { custom: host.custom });
   }
   return send(res, 404, 'not found');
@@ -293,18 +322,48 @@ async function handOver() {
 
 const uiServer = http.createServer(wrap(uiRoute));
 const imgServer = http.createServer(wrap(imgRoute));
-uiServer.once('error', e => { if (e.code === 'EADDRINUSE') handOver(); else throw e; });
-imgServer.once('error', e => {
-  console.error(e.code === 'EADDRINUSE' ? `取图端口 ${IMG_PORT} 被别的程序占用了。换一组端口再启动，例如 ${LAUNCH} --port 40000（取图用 40000，页面用 40001）` : e.message);
-  process.exit(1);
-});
-uiServer.listen(UI_PORT, '127.0.0.1', () => {
-  if (initialArg) { try { openArticle(initialArg); } catch (e) { console.error(e.message); } }
-  imgServer.listen(IMG_PORT, '0.0.0.0', () => {
-    console.log(`\n  页面    http://127.0.0.1:${UI_PORT}/`);
-    console.log(`  取图    0.0.0.0:${IMG_PORT}（对外网开放，只提供载入过的文章里的图片）`);
-    console.log('  退出    Ctrl+C\n');
-    checkHosts();
-    openBrowser(`http://127.0.0.1:${UI_PORT}/`);
+/** 取图口绑到 port；成功 resolve，失败 reject（EADDRINUSE 等） */
+function listenImg(port) {
+  return new Promise((resolve, reject) => {
+    const fail = e => { imgServer.off('listening', ok); reject(e); };
+    const ok = () => { imgServer.off('error', fail); IMG_PORT = port; resolve(); };
+    imgServer.once('error', fail);
+    imgServer.once('listening', ok);
+    imgServer.listen(port, '0.0.0.0');
   });
+}
+/** 换取图端口：先放开旧端口再绑新的，新端口被占就绑回旧端口。出口列表里的地址带端口，清空后重测 */
+async function changeImgPort(port) {
+  const old = IMG_PORT;
+  imgServer.closeAllConnections();
+  await new Promise(r => imgServer.close(() => r()));
+  try { await listenImg(port); }
+  catch (e) { await listenImg(old); throw e; }
+  host.list = [];
+  host.checkedAt = 0;
+  saveSettings({ imgPort: port });
+  console.log(`${stamp()}  取图  端口改为 ${port}`);
+  checkHosts();
+}
+uiServer.once('error', e => { if (e.code === 'EADDRINUSE') handOver(); else throw e; });
+uiServer.listen(UI_PORT, '127.0.0.1', async () => {
+  if (initialArg) { try { openArticle(initialArg); } catch (e) { console.error(e.message); } }
+  try { await listenImg(IMG_PORT); }
+  catch (e) {
+    // 上次在页面里存的端口被占了：退回默认端口，页面里可以再改
+    const fallback = !opt('port') && savedImg && IMG_PORT !== DEFAULT_IMG && e.code === 'EADDRINUSE';
+    if (fallback) {
+      console.error(`取图端口 ${IMG_PORT}（上次在页面里设的）被别的程序占用了，改用 ${DEFAULT_IMG}`);
+      try { await listenImg(DEFAULT_IMG); } catch { /* 下面统一报错 */ }
+    }
+    if (!imgServer.listening) {
+      console.error(e.code === 'EADDRINUSE' ? `取图端口 ${IMG_PORT} 被别的程序占用了。换一组端口再启动，例如 ${LAUNCH} --port 40000（取图用 40000，页面用 40001）` : e.message);
+      process.exit(1);
+    }
+  }
+  console.log(`\n  页面    http://127.0.0.1:${UI_PORT}/`);
+  console.log(`  取图    0.0.0.0:${IMG_PORT}（对外网开放，只提供载入过的文章里的图片；端口可在页面里改）`);
+  console.log('  退出    Ctrl+C\n');
+  checkHosts();
+  openBrowser(`http://127.0.0.1:${UI_PORT}/`);
 });

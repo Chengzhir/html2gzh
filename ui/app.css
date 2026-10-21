@@ -63,6 +63,8 @@ code{font:12px ui-monospace,Consolas,monospace;background:#f2eee6;padding:0 3px;
 .legend dd{margin:0}
 .notes{margin:4px 0 0;padding-left:18px}
 .face-tools input{flex:none;width:64px}
+.port-row input{flex:none;width:84px}
+.port-row>label{white-space:nowrap}
 .faces{margin-top:8px}
 .faces table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
 .faces thead th{font-weight:600;color:var(--muted);text-align:left;padding:0 4px 4px;border-bottom:1px solid var(--line)}
