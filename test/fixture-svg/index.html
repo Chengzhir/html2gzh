@@ -81,6 +81,10 @@ body{margin:8px;font:15px/1.6 sans-serif;color:#222}
 <svg viewBox="0 0 200 60"><defs><linearGradient id="lg3"><stop offset="0" stop-color="#dc2626"/><stop offset="1" stop-color="#2f6db3"/></linearGradient></defs>
 <circle cx="30" cy="30" r="14" fill="url(#lg3)"><animate attributeName="r" values="14;22;14" dur="2s" repeatCount="indefinite"/></circle></svg></section>
 
+<section class="case" data-sample-skip><p>渐变里的动画（公众号里播放不了，按 0 秒时的样子画成位图；第一个色标只由动画给颜色）</p>
+<svg viewBox="0 0 200 60"><defs><linearGradient id="lg4" x2="0.5"><stop offset="0"><animate attributeName="stop-color" values="#dc2626;#2f6db3;#dc2626" dur="2s" repeatCount="indefinite"/></stop><stop offset="1" stop-color="#e90"><animate attributeName="offset" values="0.6;1;0.6" dur="2s" repeatCount="indefinite"/></stop><animate attributeName="x2" values="1;0.5;1" dur="2s" repeatCount="indefinite"/></linearGradient></defs>
+<rect x="10" y="8" width="120" height="44" rx="6" fill="url(#lg4)"/></svg></section>
+
 <section class="case"><p>图片（slice 裁切、x 动画）、触摸触发、mpath 路径动画、链接、普通文字</p>
 <svg viewBox="0 0 200 60"><image href="pic.png" x="4" y="6" width="50" height="48" preserveAspectRatio="xMidYMid slice"><animate attributeName="x" values="4;14;4" dur="2s" repeatCount="indefinite"/></image>
 <rect x="64" y="10" width="20" height="20" fill="#e90"><animate attributeName="opacity" to="0.3" begin="touchstart" dur="0.4s" fill="freeze"/></rect>

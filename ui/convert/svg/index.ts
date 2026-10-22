@@ -146,8 +146,9 @@ function findings(s: SvgStat, t: ReturnType<typeof tally>): SvgFinding[] {
   if (t.n('css:overlap')) add('info', 'overlap', { n: t.n('css:overlap') }, t.roots('css:overlap'));
   const anim = keys.filter(k => k.startsWith('anim:'));
   if (anim.length) add('warn', 'anim', { n: sum(anim), attrs: [...new Set(anim.map(k => k.slice(5)))] }, roots(anim));
-  const paint = keys.filter(k => k.startsWith('paint:'));
+  const paint = keys.filter(k => k === 'paint:avg' || k === 'paint:lost');
   if (paint.length) add('warn', 'paint', { n: sum(paint) }, roots(paint));
+  if (t.n('paint:frozen')) add('warn', 'paintFrozen', { n: t.n('paint:frozen') }, t.roots('paint:frozen'));
   const ref = keys.filter(k => k.startsWith('ref:'));
   if (ref.length) {
     const what = [...new Set(ref)].map(k =>

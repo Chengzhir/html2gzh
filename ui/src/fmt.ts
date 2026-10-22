@@ -28,12 +28,14 @@ export const kb = (bytes: number) =>
 
 /** 详细说明排成的段落与列表 */
 export type Block = { p: string } | { ul: string[] };
-/** 检查结果的标题、结论、说明。说明 = finding.<code>.detail（有的话）+ parts：相邻的句子并成一段，列表另起 */
+/** 检查结果的标题、结论、说明。说明 = finding.<code>.detail（有的话，换行处分段）+ parts：相邻的句子并成一段，列表另起 */
 export function showFinding(f: Finding) {
   const base = 'finding.' + f.code,
     params = f.params;
   const blocks: Block[] = [];
-  let para = te(base + '.detail') ? fmtKey(base + '.detail', params) : '';
+  const lines = te(base + '.detail') ? fmtKey(base + '.detail', params).split('\n') : [];
+  let para = lines.pop() ?? '';
+  for (const p of lines) blocks.push({ p });
   const flush = () => {
     if (para) blocks.push({ p: para });
     para = '';

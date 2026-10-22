@@ -145,6 +145,8 @@ export function fixWhitelist(root, ids, rep) {
     if (a.localName !== 'animate' && a.localName !== 'set') continue;
     const p = a.getAttribute('attributeName');
     if (!p || WX_ANIM_OK.has(p)) continue;
+    // 渐变、图案连同其中的动画都会删掉，用到它们的图形按 0 秒时的值画成位图（报为 paint:frozen）
+    if (a.closest('linearGradient,radialGradient,pattern')) continue;
     const el = targetOf(a, ids);
     if (el && FIX[p] && FIX[p](a, el)) fixed++;
     else rep('anim:' + p, el || a);

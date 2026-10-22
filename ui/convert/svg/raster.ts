@@ -1,6 +1,20 @@
 // 依赖 id 的静态部分（渐变、图案、滤镜、蒙版、裁切、标记、textPath）画成位图：公众号删 id 之后这些引用全部失效
-import { SVG_NS, isSvg, isAnim, hasAnim, inResource, ownAnims, URL_REF, fixUrls, mk, wrapG, RESOURCE } from './dom.ts';
-import { inv, fromDom } from './path.ts';
+import {
+  SVG_NS,
+  isSvg,
+  isAnim,
+  hasAnim,
+  inResource,
+  ownAnims,
+  URL_REF,
+  fixUrls,
+  mk,
+  wrapG,
+  RESOURCE,
+  hrefOf,
+  refId,
+} from './dom.ts';
+import { inv, fromDom, mul, ID_M, matrixAttr } from './path.ts';
 import { bakeStyleTransform } from './transform.ts';
 
 const DPR = 3,
@@ -65,13 +79,15 @@ const usesIds = (el, win) => {
     }
   return false;
 };
-const REF_PROPS = [...OWN, ...PAINT];
-/** 子树引用的资源（渐变、裁切……）里有动画：画成位图会把动画冻住 */
+/**
+ * 子树用到的滤镜、蒙版、裁切、标记里有动画：画成位图会把动画冻住。
+ * 渐变、图案里的动画不算：公众号删 id 之后填充引用不到它们，动画本来就播放不了，画成位图时取 0 秒时的值（frozenClone）
+ */
 function refsAnimated(el, win, ids) {
   for (const d of [el, ...el.querySelectorAll('*')]) {
     if (!isSvg(d)) continue;
     const cs = win.getComputedStyle(d);
-    for (const p of REF_PROPS) {
+    for (const p of OWN) {
       const m = URL_REF.exec(cs.getPropertyValue(p));
       const r = m && ids.get(decodeURIComponent(m[1]));
       if (r && hasAnim(r)) return true;
@@ -79,6 +95,90 @@ function refsAnimated(el, win, ids) {
   }
   return false;
 }
+/** 子树的填充或描边用到的渐变、图案（含经 href 继承的）里有动画 */
+function paintAnimated(el: Element, win: Window, ids: Map<string, Element>): boolean {
+  for (const d of [el, ...el.querySelectorAll('*')]) {
+    if (!isSvg(d)) continue;
+    const cs = win.getComputedStyle(d);
+    for (const p of PAINT) {
+      const m = URL_REF.exec(cs.getPropertyValue(p));
+      let r = m ? ids.get(decodeURIComponent(m[1])) : undefined;
+      for (let i = 0; r && i < 8; i++) {
+        if (hasAnim(r)) return true;
+        r = ids.get(refId(hrefOf(r)) || '');
+      }
+    }
+  }
+  return false;
+}
+
+type SvgWindow = Window & typeof globalThis;
+const camel = (s: string) => s.replace(/-(\w)/g, (_, c: string) => c.toUpperCase());
+/** SVGAnimated* 的当前值写成属性值；枚举、字符串、viewBox 这类没有对应写法的返回 null */
+function animString(prop: { animVal: unknown }, win: SvgWindow): string | null {
+  if (prop instanceof win.SVGAnimatedEnumeration) return null;
+  const v = prop.animVal;
+  if (typeof v === 'number') return String(v);
+  if (v instanceof win.SVGTransformList) {
+    let m = ID_M;
+    for (let i = 0; i < v.numberOfItems; i++) m = mul(m, fromDom(v.getItem(i).matrix));
+    return matrixAttr(m);
+  }
+  if (v instanceof win.SVGLength || v instanceof win.SVGAngle) return v.valueAsString;
+  if (v instanceof win.SVGLengthList || v instanceof win.SVGNumberList) {
+    const out: string[] = [];
+    for (let i = 0; i < v.numberOfItems; i++) {
+      const item = v.getItem(i);
+      out.push(item instanceof win.SVGLength ? item.valueAsString : String(item.value));
+    }
+    return out.join(' ');
+  }
+  return null;
+}
+/** 把 el 上属性 name 在当前时刻的值写到副本 copy 上 */
+function freezeValue(el: SVGElement, copy: SVGElement, name: string, win: SvgWindow) {
+  const cs = win.getComputedStyle(el);
+  if (name === 'd') {
+    const m = /^path\("(.*)"\)$/.exec(cs.getPropertyValue('d'));
+    if (m) copy.setAttribute('d', m[1]);
+    return;
+  }
+  const props = el as unknown as Record<string, unknown>;
+  let attr = name,
+    prop = props[camel(name)];
+  if (name === 'transform' && !prop) {
+    attr = el.localName === 'pattern' ? 'patternTransform' : 'gradientTransform';
+    prop = props[attr];
+  }
+  if (prop && typeof prop === 'object' && 'animVal' in prop) {
+    const v = animString(prop, win);
+    if (v == null) return;
+    copy.setAttribute(attr, v);
+    // x、width、r 这类几何属性在 Chrome 里也是 CSS 属性，副本 style 里的旧值会盖过属性
+    copy.style.removeProperty(name);
+    return;
+  }
+  const v = cs.getPropertyValue(name);
+  if (v) copy.style.setProperty(name, v);
+}
+/**
+ * 资源的副本，动画改变的属性写成当前时刻（文档已暂停在 0 秒）的值。
+ * 画位图时会去掉全部动画，不写下来的话，副本会回到属性的初始值，与页面刚打开时的样子不同
+ */
+function frozenClone(res: Element, win: SvgWindow): Element {
+  const copy = res.cloneNode(true) as Element;
+  if (!hasAnim(res)) return copy;
+  const to = [copy, ...copy.querySelectorAll('*')];
+  [res, ...res.querySelectorAll('*')].forEach((el, i) => {
+    if (!isSvg(el)) return;
+    for (const a of ownAnims(el)) {
+      const name = a.getAttribute('attributeName');
+      if (name) freezeValue(el as SVGElement, to[i] as SVGElement, name, win);
+    }
+  });
+  return copy;
+}
+
 const RIGID = new Set(['transform', 'opacity', 'visibility']);
 const rigidAnim = a =>
   a.localName === 'animateMotion' || a.localName === 'animateTransform' || RIGID.has(a.getAttribute('attributeName'));
@@ -140,7 +240,7 @@ export function findUnits(root, win, ids) {
       fo: el.localName === 'foreignObject',
     };
     f.uses = f.own || f.paint;
-    for (const p of REF_PROPS) {
+    for (const p of OWN) {
       const m = URL_REF.exec(cs.getPropertyValue(p));
       const r = m && ids.get(decodeURIComponent(m[1]));
       if (r && animRes(r)) f.refAnim = true;
@@ -255,7 +355,7 @@ async function dataUri(win, url) {
  * 一组连续兄弟元素画成位图，换成同一位置的 foreignObject + 背景图。
  * 在父元素的坐标系里画（祖先的 transform、opacity、裁切照旧作用在它上面），只带可继承的样式与全部资源定义
  */
-async function rasterize(run, ctx, win, rep) {
+async function rasterize(run, ctx, win, ids, rep) {
   const doc = run[0].ownerDocument,
     R = region(run, win);
   if (!R) {
@@ -274,7 +374,7 @@ async function rasterize(run, ctx, win, rep) {
   });
   const defs = mk(doc, 'defs');
   for (const r of doc.querySelectorAll('linearGradient,radialGradient,pattern,filter,mask,clipPath,marker,symbol'))
-    if (isSvg(r)) defs.appendChild(r.cloneNode(true));
+    if (isSvg(r)) defs.appendChild(frozenClone(r, win));
   svg.appendChild(defs);
   const pcs = win.getComputedStyle(parent),
     wrap = mk(doc, 'g');
@@ -358,6 +458,7 @@ async function rasterize(run, ctx, win, rep) {
     rep('raster:fail', run[0]);
     return false;
   }
+  if (run.some(el => paintAnimated(el, win, ids))) rep('paint:frozen', run[0]);
   const r3 = n => Math.round(n * 1000) / 1000;
   const fo = mk(doc, 'foreignObject', { x: r3(hit.x), y: r3(hit.y), width: r3(hit.w), height: r3(hit.h) });
   const sec = doc.createElementNS('http://www.w3.org/1999/xhtml', 'section');
@@ -373,6 +474,6 @@ async function rasterize(run, ctx, win, rep) {
 export async function rasterAll(root, ctx, win, ids, rep) {
   if (!ctx.raster) return 0;
   let n = 0;
-  for (const run of findUnits(root, win, ids)) if (await rasterize(run, ctx, win, rep)) n++;
+  for (const run of findUnits(root, win, ids)) if (await rasterize(run, ctx, win, ids, rep)) n++;
   return n;
 }
