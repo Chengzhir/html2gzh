@@ -669,6 +669,9 @@ details.fold > summary:hover {
 /* 预览：两栏等高。原稿是正文宽的一张纸；阅读页是手机屏（正文宽 + 两侧各 20px），外面一圈边框 */
 .stage {
   --scr-h: clamp(480px, calc(100vh - 110px), 900px);
+  --dev-pad: 10px;
+  --sbar-h: 30px;
+  --nbar-h: 44px;
   flex: 1;
   min-width: 0;
   height: 100%;
@@ -686,6 +689,8 @@ details.fold > summary:hover {
   max-width: 100%;
 }
 .pane {
+  display: flex;
+  flex-direction: column;
   margin: 0;
 }
 .pane figcaption {
@@ -700,8 +705,9 @@ details.fold > summary:hover {
 .dark-toggle {
   margin-left: auto;
 }
+/* 与右栏模拟的正文可见区同高、上沿对齐：两栏同步滚动时同一段内容在同一高度 */
 .sheet {
-  margin-top: 10px;
+  margin-top: calc(var(--dev-pad) + var(--sbar-h) + var(--nbar-h));
   background: #fff;
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.08),
@@ -710,10 +716,10 @@ details.fold > summary:hover {
 .sheet iframe {
   display: block;
   border: 0;
-  height: var(--scr-h);
+  height: calc(var(--scr-h) - var(--sbar-h) - var(--nbar-h) - var(--wxbar-h));
 }
 .device {
-  padding: 10px;
+  padding: var(--dev-pad);
   border-radius: 30px;
   background: #1b1b1d;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
@@ -730,7 +736,7 @@ details.fold > summary:hover {
 }
 .sbar {
   flex: none;
-  height: 30px;
+  height: var(--sbar-h);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -746,7 +752,7 @@ details.fold > summary:hover {
 }
 .nbar {
   flex: none;
-  height: 44px;
+  height: var(--nbar-h);
   display: flex;
   align-items: center;
   justify-content: space-between;

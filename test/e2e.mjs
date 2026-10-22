@@ -696,6 +696,20 @@ try {
     await page.screenshot({ path: path.join(OUT, `stage-dark${SVG_MODE ? '-svg' : ''}.png`) });
     await page.click('#dark');
     await frameOk();
+    // 左栏与右栏底栏以上的可见区同宽、同高、上沿对齐
+    const panesBox = await page.evaluate(() => {
+      const a = document.getElementById('paneA').getBoundingClientRect(),
+        b = document.getElementById('paneB'),
+        rb = b.getBoundingClientRect(),
+        bar = b.contentDocument.querySelector('.wx_bar').getBoundingClientRect().height,
+        body = b.contentDocument.getElementById('js_content').getBoundingClientRect().width;
+      return { a: [a.width, a.top, a.height], b: [body, rb.top, rb.height - bar] };
+    });
+    check(
+      panesBox.a.every((v, i) => Math.abs(v - panesBox.b[i]) <= 1),
+      '左栏原网页预览与右栏正文可见区同宽、同高、上沿对齐',
+      `宽/上沿/高 左 ${panesBox.a.map(v => v.toFixed(1)).join('/')}，右 ${panesBox.b.map(v => v.toFixed(1)).join('/')}`,
+    );
     // 同步滚动：原稿滚 200px，阅读页按"开头一屏内追平标题区高度"的规则跟着滚
     const sync = await page.evaluate(async () => {
       const a = document.getElementById('paneA'),

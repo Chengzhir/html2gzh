@@ -3,6 +3,7 @@ import { computed, onMounted, useTemplateRef } from 'vue';
 import { NCheckbox } from 'naive-ui';
 import { useI18n } from 'vue-i18n';
 import { readerImages } from '../../convert/reader.ts';
+import { BAR_H } from '../phone.ts';
 import { state, setDark } from '../store.ts';
 import { frames } from '../frames.ts';
 import { WIN } from '../status.ts';
@@ -59,7 +60,7 @@ function onLoad(which: 'A' | 'B') {
 </script>
 
 <template>
-  <main class="stage">
+  <main class="stage" :style="{ '--wxbar-h': BAR_H + 'px' }">
     <div id="panes" :class="['panes', { dim: dimAll }]" :hidden="!state.panesShown">
       <Toast scope="all" />
       <figure class="pane">

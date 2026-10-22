@@ -9,6 +9,8 @@ import type { ArticleMeta } from './prepare.ts';
 
 /** 正文区左右各 20px，阅读页不让正文铺满屏宽 */
 export const SIDE = 20;
+/** 底栏（头像、赞、分享、推荐）的高度；左栏原网页预览的高度要扣掉它 */
+export const BAR_H = 60;
 const FONT = 'font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:.544px';
 // 尺寸与颜色量自线上文章页（2026-10，412 宽，浅色与深色）
 const FRAME_CSS = `body{background:#fff}
@@ -18,7 +20,7 @@ const FRAME_CSS = `body{background:#fff}
 .rich_media_meta_list span{margin-right:10px}
 .wx_name{color:#576b95}.wx_author,.wx_time,.wx_reads{color:rgba(0,0,0,.3)}
 .wx_reads{margin:32px 0 0;font-size:15px;${FONT}}
-.wx_bar{position:fixed;left:0;right:0;bottom:0;height:60px;display:flex;align-items:center;gap:8px;padding:0 ${SIDE - 6}px 0 ${SIDE}px;background:#fff;border-top:1px solid rgba(0,0,0,.06);${FONT}}
+.wx_bar{position:fixed;left:0;right:0;bottom:0;box-sizing:border-box;height:${BAR_H}px;display:flex;align-items:center;gap:8px;padding:0 ${SIDE - 6}px 0 ${SIDE}px;background:#fff;border-top:1px solid rgba(0,0,0,.06);${FONT}}
 .wx_avatar{width:32px;height:32px;border-radius:50%;background:rgba(0,0,0,.05);flex:none;overflow:hidden}
 .wx_avatar img{display:block;width:100%;height:100%;object-fit:cover}
 .wx_bar_name{flex:1;min-width:0;font-size:15px;font-weight:500;color:rgba(0,0,0,.9);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
