@@ -16,22 +16,33 @@ export function fmt(message: Msg): string {
 export const fmtKey = (key: string, params?: Record<string, Param>) => fmt({ key, params });
 
 /** 出错时给用户看的一句话 */
-export const errText = (e: unknown) => e instanceof CodedError ? fmtKey(e.key, e.params) : String(e && (e as Error).message || e);
+export const errText = (e: unknown) =>
+  e instanceof CodedError ? fmtKey(e.key, e.params) : String((e && (e as Error).message) || e);
 
-export const kb = (bytes: number) => bytes >= 1 << 20 ? t('common.mb', { n: (bytes / (1 << 20)).toFixed(1) })
-  : bytes >= 1024 ? t('common.kb', { n: Math.round(bytes / 1024) }) : t('common.bytes', { n: bytes });
+export const kb = (bytes: number) =>
+  bytes >= 1 << 20
+    ? t('common.mb', { n: (bytes / (1 << 20)).toFixed(1) })
+    : bytes >= 1024
+      ? t('common.kb', { n: Math.round(bytes / 1024) })
+      : t('common.bytes', { n: bytes });
 
 /** 详细说明排成的段落与列表 */
 export type Block = { p: string } | { ul: string[] };
 /** 检查结果的标题、结论、说明。说明 = finding.<code>.detail（有的话）+ parts：相邻的句子并成一段，列表另起 */
 export function showFinding(f: Finding) {
-  const base = 'finding.' + f.code, params = f.params;
+  const base = 'finding.' + f.code,
+    params = f.params;
   const blocks: Block[] = [];
   let para = te(base + '.detail') ? fmtKey(base + '.detail', params) : '';
-  const flush = () => { if (para) blocks.push({ p: para }); para = ''; };
+  const flush = () => {
+    if (para) blocks.push({ p: para });
+    para = '';
+  };
   for (const part of f.parts) {
-    if ('items' in part) { flush(); blocks.push({ ul: part.items.map(fmt) }); }
-    else para += fmt(part);
+    if ('items' in part) {
+      flush();
+      blocks.push({ ul: part.items.map(fmt) });
+    } else para += fmt(part);
   }
   flush();
   return { title: t(base + '.title'), text: fmtKey(base + '.text', params), blocks };

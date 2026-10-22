@@ -15,15 +15,32 @@ const theme = useThemeVars();
 const cssVars = computed(() => {
   const vars = theme.value;
   return {
-    '--ui-text1': vars.textColor1, '--ui-text2': vars.textColor2, '--ui-text3': vars.textColor3,
-    '--ui-primary': vars.primaryColor, '--ui-primary-hover': vars.primaryColorHover,
-    '--ui-ok': vars.successColor, '--ui-warn': vars.warningColor, '--ui-err': vars.errorColor, '--ui-info': vars.infoColor,
-    '--ui-border': vars.borderColor, '--ui-divider': vars.dividerColor, '--ui-card': vars.cardColor, '--ui-body': vars.bodyColor,
-    '--ui-hover': vars.hoverColor, '--ui-action': vars.actionColor, '--ui-code': vars.codeColor, '--ui-disabled': vars.opacityDisabled,
-    '--ui-radius': vars.borderRadius, '--ui-radius-sm': vars.borderRadiusSmall,
-    '--ui-fs': vars.fontSize, '--ui-fs-sm': vars.fontSizeSmall, '--ui-fs-mini': vars.fontSizeMini,
-    '--ui-strong': vars.fontWeightStrong, '--ui-mono': vars.fontFamilyMono,
-    '--ui-h-small': vars.heightSmall, '--ui-h-medium': vars.heightMedium,
+    '--ui-text1': vars.textColor1,
+    '--ui-text2': vars.textColor2,
+    '--ui-text3': vars.textColor3,
+    '--ui-primary': vars.primaryColor,
+    '--ui-primary-hover': vars.primaryColorHover,
+    '--ui-ok': vars.successColor,
+    '--ui-warn': vars.warningColor,
+    '--ui-err': vars.errorColor,
+    '--ui-info': vars.infoColor,
+    '--ui-border': vars.borderColor,
+    '--ui-divider': vars.dividerColor,
+    '--ui-card': vars.cardColor,
+    '--ui-body': vars.bodyColor,
+    '--ui-hover': vars.hoverColor,
+    '--ui-action': vars.actionColor,
+    '--ui-code': vars.codeColor,
+    '--ui-disabled': vars.opacityDisabled,
+    '--ui-radius': vars.borderRadius,
+    '--ui-radius-sm': vars.borderRadiusSmall,
+    '--ui-fs': vars.fontSize,
+    '--ui-fs-sm': vars.fontSizeSmall,
+    '--ui-fs-mini': vars.fontSizeMini,
+    '--ui-strong': vars.fontWeightStrong,
+    '--ui-mono': vars.fontFamilyMono,
+    '--ui-h-small': vars.heightSmall,
+    '--ui-h-medium': vars.heightMedium,
   };
 });
 </script>
@@ -32,7 +49,9 @@ const cssVars = computed(() => {
   <div class="shell" :style="cssVars">
     <aside class="side">
       <header class="brand">
-        <h1>{{ t('app.name') }} <span class="sub">{{ t('app.sub') }}</span></h1>
+        <h1>
+          {{ t('app.name') }} <span class="sub">{{ t('app.sub') }}</span>
+        </h1>
       </header>
       <SourceCard />
       <CopyCard />

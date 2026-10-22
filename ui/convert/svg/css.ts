@@ -5,51 +5,89 @@ import { parseFns, parseProp, align, fnMatrix, computedMatrix, measureBox, bakeS
 import { mul, isId, matrixAttr, geometryReader } from './path.ts';
 import { displayToVisibility } from './whitelist.ts';
 
-const r4 = n => { const r = Math.round(n * 10000) / 10000; return Object.is(r, -0) ? 0 : r; };
+const r4 = n => {
+  const r = Math.round(n * 10000) / 10000;
+  return Object.is(r, -0) ? 0 : r;
+};
 const sec = t => r4(t) + 's';
 const LIN = { kind: 'linear' };
 
 /** 读下页面里 SVG 元素上正在跑的 CSS 动画（样式表删掉之前调用）。被 <use> 引用、自身不画出来的内容临时复制一份到页面里再读 */
 export function captureCss(doc, ids) {
-  const win = doc.defaultView, out = new Map();
+  const win = doc.defaultView,
+    out = new Map();
   const take = map => {
     for (const a of doc.getAnimations()) {
       if (!(a instanceof win.CSSAnimation) || a.effect.pseudoElement) continue;
       const src = map(a.effect.target);
       if (!src || !isSvg(src)) continue;
       let list = out.get(src);
-      if (!list) out.set(src, list = []);
+      if (!list) out.set(src, (list = []));
       if (list.some(r => r.name === a.animationName)) continue;
-      list.push({ name: a.animationName, timing: a.effect.getTiming(), kf: a.effect.getKeyframes(), paused: a.playState === 'paused', composite: a.effect.composite });
+      list.push({
+        name: a.animationName,
+        timing: a.effect.getTiming(),
+        kf: a.effect.getKeyframes(),
+        paused: a.playState === 'paused',
+        composite: a.effect.composite,
+      });
     }
   };
   take(t => t);
   // use 影子树里的动画 getAnimations 拿不到：把没画出来的被引用元素复制进一个看不见的 svg，让动画在那里跑起来再读
   const box = mk(doc, 'svg', { width: 0, height: 0, style: 'position:absolute;visibility:hidden' });
-  const back = new Map(), seen = new Set();
+  const back = new Map(),
+    seen = new Set();
   for (const u of doc.getElementsByTagNameNS(SVG_NS, 'use')) {
     const t = ids.get(refId(hrefOf(u)) || '');
     if (!isSvg(t) || seen.has(t) || t.getClientRects().length) continue;
     seen.add(t);
-    const c = t.cloneNode(true), sn = [t, ...t.querySelectorAll('*')], cn = [c, ...c.querySelectorAll('*')];
+    const c = t.cloneNode(true),
+      sn = [t, ...t.querySelectorAll('*')],
+      cn = [c, ...c.querySelectorAll('*')];
     sn.forEach((s, i) => back.set(cn[i], s));
     let host = c;
-    if (t.localName === 'symbol') { host = mk(doc, 'g', { id: t.id || null }); while (c.firstChild) host.appendChild(c.firstChild); back.set(host, t); }
+    if (t.localName === 'symbol') {
+      host = mk(doc, 'g', { id: t.id || null });
+      while (c.firstChild) host.appendChild(c.firstChild);
+      back.set(host, t);
+    }
     box.appendChild(host);
   }
-  if (box.firstChild) { doc.body.appendChild(box); take(t => back.get(t)); box.remove(); }
+  if (box.firstChild) {
+    doc.body.appendChild(box);
+    take(t => back.get(t));
+    box.remove();
+  }
   return out;
 }
 
-const SIMPLE = { opacity: ['opacity', 'number'], fill: ['fill', 'color'], strokeWidth: ['stroke-width', 'number'], strokeDashoffset: ['stroke-dashoffset', 'number'],
-  r: ['r', 'number'], x: ['x', 'number'], y: ['y', 'number'], width: ['width', 'number'], height: ['height', 'number'], d: ['d', 'path'] };
+const SIMPLE = {
+  opacity: ['opacity', 'number'],
+  fill: ['fill', 'color'],
+  strokeWidth: ['stroke-width', 'number'],
+  strokeDashoffset: ['stroke-dashoffset', 'number'],
+  r: ['r', 'number'],
+  x: ['x', 'number'],
+  y: ['y', 'number'],
+  width: ['width', 'number'],
+  height: ['height', 'number'],
+  d: ['d', 'path'],
+};
 const GEOM = new Set(['r', 'x', 'y', 'width', 'height', 'd']);
 const LAYERS = ['translate', 'rotate', 'scale', 'transform'];
 const META = new Set(['offset', 'computedOffset', 'easing', 'composite']);
 
 /** 反向播放：帧倒序，每段 easing 取反 */
-const rev = fs => fs.map((f, j, a) => { const k = a.length - 1 - j; return { off: 1 - a[k].off, v: a[k].v, e: k ? reverseEasing(a[k - 1].e) : LIN }; });
-const join = (a, b) => [...a.slice(0, -1).map(f => ({ ...f, off: f.off / 2 })), ...b.map(f => ({ ...f, off: 0.5 + f.off / 2 }))];
+const rev = fs =>
+  fs.map((f, j, a) => {
+    const k = a.length - 1 - j;
+    return { off: 1 - a[k].off, v: a[k].v, e: k ? reverseEasing(a[k - 1].e) : LIN };
+  });
+const join = (a, b) => [
+  ...a.slice(0, -1).map(f => ({ ...f, off: f.off / 2 })),
+  ...b.map(f => ({ ...f, off: 0.5 + f.off / 2 })),
+];
 /** animation-direction 化进关键帧；alternate 把一来一回拼成一个周期（时长 ×2、次数 ÷2） */
 function directed(frames, dir) {
   if (dir === 'reverse') return { kf: rev(frames), k: 1 };
@@ -60,12 +98,18 @@ function directed(frames, dir) {
 function smilTiming(tm, k) {
   const a: Record<string, string | number> = { dur: sec(tm.dur * k) };
   if (tm.delay) a.begin = sec(tm.delay);
-  if (tm.iters === Infinity) a.repeatCount = 'indefinite'; else if (tm.iters / k !== 1) a.repeatCount = r4(tm.iters / k);
+  if (tm.iters === Infinity) a.repeatCount = 'indefinite';
+  else if (tm.iters / k !== 1) a.repeatCount = r4(tm.iters / k);
   if (tm.fill === 'forwards' || tm.fill === 'both') a.fill = 'freeze';
   return a;
 }
 const leadIn = tm => tm.delay > 0 && (tm.fill === 'backwards' || tm.fill === 'both');
-const series = (c, str) => ({ values: c.values.map(str).join(';'), keyTimes: c.times.map(r4).join(';'), calcMode: c.splines ? 'spline' : null, keySplines: c.splines ? c.splines.join(';') : null });
+const series = (c, str) => ({
+  values: c.values.map(str).join(';'),
+  keyTimes: c.times.map(r4).join(';'),
+  calcMode: c.splines ? 'spline' : null,
+  keySplines: c.splines ? c.splines.join(';') : null,
+});
 
 function simple(doc, el, [attr, kind], frames, tm, spline) {
   const K = KINDS[kind];
@@ -78,17 +122,32 @@ function simple(doc, el, [attr, kind], frames, tm, spline) {
     el.style.removeProperty(attr);
     if (v != null) el.setAttribute(attr, String(v));
   }
-  if (leadIn(tm)) el.appendChild(mk(doc, 'set', { attributeName: attr, to: K.str(kf[0].v), begin: '0s', dur: sec(tm.delay) }));
-  el.appendChild(mk(doc, 'animate', { attributeName: attr, ...series(compile(kf, K.lerp, spline), K.str), ...smilTiming(tm, k) }));
+  if (leadIn(tm))
+    el.appendChild(mk(doc, 'set', { attributeName: attr, to: K.str(kf[0].v), begin: '0s', dur: sec(tm.delay) }));
+  el.appendChild(
+    mk(doc, 'animate', { attributeName: attr, ...series(compile(kf, K.lerp, spline), K.str), ...smilTiming(tm, k) }),
+  );
   return true;
 }
 function discrete(doc, el, p, frames, tm) {
   if (p === 'display' && !displayToVisibility(el)) return false;
-  const vis = v => p === 'display' ? (v === 'none' ? 'hidden' : 'visible') : v === 'visible' ? 'visible' : 'hidden';
-  const { kf, k } = directed(frames.map(f => ({ off: f.off, v: vis(String(f.raw).trim()), e: f.e })), tm.dir);
-  const c = compileDiscrete(kf, (a, b) => a === 'visible' || b === 'visible' ? 'visible' : 'hidden');
-  if (leadIn(tm)) el.appendChild(mk(doc, 'set', { attributeName: 'visibility', to: kf[0].v, begin: '0s', dur: sec(tm.delay) }));
-  el.appendChild(mk(doc, 'animate', { attributeName: 'visibility', calcMode: 'discrete', values: c.values.join(';'), keyTimes: c.times.map(r4).join(';'), ...smilTiming(tm, k) }));
+  const vis = v => (p === 'display' ? (v === 'none' ? 'hidden' : 'visible') : v === 'visible' ? 'visible' : 'hidden');
+  const { kf, k } = directed(
+    frames.map(f => ({ off: f.off, v: vis(String(f.raw).trim()), e: f.e })),
+    tm.dir,
+  );
+  const c = compileDiscrete(kf, (a, b) => (a === 'visible' || b === 'visible' ? 'visible' : 'hidden'));
+  if (leadIn(tm))
+    el.appendChild(mk(doc, 'set', { attributeName: 'visibility', to: kf[0].v, begin: '0s', dur: sec(tm.delay) }));
+  el.appendChild(
+    mk(doc, 'animate', {
+      attributeName: 'visibility',
+      calcMode: 'discrete',
+      values: c.values.join(';'),
+      keyTimes: c.times.map(r4).join(';'),
+      ...smilTiming(tm, k),
+    }),
+  );
   return true;
 }
 /** 圆心 cx/cy 不在白名单里：换成相对原位置的平移 */
@@ -97,11 +156,17 @@ function shift(doc, el, p, frames, tm) {
   const base = geometryReader(el)(p) || 0;
   const parsed = frames.map(f => ({ off: f.off, v: KINDS.number.parse(f.raw), e: f.e }));
   if (parsed.some(f => f.v == null)) return false;
-  const { kf, k } = directed(parsed.map(f => ({ ...f, v: f.v - base })), tm.dir);
-  const str = v => p === 'cx' ? `${r4(v)} 0` : `0 ${r4(v)}`;
+  const { kf, k } = directed(
+    parsed.map(f => ({ ...f, v: f.v - base })),
+    tm.dir,
+  );
+  const str = v => (p === 'cx' ? `${r4(v)} 0` : `0 ${r4(v)}`);
   const T = { attributeName: 'transform', type: 'translate', additive: 'sum' };
-  if (leadIn(tm)) el.appendChild(mk(doc, 'animateTransform', { ...T, values: str(kf[0].v), begin: '0s', dur: sec(tm.delay) }));
-  el.appendChild(mk(doc, 'animateTransform', { ...T, ...series(compile(kf, KINDS.number.lerp, true), str), ...smilTiming(tm, k) }));
+  if (leadIn(tm))
+    el.appendChild(mk(doc, 'animateTransform', { ...T, values: str(kf[0].v), begin: '0s', dur: sec(tm.delay) }));
+  el.appendChild(
+    mk(doc, 'animateTransform', { ...T, ...series(compile(kf, KINDS.number.lerp, true), str), ...smilTiming(tm, k) }),
+  );
   return true;
 }
 /** 一层的静态矩阵（不含原点） */
@@ -116,28 +181,46 @@ function staticM(cs, lay, box, fs) {
  * 动画用 replace 盖住它，所以动画没在跑的时候显示静态值，和 CSS 一致
  */
 function buildLayers(doc, el, layers, box, fs, spline, rep) {
-  if (ownAnims(el).some(a => a.localName === 'animateTransform' || a.localName === 'animateMotion')) { rep('css:mixed', el); return false; }
+  if (ownAnims(el).some(a => a.localName === 'animateTransform' || a.localName === 'animateMotion')) {
+    rep('css:mixed', el);
+    return false;
+  }
   const cs = el.ownerDocument.defaultView.getComputedStyle(el);
   const spec: { m: number[]; nodes?: Element[] }[] = [{ m: [1, 0, 0, 1, box.ox, box.oy] }];
   for (const lay of LAYERS) {
     const base = staticM(cs, lay, box, fs);
-    if (!base) { rep('css:transform', el); return false; }
+    if (!base) {
+      rep('css:transform', el);
+      return false;
+    }
     const anims = layers.get(lay);
-    if (!anims) { if (!isId(base)) spec.push({ m: base }); continue; }
+    if (!anims) {
+      if (!isId(base)) spec.push({ m: base });
+      continue;
+    }
     const nodes = [];
     for (const { frames, tm } of anims) {
-      const lists = frames.map(f => lay === 'transform' ? parseFns(f.raw, box, fs) : parseProp(lay, f.raw, box, fs));
+      const lists = frames.map(f => (lay === 'transform' ? parseFns(f.raw, box, fs) : parseProp(lay, f.raw, box, fs)));
       const al = !lists.includes(null) && align(lists);
-      if (!al) { rep('css:transform', el); return false; }
+      if (!al) {
+        rep('css:transform', el);
+        return false;
+      }
       const types = al.types.length ? al.types : ['translate'];
       const args = al.types.length ? al.args : al.args.map(() => [[0, 0]]);
-      const { kf, k } = directed(frames.map((f, i) => ({ off: f.off, v: args[i], e: f.e })), tm.dir);
+      const { kf, k } = directed(
+        frames.map((f, i) => ({ off: f.off, v: args[i], e: f.e })),
+        tm.dir,
+      );
       types.forEach((t, j) => {
         const str = v => v[j].map(r4).join(' ');
-        const lerp = (a, b, p) => a.map((x, q) => q === j ? x.map((n, w) => n + (b[q][w] - n) * p) : x);
+        const lerp = (a, b, p) => a.map((x, q) => (q === j ? x.map((n, w) => n + (b[q][w] - n) * p) : x));
         const T = { attributeName: 'transform', type: t, additive: j ? 'sum' : 'replace' };
-        if (leadIn(tm)) nodes.push(mk(doc, 'animateTransform', { ...T, values: str(kf[0].v), begin: '0s', dur: sec(tm.delay) }));
-        nodes.push(mk(doc, 'animateTransform', { ...T, ...series(compile(kf, lerp, true), str), ...smilTiming(tm, k) }));
+        if (leadIn(tm))
+          nodes.push(mk(doc, 'animateTransform', { ...T, values: str(kf[0].v), begin: '0s', dur: sec(tm.delay) }));
+        nodes.push(
+          mk(doc, 'animateTransform', { ...T, ...series(compile(kf, lerp, true), str), ...smilTiming(tm, k) }),
+        );
       });
       if (anims.length > 1) rep('css:overlap', el);
     }
@@ -148,12 +231,16 @@ function buildLayers(doc, el, layers, box, fs, spline, rep) {
   const merged = [];
   for (const s of spec) {
     const last = merged[merged.length - 1];
-    if (!s.nodes && last && !last.nodes) last.m = mul(last.m, s.m); else merged.push({ ...s });
+    if (!s.nodes && last && !last.nodes) last.m = mul(last.m, s.m);
+    else merged.push({ ...s });
   }
   for (const k of [...LAYERS, 'transform-origin', 'transform-box']) el.style.removeProperty(k);
   el.removeAttribute('transform');
   const inner = merged[merged.length - 1];
-  if (!inner.nodes) { merged.pop(); if (!isId(inner.m)) el.setAttribute('transform', matrixAttr(inner.m)); }
+  if (!inner.nodes) {
+    merged.pop();
+    if (!isId(inner.m)) el.setAttribute('transform', matrixAttr(inner.m));
+  }
   let cur = el;
   for (let i = merged.length - 1; i >= 0; i--) {
     const s = merged[i];
@@ -179,37 +266,74 @@ export function cssToSmil(doc, anims, { spline, rep }) {
   let done = 0;
   for (const [el, recs] of anims) {
     if (!el.isConnected) continue;
-    if (!isSvg(el.parentElement)) { rep('css:root', el); continue; }
+    if (!isSvg(el.parentElement)) {
+      rep('css:root', el);
+      continue;
+    }
     if (inResource(el)) continue;
-    const cs = win.getComputedStyle(el), fs = parseFloat(cs.fontSize) || 16;
-    let box = null, ok = false;
-    const layers = new Map(), shifts = [];
+    const cs = win.getComputedStyle(el),
+      fs = parseFloat(cs.fontSize) || 16;
+    let box = null,
+      ok = false;
+    const layers = new Map(),
+      shifts = [];
     for (const r of recs) {
-      if (r.paused) { rep('css:paused', el); continue; }
-      if (r.composite && r.composite !== 'replace') { rep('css:composite', el); continue; }
+      if (r.paused) {
+        rep('css:paused', el);
+        continue;
+      }
+      if (r.composite && r.composite !== 'replace') {
+        rep('css:composite', el);
+        continue;
+      }
       const t = r.timing;
-      const tm = { dur: (+t.duration || 0) / 1000, delay: (t.delay || 0) / 1000, iters: t.iterations == null ? Infinity : t.iterations, dir: t.direction, fill: t.fill };
+      const tm = {
+        dur: (+t.duration || 0) / 1000,
+        delay: (t.delay || 0) / 1000,
+        iters: t.iterations == null ? Infinity : t.iterations,
+        dir: t.direction,
+        fill: t.fill,
+      };
       if (!tm.iters) continue;
-      if (!tm.dur) { rep('css:zero', el); continue; }
+      if (!tm.dur) {
+        rep('css:zero', el);
+        continue;
+      }
       const props = [...new Set<string>(r.kf.flatMap(f => Object.keys(f)))].filter(p => !META.has(p));
       for (const p of props) {
         const frames = framesOf(r.kf, p, cs);
-        if (frames.some(f => !f.e)) { rep('css:easing', el); continue; }
+        if (frames.some(f => !f.e)) {
+          rep('css:easing', el);
+          continue;
+        }
         if (LAYERS.includes(p)) {
-          if (el.localName === 'tspan' || el.localName === 'textPath') { rep('css:prop:' + p, el); continue; }
+          if (el.localName === 'tspan' || el.localName === 'textPath') {
+            rep('css:prop:' + p, el);
+            continue;
+          }
           box = box || measureBox(el);
-          if (!box) { rep('css:transform', el); continue; }
+          if (!box) {
+            rep('css:transform', el);
+            continue;
+          }
           if (!layers.has(p)) layers.set(p, []);
           layers.get(p).push({ frames, tm });
-        } else if (SIMPLE[p]) { if (simple(doc, el, SIMPLE[p], frames, tm, spline)) ok = true; else rep('css:prop:' + p, el); }
-        else if (p === 'visibility' || p === 'display') { if (discrete(doc, el, p, frames, tm)) ok = true; else rep('css:prop:' + p, el); }
-        else if ((p === 'cx' || p === 'cy') && (el.localName === 'circle' || el.localName === 'ellipse')) shifts.push([p, frames, tm]);
+        } else if (SIMPLE[p]) {
+          if (simple(doc, el, SIMPLE[p], frames, tm, spline)) ok = true;
+          else rep('css:prop:' + p, el);
+        } else if (p === 'visibility' || p === 'display') {
+          if (discrete(doc, el, p, frames, tm)) ok = true;
+          else rep('css:prop:' + p, el);
+        } else if ((p === 'cx' || p === 'cy') && (el.localName === 'circle' || el.localName === 'ellipse'))
+          shifts.push([p, frames, tm]);
         else rep('css:prop:' + p, el);
       }
     }
     if (layers.size && buildLayers(doc, el, layers, box, fs, spline, rep)) ok = true;
     // 平移放在最后：建层之后元素自己的 transform 属性就是最内层的静态矩阵，平移叠加在它后面，等同于挪圆心
-    for (const [p, frames, tm] of shifts) if (shift(doc, el, p, frames, tm)) ok = true; else rep('css:prop:' + p, el);
+    for (const [p, frames, tm] of shifts)
+      if (shift(doc, el, p, frames, tm)) ok = true;
+      else rep('css:prop:' + p, el);
     if (ok) done++;
   }
   return done;

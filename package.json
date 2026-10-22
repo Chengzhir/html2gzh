@@ -11,7 +11,8 @@
   "scripts": {
     "build": "vite build",
     "start": "node server.ts",
-    "check": "tsc -p . && vue-tsc -p ui --noEmit",
+    "format": "prettier --write .",
+    "check": "prettier --check . && tsc -p . && vue-tsc -p ui --noEmit",
     "pretest": "npm run build",
     "test": "node test/e2e.mjs && node test/e2e.mjs --svg && node test/e2e.mjs test/fixture-svg && node test/e2e.mjs test/fixture-webfont --svg"
   },
@@ -28,6 +29,7 @@
     "@intlify/unplugin-vue-i18n": "11.2.7",
     "@types/node": "26.6.5",
     "@vitejs/plugin-vue": "6.0.10",
+    "prettier": "3.9.10",
     "subset-font": "2.9.0",
     "typescript": "6.0.3",
     "vite": "8.3.5",

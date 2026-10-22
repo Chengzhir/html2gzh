@@ -9,7 +9,9 @@ export const i18n = createI18n({
   // 缺文案按错误报出来（端到端测试把页面上的 console.error 算作失败），界面上照常显示键名
   missingWarn: false,
   fallbackWarn: false,
-  missing: (locale, key) => { console.error(`缺少文案 ${locale}:${key}`); },
+  missing: (locale, key) => {
+    console.error(`缺少文案 ${locale}:${key}`);
+  },
 });
 
 const { global: composer } = i18n;

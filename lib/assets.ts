@@ -7,18 +7,57 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { send } from './http.ts';
 
 // .ico 只用作阅读页模拟里的公众号头像，不在正文里，不对外提供
-export const ASSET_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.avif', '.ico', '.woff', '.woff2', '.ttf', '.otf', '.ttc', '.otc', '.css']);
+export const ASSET_EXT = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.svg',
+  '.bmp',
+  '.avif',
+  '.ico',
+  '.woff',
+  '.woff2',
+  '.ttf',
+  '.otf',
+  '.ttc',
+  '.otc',
+  '.css',
+]);
 /** 取图口只对外提供图片 */
 export const PUBLIC_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.avif']);
 export const MIME: Record<string, string> = {
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
-  '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.avif': 'image/avif', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2',
-  '.ttf': 'font/ttf', '.otf': 'font/otf', '.ttc': 'font/collection', '.otc': 'font/collection', '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.ttc': 'font/collection',
+  '.otc': 'font/collection',
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.json': 'application/json',
 };
 
 /** id → { buf, ext, name, fetches: 最近几次外部取图的时刻（毫秒）, lastUA } */
-export interface Asset { buf: Buffer; ext: string; name: string; fetches: number[]; lastUA: string }
+export interface Asset {
+  buf: Buffer;
+  ext: string;
+  name: string;
+  fetches: number[];
+  lastUA: string;
+}
 export const assets = new Map<string, Asset>();
 /** 绝对路径 → { id, mtime, size }，避免同一文件反复哈希 */
 const pathCache = new Map<string, { id: string; mtime: number; size: number }>();
@@ -43,14 +82,22 @@ export function serveAsset(req: IncomingMessage, res: ServerResponse, id: string
   if (!a || (countHit && !PUBLIC_EXT.has(a.ext))) return send(res, 404, 'not found');
   if (countHit) {
     // 记下时刻而不只是次数：微信服务器下载一张图超时（约 0.5 秒）会隔 0.5 秒再试，共三次，页面据此区分成功与失败
-    a.fetches.push(Date.now()); if (a.fetches.length > 12) a.fetches.shift();
+    a.fetches.push(Date.now());
+    if (a.fetches.length > 12) a.fetches.shift();
     a.lastUA = String(req.headers['user-agent'] || '');
     // 取图口对外网开放，请求头里的控制字符（终端转义序列等）不原样打进日志
     const safe = s => String(s).replace(/[\x00-\x1f\x7f]/g, '');
-    console.log(`${stamp()}  取图  ${a.name}  经 ${safe(req.headers.host || '?')}  ← ${req.socket.remoteAddress}  ${safe(a.lastUA).slice(0, 50)}`);
+    console.log(
+      `${stamp()}  取图  ${a.name}  经 ${safe(req.headers.host || '?')}  ← ${req.socket.remoteAddress}  ${safe(a.lastUA).slice(0, 50)}`,
+    );
   }
   // 文章里的 SVG 可能带脚本：直接打开这个地址时不让它在本页同源下运行（内嵌的字体和图片照常显示）
-  res.writeHead(200, { 'Content-Type': MIME[a.ext] || 'application/octet-stream', 'Content-Length': a.buf.length, 'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; sandbox" });
+  res.writeHead(200, {
+    'Content-Type': MIME[a.ext] || 'application/octet-stream',
+    'Content-Length': a.buf.length,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; sandbox",
+  });
   res.end(req.method === 'HEAD' ? undefined : a.buf);
 }

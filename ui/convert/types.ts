@@ -3,7 +3,10 @@
 // ---------- 文案 ----------
 // 转换器与本机服务不写给用户看的句子，只给文案键（ui/src/locales 里的键）与参数，由页面排成句子
 export type Param = string | number | Msg | Param[] | { list: Param[]; sep: string };
-export interface Msg { key: string; params?: Record<string, Param> }
+export interface Msg {
+  key: string;
+  params?: Record<string, Param>;
+}
 export const msg = (key: string, params?: Record<string, Param>): Msg => ({ key, params });
 /** 带文案键的错误：页面按 key 显示；message 只给日志看 */
 export class CodedError extends Error {
@@ -34,7 +37,11 @@ export interface Finding {
   /** 要在预览里标出的元素的 data-wxc */
   ids: string[];
 }
-export type AddFinding = (code: string, params?: Record<string, Param>, more?: { parts?: (FindingPart | false | null | undefined)[]; els?: FindingEls }) => void;
+export type AddFinding = (
+  code: string,
+  params?: Record<string, Param>,
+  more?: { parts?: (FindingPart | false | null | undefined)[]; els?: FindingEls },
+) => void;
 export interface FindingSink {
   list: Finding[];
   fixed: AddFinding;
@@ -94,8 +101,7 @@ export interface GlyphItem {
   runs: string[];
 }
 export type GlyphFontSrc =
-  | { local: string; id?: never; format?: never }
-  | { local?: never; id: string; format: string };
+  { local: string; id?: never; format?: never } | { local?: never; id: string; format: string };
 /** 原稿的一条 @font-face；src 为空表示原稿里加载失败 */
 export interface GlyphFont {
   family: string;
@@ -189,7 +195,12 @@ export interface HostState {
   config: HostConfig;
 }
 /** 取图地址设置；host 为空表示自动检测，port 为 0 表示按协议取默认 */
-export interface HostConfig { imgPort: number; host: string; port: number; proto: 'http' | 'https' }
+export interface HostConfig {
+  imgPort: number;
+  host: string;
+  port: number;
+  proto: 'http' | 'https';
+}
 export interface ApiState {
   app: 'html2gzh';
   article: { file: string; rev: number; mtime: number };
@@ -199,12 +210,20 @@ export interface ApiState {
   imgPort: number;
 }
 /** /api/article：当前文章的路径、HTML 与最后修改时间（毫秒） */
-export interface ArticleResponse { file: string; rev: number; mtime: number; html: string }
+export interface ArticleResponse {
+  file: string;
+  rev: number;
+  mtime: number;
+  html: string;
+}
 
 // ---------- 大图处理 /api/shrink ----------
 export type ShrinkSkip = 'fits' | 'vector' | 'animated' | 'unreadable' | 'noGain';
 /** 存成什么格式：JPEG 带质量；PNG 为无损或 256 色 */
-export interface ShrinkHow { fmt: 'jpeg' | 'png' | 'palette'; q?: number }
+export interface ShrinkHow {
+  fmt: 'jpeg' | 'png' | 'palette';
+  q?: number;
+}
 export interface ShrinkOutput {
   buf: Buffer;
   ext: string;
@@ -220,12 +239,31 @@ export interface ShrinkOutput {
 export type ShrinkResult = ShrinkOutput | { skip: ShrinkSkip };
 export type ShrinkResponse =
   | { skip: ShrinkSkip; size: number }
-  | { id: string; size: number; srcSize: number; how: ShrinkHow; width: number; height: number; srcWidth: number; srcHeight: number; over: boolean };
+  | {
+      id: string;
+      size: number;
+      srcSize: number;
+      how: ShrinkHow;
+      width: number;
+      height: number;
+      srcWidth: number;
+      srcHeight: number;
+      over: boolean;
+    };
 /** 接口出错时的响应：code 是 ui/src/locales 里 api.<code> 的文案；error 是给日志看的原文 */
-export interface ApiErrorBody { code: string; params?: Record<string, Param>; error: string }
+export interface ApiErrorBody {
+  code: string;
+  params?: Record<string, Param>;
+  error: string;
+}
 
 // ---------- convert() ----------
-export interface BoxRect { x: number; y: number; w: number; h: number }
+export interface BoxRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 export interface OutlineVerdict {
   keep: boolean;
   /** scale：随屏宽缩放；fixed：固定像素 */

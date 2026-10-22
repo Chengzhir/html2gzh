@@ -16,14 +16,19 @@ const r = await p.evaluate(() => {
   const f = b => `${b.x.toFixed(2)},${b.y.toFixed(2)} ${b.w.toFixed(2)}x${b.h.toFixed(2)}`;
   const out = [];
   for (const [id, a] of s.debug.tv) {
-    const v = V.get(id); if (!v) continue;
+    const v = V.get(id);
+    if (!v) continue;
     const d = Math.max(Math.abs(a.x - v.x), Math.abs(a.y - v.y), Math.abs(a.w - v.w), Math.abs(a.h - v.h));
     if (d > 0.2) {
-      const ea = A.querySelector(`[data-wxc="${id}"]`), eb = B.querySelector(`[data-wxc="${id}"]`);
-      out.push(`${id} d=${d.toFixed(2)}  ${f(a)} → ${f(v)}\n   A: ${ea ? ea.outerHTML.slice(0, 70) : '-'}\n   B: ${eb ? eb.outerHTML.slice(0, 260) : '-'}`);
+      const ea = A.querySelector(`[data-wxc="${id}"]`),
+        eb = B.querySelector(`[data-wxc="${id}"]`);
+      out.push(
+        `${id} d=${d.toFixed(2)}  ${f(a)} → ${f(v)}\n   A: ${ea ? ea.outerHTML.slice(0, 70) : '-'}\n   B: ${eb ? eb.outerHTML.slice(0, 260) : '-'}`,
+      );
     }
   }
   return out;
 });
 console.log(r.join('\n'));
-await b.close(); srv.stop();
+await b.close();
+srv.stop();

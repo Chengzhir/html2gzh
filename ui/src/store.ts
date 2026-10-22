@@ -4,7 +4,16 @@ import { convert } from '../convert/index.ts';
 import { DEFAULT_OPTS } from '../convert/fonts.ts';
 import { imageScales } from '../convert/images.ts';
 import { ASSET_ID, assetIdsIn } from '../convert/assetid.ts';
-import type { ApiState, ArticleResponse, ConvertResult, GlyphRequest, GlyphResponse, HostState, ShrinkHow, ShrinkResponse } from '../convert/types.ts';
+import type {
+  ApiState,
+  ArticleResponse,
+  ConvertResult,
+  GlyphRequest,
+  GlyphResponse,
+  HostState,
+  ShrinkHow,
+  ShrinkResponse,
+} from '../convert/types.ts';
 import { api } from './api.ts';
 import { t } from './i18n.ts';
 import { errText } from './fmt.ts';
@@ -20,10 +29,30 @@ export type Src =
   | { kind: 'path'; file: string; rev: number; mtime: number }
   | { kind: 'files'; name: string; map: Map<string, File>; entry: string };
 /** 压缩后换上的副本 */
-export interface Shrunk { id: string; name: string; size: number; srcSize: number; how: ShrinkHow; width: number; height: number; srcWidth: number; srcHeight: number; over: boolean }
+export interface Shrunk {
+  id: string;
+  name: string;
+  size: number;
+  srcSize: number;
+  how: ShrinkHow;
+  width: number;
+  height: number;
+  srcWidth: number;
+  srcHeight: number;
+  over: boolean;
+}
 /** 超过上限、仍是原图（或压不到上限）的图片；why 是给用户看的原因，可为空 */
-export interface Big { id: string; name: string; size: number; why: string }
-export interface Report extends PrepReport { big: Big[]; shrunk: Shrunk[]; sizes: Map<string, number> }
+export interface Big {
+  id: string;
+  name: string;
+  size: number;
+  why: string;
+}
+export interface Report extends PrepReport {
+  big: Big[];
+  shrunk: Shrunk[];
+  sizes: Map<string, number>;
+}
 export interface Result extends ConvertResult {
   report: Report;
   /** 这次转换时勾选的字体表行与预览宽度 */
@@ -37,27 +66,54 @@ export interface Result extends ConvertResult {
   meta: ArticleMeta;
   mtime: number;
 }
-interface ShrinkOutcome { payload: string; preview: string; big: Big[]; shrunk: Shrunk[]; sizes: Map<string, number> }
+interface ShrinkOutcome {
+  payload: string;
+  preview: string;
+  big: Big[];
+  shrunk: Shrunk[];
+  sizes: Map<string, number>;
+}
 export type NoticeKind = 'busy' | 'err';
-export interface Notice { text: string; kind: NoticeKind; shown: boolean; timer: number }
+export interface Notice {
+  text: string;
+  kind: NoticeKind;
+  shown: boolean;
+  timer: number;
+}
 
-const OPTS_KEY = 'wxc.opts', SHRINK_KEY = 'wxc.shrink', WIDTH_KEY = 'wxc.width', DARK_KEY = 'wxc.dark';
+const OPTS_KEY = 'wxc.opts',
+  SHRINK_KEY = 'wxc.shrink',
+  WIDTH_KEY = 'wxc.width',
+  DARK_KEY = 'wxc.dark';
 /** 预览屏宽：设备的屏宽与正文宽（屏宽减去两侧各 20px） */
-export const WIDTHS = [['android', 360], ['iphone', 375], ['iphone', 393], ['android', 412], ['iphone', 414]] as const;
+export const WIDTHS = [
+  ['android', 360],
+  ['iphone', 375],
+  ['iphone', 393],
+  ['android', 412],
+  ['iphone', 414],
+] as const;
 const BODY_WIDTHS = new Set<number>(WIDTHS.map(([, screen]) => screen - 2 * SIDE));
 // 微信服务器下载一张图最多等约 0.5 秒，超时隔 0.5 秒再试，三次都超时就放弃（2026-10-21 实测）。
 // 能否下完取决于这台电脑的上传速度和同时下载的张数，默认 1000 KB 是按常见宽带估的界线，不是平台规定
 const SHRINK_DEFAULT = { on: true, kb: 1000 };
 
 function readJson(key: string): Record<string, unknown> {
-  try { const value: unknown = JSON.parse(localStorage.getItem(key) || '{}'); return value && typeof value === 'object' ? value as Record<string, unknown> : {}; }
-  catch { return {}; }
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(key) || '{}');
+    return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
 }
 // 只存和默认值不同的项：以后默认规则更新，没改过的人自动用上新的
-const sameType = (saved: unknown, def: unknown) => Array.isArray(def) ? Array.isArray(saved) && saved.every(x => typeof x === 'string') : typeof saved === typeof def;
+const sameType = (saved: unknown, def: unknown) =>
+  Array.isArray(def) ? Array.isArray(saved) && saved.every(x => typeof x === 'string') : typeof saved === typeof def;
 function loadOpts(): Opts {
   const saved = readJson(OPTS_KEY);
-  const kept = Object.entries(DEFAULT_OPTS).filter(([key, def]) => key in saved && sameType(saved[key], def)).map(([key]) => [key, saved[key]]);
+  const kept = Object.entries(DEFAULT_OPTS)
+    .filter(([key, def]) => key in saved && sameType(saved[key], def))
+    .map(([key]) => [key, saved[key]]);
   return { ...DEFAULT_OPTS, ...Object.fromEntries(kept) };
 }
 function loadShrink() {
@@ -108,28 +164,41 @@ const NOTICE_DELAY = 300;
 export function notice(scope: 'all' | 'reader', text: string, kind: NoticeKind = 'busy') {
   const target = state.notices[scope];
   clearTimeout(target.timer);
-  const show = () => { target.text = text; target.kind = kind; target.shown = !!text; };
+  const show = () => {
+    target.text = text;
+    target.kind = kind;
+    target.shown = !!text;
+  };
   const showingBusy = target.shown && target.kind === 'busy';
-  if (text && kind === 'busy' && !showingBusy && (scope === 'reader' || state.panesShown)) target.timer = window.setTimeout(show, NOTICE_DELAY);
+  if (text && kind === 'busy' && !showingBusy && (scope === 'reader' || state.panesShown))
+    target.timer = window.setTimeout(show, NOTICE_DELAY);
   else show();
 }
-export const srcNote = (text: string, kind = '') => { state.srcNote = { text, kind }; };
+export const srcNote = (text: string, kind = '') => {
+  state.srcNote = { text, kind };
+};
 
 /* ---------- 字体设置 ---------- */
 let rerunTimer = 0;
 /** how：'now' 立刻重新转换；'soon' 停手 600ms 后再转（连点几个勾选框只转一次）；'none' 不用转 */
 export function saveOpts(patch: Partial<Opts>, how: 'now' | 'soon' | 'none' = 'now') {
   Object.assign(state.opts, patch);
-  const diff = Object.fromEntries(Object.entries(state.opts).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(DEFAULT_OPTS[key as keyof Opts])));
+  const diff = Object.fromEntries(
+    Object.entries(state.opts).filter(
+      ([key, value]) => JSON.stringify(value) !== JSON.stringify(DEFAULT_OPTS[key as keyof Opts]),
+    ),
+  );
   localStorage.setItem(OPTS_KEY, JSON.stringify(diff));
   if (how === 'none') return;
   clearTimeout(rerunTimer);
-  if (how === 'soon') rerunTimer = window.setTimeout(rerun, 600); else rerun();
+  if (how === 'soon') rerunTimer = window.setTimeout(rerun, 600);
+  else rerun();
 }
 /* ---------- 读文件、登记文件 ---------- */
 const uploaded = new WeakMap<File, string>();
 const uploadBlob = async (body: Blob | ArrayBuffer, ext: string, name: string) =>
-  (await api<{ id: string }>(`/api/blob?ext=${encodeURIComponent(ext)}&name=${encodeURIComponent(name)}`, body, true)).id;
+  (await api<{ id: string }>(`/api/blob?ext=${encodeURIComponent(ext)}&name=${encodeURIComponent(name)}`, body, true))
+    .id;
 async function uploadDataUri(uri: string) {
   const blob = await (await fetch(uri)).blob();
   const ext = EXT_OF_MIME[blob.type];
@@ -147,11 +216,18 @@ const io: PrepIO = {
     }
     for (const rel of rels) {
       const file = src.map.get(rel);
-      if (!file) { ids.set(rel, null); continue; }
+      if (!file) {
+        ids.set(rel, null);
+        continue;
+      }
       let id = uploaded.get(file);
       if (!id) {
-        try { id = await uploadBlob(file, (file.name.split('.').pop() || '').toLowerCase(), file.name); uploaded.set(file, id); }
-        catch { id = null; }
+        try {
+          id = await uploadBlob(file, (file.name.split('.').pop() || '').toLowerCase(), file.name);
+          uploaded.set(file, id);
+        } catch {
+          id = null;
+        }
       }
       ids.set(rel, id);
     }
@@ -160,7 +236,10 @@ const io: PrepIO = {
   uploadDataUri,
   async readLocalText(rel) {
     const src = state.src;
-    if (src.kind === 'files') { const file = src.map.get(rel); return file ? file.text() : null; }
+    if (src.kind === 'files') {
+      const file = src.map.get(rel);
+      return file ? file.text() : null;
+    }
     const found = await api<Record<string, string | null>>('/api/assets', { refs: [rel] });
     return found[rel] ? (await fetch('/a/' + found[rel])).text() : null;
   },
@@ -174,7 +253,14 @@ const raster = async (uri: string) => {
 };
 /** 网页字体文件 → 本机服务里的文件 id。本地文件已经登记过；站外的、data: 的下载下来按文件头认格式再登记。按地址缓存 */
 const fontIds = new Map<string, Promise<string | null>>();
-const FONT_MAGIC = [['wOF2', 'woff2'], ['wOFF', 'woff'], ['OTTO', 'otf'], ['true', 'ttf'], ['ttcf', 'ttc'], ['\u0000\u0001\u0000\u0000', 'ttf']];
+const FONT_MAGIC = [
+  ['wOF2', 'woff2'],
+  ['wOFF', 'woff'],
+  ['OTTO', 'otf'],
+  ['true', 'ttf'],
+  ['ttcf', 'ttc'],
+  ['\u0000\u0001\u0000\u0000', 'ttf'],
+];
 function fontBytes(url: string) {
   const local = url.startsWith(ORIGIN + '/a/') ? url.slice(ORIGIN.length + 3) : '';
   if (ASSET_ID.test(local)) return Promise.resolve(local);
@@ -188,7 +274,9 @@ function fontBytes(url: string) {
       return format ? uploadBlob(buf, format, `font.${format}`) : null;
     })().catch((): null => null);
     // 失败的不缓存，下次转换再试
-    job.then(id => { if (!id) fontIds.delete(url); });
+    job.then(id => {
+      if (!id) fontIds.delete(url);
+    });
     fontIds.set(url, job);
   }
   return fontIds.get(url);
@@ -199,16 +287,24 @@ const limitBytes = () => state.shrink.kb * 1024;
 /** 本地图片的大小（字节）：Map<id, size>，取自本机服务的 HEAD 响应 */
 async function imageSizes(payload: string) {
   const sizes = new Map<string, number>();
-  await Promise.all(assetIdsIn(payload).map(async id => {
-    const response = await fetch('/a/' + id, { method: 'HEAD', cache: 'no-store' }).catch((): null => null);
-    sizes.set(id, response?.ok ? +response.headers.get('content-length') : 0);
-  }));
+  await Promise.all(
+    assetIdsIn(payload).map(async id => {
+      const response = await fetch('/a/' + id, { method: 'HEAD', cache: 'no-store' }).catch((): null => null);
+      sizes.set(id, response?.ok ? +response.headers.get('content-length') : 0);
+    }),
+  );
   return sizes;
 }
 /** 超过 limit 字节的本地图片，从大到小 */
-export async function bigImages(payload: string, names: Map<string, string>, limit = limitBytes(), sizes?: Map<string, number>): Promise<Big[]> {
+export async function bigImages(
+  payload: string,
+  names: Map<string, string>,
+  limit = limitBytes(),
+  sizes?: Map<string, number>,
+): Promise<Big[]> {
   sizes ??= await imageSizes(payload);
-  return [...sizes].filter(([, size]) => size > limit)
+  return [...sizes]
+    .filter(([, size]) => size > limit)
     .map(([id, size]) => ({ id, name: names.get(id) || t('img.generated'), size, why: '' }))
     .sort((a, b) => b.size - a.size);
 }
@@ -217,28 +313,47 @@ let shrinkSeq = 0;
  * 按当前的上限与开关，从原始成品（base）得出最终的成品：比 1080px 宽或超过上限的图片换成处理后的副本
  * （哪些要处理由服务端看图片本身决定）。被更新的一次调用取代时返回 null
  */
-async function applyShrink({ base, scales, report }: Pick<Result, 'base' | 'scales' | 'report'>): Promise<ShrinkOutcome | null> {
-  const seq = ++shrinkSeq, limit = limitBytes(), names = report.names;
+async function applyShrink({
+  base,
+  scales,
+  report,
+}: Pick<Result, 'base' | 'scales' | 'report'>): Promise<ShrinkOutcome | null> {
+  const seq = ++shrinkSeq,
+    limit = limitBytes(),
+    names = report.names;
   let { payload, preview } = base;
   const sizes = await imageSizes(base.payload);
-  const shrunk: Shrunk[] = [], big: Big[] = [];
+  const shrunk: Shrunk[] = [],
+    big: Big[] = [];
   if (state.shrink.on) {
-    const ids = assetIdsIn(base.payload), queue = [...ids], responses = new Map<string, ShrinkResponse | { error: string }>();
+    const ids = assetIdsIn(base.payload),
+      queue = [...ids],
+      responses = new Map<string, ShrinkResponse | { error: string }>();
     let done = 0;
     // 同时处理 4 张
-    await Promise.all(Array.from({ length: Math.min(4, ids.length) }, async () => {
-      while (queue.length) {
-        const id = queue.shift();
-        const scale = scales.get(id) ?? null;
-        responses.set(id, await api<ShrinkResponse>('/api/shrink', { id, scale, max: limit }).catch((e: unknown) => ({ error: errText(e) })));
-        if (seq === shrinkSeq) notice('all', t('shrink.progress', { n: ++done, total: ids.length }));
-      }
-    }));
+    await Promise.all(
+      Array.from({ length: Math.min(4, ids.length) }, async () => {
+        while (queue.length) {
+          const id = queue.shift();
+          const scale = scales.get(id) ?? null;
+          responses.set(
+            id,
+            await api<ShrinkResponse>('/api/shrink', { id, scale, max: limit }).catch((e: unknown) => ({
+              error: errText(e),
+            })),
+          );
+          if (seq === shrinkSeq) notice('all', t('shrink.progress', { n: ++done, total: ids.length }));
+        }
+      }),
+    );
     if (seq !== shrinkSeq) return null;
     for (const id of ids) {
-      const response = responses.get(id), size = sizes.get(id) || 0, name = names.get(id) || t('img.generated');
+      const response = responses.get(id),
+        size = sizes.get(id) || 0,
+        name = names.get(id) || t('img.generated');
       if (!('id' in response)) {
-        const why = 'error' in response ? response.error : response.skip === 'fits' ? '' : t('shrink.skip.' + response.skip);
+        const why =
+          'error' in response ? response.error : response.skip === 'fits' ? '' : t('shrink.skip.' + response.skip);
         if (size > limit) big.push({ id, name, size, why });
         continue;
       }
@@ -249,47 +364,64 @@ async function applyShrink({ base, scales, report }: Pick<Result, 'base' | 'scal
       shrunk.push({ ...response, name });
       if (response.over) big.push({ id: response.id, name, size: response.size, why: t('shrink.over') });
     }
-  } else big.push(...await bigImages(base.payload, names, limit, sizes));
+  } else big.push(...(await bigImages(base.payload, names, limit, sizes)));
   if (seq !== shrinkSeq) return null;
   return { payload, preview, big, shrunk, sizes };
 }
 /** 换上压缩后的成品：得到新的结果对象（不改原来的） */
-const withShrink = (result: Result, out: ShrinkOutcome): Result => markRaw({
-  ...result, payload: out.payload, preview: out.preview,
-  report: { ...result.report, big: out.big, shrunk: out.shrunk, sizes: out.sizes },
-});
-let shrinkAgain = false, shrinkRuns = 0;
+const withShrink = (result: Result, out: ShrinkOutcome): Result =>
+  markRaw({
+    ...result,
+    payload: out.payload,
+    preview: out.preview,
+    report: { ...result.report, big: out.big, shrunk: out.shrunk, sizes: out.sizes },
+  });
+let shrinkAgain = false,
+  shrinkRuns = 0;
 /** 改了压缩设置：不用重新转换，只按新设置从原始成品重新得出最终成品。转换进行中时等它结束再做 */
 export function saveShrink(patch: Partial<typeof SHRINK_DEFAULT>) {
   Object.assign(state.shrink, patch);
   localStorage.setItem(SHRINK_KEY, JSON.stringify(state.shrink));
-  if (state.busy) shrinkAgain = true; else reshrink();
+  if (state.busy) shrinkAgain = true;
+  else reshrink();
 }
 async function reshrink() {
   const result = state.result;
   if (!result) return;
-  state.copiedAt = null; state.copyDenied = false;
-  shrinkRuns++; state.shrinking = true;
+  state.copiedAt = null;
+  state.copyDenied = false;
+  shrinkRuns++;
+  state.shrinking = true;
   try {
     const out = await applyShrink(result);
     if (!out || state.result !== result) return;
     state.result = withShrink(result, out);
     notice('all', '');
     await renderReader();
-  } finally { if (!--shrinkRuns) state.shrinking = false; }
+  } finally {
+    if (!--shrinkRuns) state.shrinking = false;
+  }
 }
 /* ---------- 载入与转换 ---------- */
 let again = false;
 /** 转换进行中又改了设置：等这一轮结束再按新设置转一次 */
-export function rerun() { if (state.busy) again = true; else run(); }
+export function rerun() {
+  if (state.busy) again = true;
+  else run();
+}
 
 async function run() {
   if (!state.src || state.busy) return;
-  state.busy = true; state.copiedAt = null; state.copyDenied = false; again = false; shrinkAgain = false;
+  state.busy = true;
+  state.copiedAt = null;
+  state.copyDenied = false;
+  again = false;
+  shrinkAgain = false;
   srcNote('');
   notice('all', t('stage.converting'));
   // 转换器拿到的是普通对象，不是响应式代理
-  const opts: Opts = { ...state.opts, paths: [...state.opts.paths] }, width = state.width;
+  const opts: Opts = { ...state.opts, paths: [...state.opts.paths] },
+    width = state.width;
   try {
     let html: string, entry: string, mtime: number;
     const src = state.src;
@@ -301,17 +433,37 @@ async function run() {
     } else {
       entry = src.entry;
       const file = src.map.get(entry);
-      html = await file.text(); mtime = file.lastModified;
-      state.current = { name: entry.split('/').pop(), where: src.name ? t('src.droppedDir', { name: src.name }) : t('src.droppedFiles', { n: src.map.size }) };
+      html = await file.text();
+      mtime = file.lastModified;
+      state.current = {
+        name: entry.split('/').pop(),
+        where: src.name ? t('src.droppedDir', { name: src.name }) : t('src.droppedFiles', { n: src.map.size }),
+      };
     }
     const prep = await prepare(html, entry, io);
     if (opts.paths.length) notice('all', t('stage.convertingFonts'));
-    const converted = await convert(prep.html, { width, frame: frames.scratch, verifyFrame: frames.verify, opts, glyphs, raster, fontBytes });
+    const converted = await convert(prep.html, {
+      width,
+      frame: frames.scratch,
+      verifyFrame: frames.verify,
+      opts,
+      glyphs,
+      raster,
+      fontBytes,
+    });
     // 转换结束时 #verify 停在所选宽度的成品上，并已跑过阅读页的图片脚本：在这里量每张图需要的分辨率
-    const scales = assetIdsIn(converted.payload).length ? await imageScales(frames.verify.contentDocument, width) : new Map<string, number | null>();
+    const scales = assetIdsIn(converted.payload).length
+      ? await imageScales(frames.verify.contentDocument, width)
+      : new Map<string, number | null>();
     const draft: Result = markRaw({
-      ...converted, report: { ...prep.report, big: [], shrunk: [], sizes: new Map() }, paths: opts.paths, width, scales,
-      base: { payload: converted.payload, preview: converted.preview }, meta: prep.meta, mtime,
+      ...converted,
+      report: { ...prep.report, big: [], shrunk: [], sizes: new Map() },
+      paths: opts.paths,
+      width,
+      scales,
+      base: { payload: converted.payload, preview: converted.preview },
+      meta: prep.meta,
+      mtime,
     });
     const out = await applyShrink(draft);
     state.result = out ? withShrink(draft, out) : draft;
@@ -327,7 +479,10 @@ async function run() {
   } finally {
     state.busy = false;
     if (again) run();
-    else if (shrinkAgain) { shrinkAgain = false; reshrink(); }
+    else if (shrinkAgain) {
+      shrinkAgain = false;
+      reshrink();
+    }
   }
 }
 
@@ -336,11 +491,18 @@ let readerSeq = 0;
 async function renderReader() {
   const result = state.result;
   if (!result) return;
-  const dark = state.dark, seq = ++readerSeq, screenWidth = result.width + 2 * SIDE;
+  const dark = state.dark,
+    seq = ++readerSeq,
+    screenWidth = result.width + 2 * SIDE;
   state.reader.width = screenWidth;
   state.reader.dark = dark;
   const doc = readerDoc(result.preview, { ...result.meta, time: result.mtime }, dark);
-  if (!dark) { notice('reader', ''); state.reader.darkDoc = false; state.reader.html = doc; return; }
+  if (!dark) {
+    notice('reader', '');
+    state.reader.darkDoc = false;
+    state.reader.html = doc;
+    return;
+  }
   notice('reader', t('stage.darkBusy'));
   // 先让新宽度生效：深色算法按首屏判断背景，隐藏帧要和显示用的 iframe 一样高
   await nextTick();
@@ -350,37 +512,53 @@ async function renderReader() {
     state.reader.darkDoc = true;
     state.reader.html = html;
     notice('reader', '');
-  } catch (e) { if (seq === readerSeq) notice('reader', errText(e), 'err'); }
+  } catch (e) {
+    if (seq === readerSeq) notice('reader', errText(e), 'err');
+  }
 }
 
 /* ---------- 轮询本机服务 ---------- */
-let pollGen = 0, pollTimer = 0, reloadTimer = 0;
+let pollGen = 0,
+  pollTimer = 0,
+  reloadTimer = 0;
 /** 立即问一次状态（之后照常每 1.5 秒一次）；先发出的那次回来得晚，结果作废 */
 export async function pollNow() {
   const gen = ++pollGen;
   clearTimeout(pollTimer);
   let server: ApiState | null = null;
-  try { server = await api<ApiState>('/api/state'); } catch { /* 本机服务关了 */ }
+  try {
+    server = await api<ApiState>('/api/state');
+  } catch {
+    /* 本机服务关了 */
+  }
   if (gen !== pollGen) return;
   state.server = server && markRaw(server);
   state.now = Date.now();
   if (server) {
-    const { article } = server, src = state.src;
+    const { article } = server,
+      src = state.src;
     if (article.file && article.rev !== state.seenRev) {
       state.seenRev = article.rev;
       state.src = markRaw({ kind: 'path', file: article.file, rev: article.rev, mtime: article.mtime });
       rerun();
     } else if (src?.kind === 'path' && article.mtime && article.mtime !== src.mtime) {
       src.mtime = article.mtime;
-      clearTimeout(reloadTimer); reloadTimer = window.setTimeout(rerun, 400);
+      clearTimeout(reloadTimer);
+      reloadTimer = window.setTimeout(rerun, 400);
     }
   }
   pollTimer = window.setTimeout(pollNow, 1500);
 }
 export async function recheck() {
   state.recheckPending = true;
-  try { await api('/api/recheck', {}); } catch { /* 下一次轮询会显示本机服务的状态 */ }
-  finally { state.recheckPending = false; pollNow(); }
+  try {
+    await api('/api/recheck', {});
+  } catch {
+    /* 下一次轮询会显示本机服务的状态 */
+  } finally {
+    state.recheckPending = false;
+    pollNow();
+  }
 }
 /** 保存取图地址：本机端口立即换绑，返回新的检测状态 */
 export async function saveHost(form: { imgPort: string; host: string; port: string; proto: string }) {
@@ -392,22 +570,32 @@ export async function saveHost(form: { imgPort: string; host: string; port: stri
 
 /* ---------- 复制 ---------- */
 export async function copy() {
-  const result = state.result, pick = state.server?.host.pick;
+  const result = state.result,
+    pick = state.server?.host.pick;
   if (!result) return;
   const html = pick ? result.payload.split(ORIGIN + '/a/').join(pick.base + '/a/') : result.payload;
   const text = frames.verify.contentDocument.querySelector<HTMLElement>('.rich_media_content').innerText;
   state.copyDenied = false;
   try {
-    await navigator.clipboard.write([new ClipboardItem({
-      'text/html': new Blob([html], { type: 'text/html' }),
-      'text/plain': new Blob([text], { type: 'text/plain' }),
-    })]);
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'text/html': new Blob([html], { type: 'text/html' }),
+        'text/plain': new Blob([text], { type: 'text/plain' }),
+      }),
+    ]);
   } catch {
-    const fill = (e: ClipboardEvent) => { e.clipboardData.setData('text/html', html); e.clipboardData.setData('text/plain', text); e.preventDefault(); };
+    const fill = (e: ClipboardEvent) => {
+      e.clipboardData.setData('text/html', html);
+      e.clipboardData.setData('text/plain', text);
+      e.preventDefault();
+    };
     document.addEventListener('copy', fill, { once: true });
     const ok = document.execCommand('copy');
     document.removeEventListener('copy', fill);
-    if (!ok) { state.copyDenied = true; return; }
+    if (!ok) {
+      state.copyDenied = true;
+      return;
+    }
   }
   state.copiedAt = { t: Date.now(), base: pick ? pick.base : '' };
   state.now = Date.now();
@@ -419,8 +607,13 @@ export function highlight(ids: string[]) {
     const doc = frame?.contentDocument;
     if (!doc?.head) continue;
     let style = doc.getElementById('__wxc_hl');
-    if (!style) { style = doc.createElement('style'); style.id = '__wxc_hl'; doc.head.appendChild(style); }
-    style.textContent = ids.map(id => `[data-wxc="${id}"]`).join(',') + '{outline:2px solid #e8590c!important;outline-offset:1px}';
+    if (!style) {
+      style = doc.createElement('style');
+      style.id = '__wxc_hl';
+      doc.head.appendChild(style);
+    }
+    style.textContent =
+      ids.map(id => `[data-wxc="${id}"]`).join(',') + '{outline:2px solid #e8590c!important;outline-offset:1px}';
   }
   frames.paneA.contentDocument?.querySelector(`[data-wxc="${ids[0]}"]`)?.scrollIntoView({ block: 'center' });
 }
@@ -435,8 +628,13 @@ export function useFiles(files: RelFile[], name: string) {
   rerun();
 }
 export async function openPath(input: string) {
-  try { await api('/api/open', { path: input }); srcNote(t('src.opening')); pollNow(); }
-  catch (e) { srcNote(errText(e), 'err'); }
+  try {
+    await api('/api/open', { path: input });
+    srcNote(t('src.opening'));
+    pollNow();
+  } catch (e) {
+    srcNote(errText(e), 'err');
+  }
 }
 export function setWidth(width: number) {
   state.width = width;

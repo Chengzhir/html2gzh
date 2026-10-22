@@ -14,7 +14,9 @@ function findHtml(p) {
   return pick ? path.join(p, pick) : null;
 }
 function cleanPath(s) {
-  s = String(s || '').trim().replace(/^["']|["']$/g, '');
+  s = String(s || '')
+    .trim()
+    .replace(/^["']|["']$/g, '');
   if (/^file:\/\//i.test(s)) s = fileURLToPath(s);
   return s;
 }
@@ -24,7 +26,11 @@ export function openArticle(input) {
   if (!fs.existsSync(p)) throw new CodedError('api.notFound', { path: p });
   const f = findHtml(p);
   if (!f && !fs.statSync(p).isDirectory()) throw new CodedError('api.notHtml', { path: p });
-  if (!f) throw fs.readdirSync(p).some(n => /\.html?$/i.test(n)) ? new CodedError('api.manyHtml') : new CodedError('api.noHtml', { path: p });
-  article.file = f; article.rev++;
+  if (!f)
+    throw fs.readdirSync(p).some(n => /\.html?$/i.test(n))
+      ? new CodedError('api.manyHtml')
+      : new CodedError('api.noHtml', { path: p });
+  article.file = f;
+  article.rev++;
   console.log(`${stamp()}  打开  ${f}`);
 }

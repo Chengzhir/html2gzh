@@ -4,4 +4,6 @@ export const ASSET_ID = new RegExp(`^${ID}$`);
 /** 地址里的 id（第一个分组） */
 export const ASSET_URL_RE = new RegExp(`/a/(${ID})`);
 /** 文本里出现的所有 id，去重 */
-export const assetIdsIn = text => [...new Set([...String(text).matchAll(new RegExp(`/a/(${ID})`, 'g'))].map(m => m[1]))];
+export const assetIdsIn = text => [
+  ...new Set([...String(text).matchAll(new RegExp(`/a/(${ID})`, 'g'))].map(m => m[1])),
+];

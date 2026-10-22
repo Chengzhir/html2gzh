@@ -3,10 +3,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, UI_DIR, stamp } from './config.ts';
 
-const SOURCES = ['ui/src', 'ui/convert', 'ui/vendor', 'ui/index.html', 'vite.config.ts', 'package.json'].map(p => path.join(ROOT, p));
+const SOURCES = ['ui/src', 'ui/convert', 'ui/vendor', 'ui/index.html', 'vite.config.ts', 'package.json'].map(p =>
+  path.join(ROOT, p),
+);
 function newest(p: string): number {
   let st: fs.Stats;
-  try { st = fs.statSync(p); } catch { return 0; }
+  try {
+    st = fs.statSync(p);
+  } catch {
+    return 0;
+  }
   if (!st.isDirectory()) return st.mtimeMs;
   return Math.max(st.mtimeMs, ...fs.readdirSync(p).map(n => newest(path.join(p, n))));
 }
@@ -21,6 +27,8 @@ export async function ensureUi() {
     const { build } = await import('vite');
     await build({ configFile: path.join(ROOT, 'vite.config.ts'), logLevel: 'warn' });
   } catch (e) {
-    console.error(`${stamp()}  构建页面失败（${e.message}）${built ? '，使用上次构建的页面' : '：请在本工具的目录中运行 npm install，再运行 npm run build'}`);
+    console.error(
+      `${stamp()}  构建页面失败（${e.message}）${built ? '，使用上次构建的页面' : '：请在本工具的目录中运行 npm install，再运行 npm run build'}`,
+    );
   }
 }

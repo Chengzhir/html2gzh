@@ -1,13 +1,14 @@
 // SMIL begin/end：公众号删掉所有 id 后，"btn.click""a1.end+1s" 这类引用全部失效。能换成不带 id 的等价写法的就换
 import { isAnim, targetOf } from './dom.ts';
 
-const EVENTS = /^(click|dblclick|mousedown|mouseup|mouseover|mouseout|mousemove|mouseenter|mouseleave|touchstart|touchend|touchmove|touchcancel|focusin|focusout|activate|beginEvent|endEvent|repeatEvent|load)$/;
+const EVENTS =
+  /^(click|dblclick|mousedown|mouseup|mouseover|mouseout|mousemove|mouseenter|mouseleave|touchstart|touchend|touchmove|touchcancel|focusin|focusout|activate|beginEvent|endEvent|repeatEvent|load)$/;
 
 /** SMIL 时钟值 → 秒 */
 export function clock(s) {
   s = (s || '').trim();
   let m = /^(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/.exec(s);
-  if (m) return (+(m[1] || 0)) * 3600 + +m[2] * 60 + +m[3];
+  if (m) return +(m[1] || 0) * 3600 + +m[2] * 60 + +m[3];
   m = /^(\d+(?:\.\d+)?|\.\d+)(h|min|s|ms)?$/.exec(s);
   if (!m) return null;
   return +m[1] * { h: 3600, min: 60, s: 1, ms: 0.001 }[m[2] || 's'];
@@ -28,13 +29,21 @@ function parseItem(raw) {
   if (o == null) return { kind: 'other', raw: s };
   const t = m[3] === '-' ? -o : o;
   const rep = /^repeat\((\d+)\)$/.exec(m[2]);
-  if (id && (m[2] === 'begin' || m[2] === 'end' || rep)) return { kind: 'sync', id, base: rep ? 'repeat' : m[2], n: rep ? +rep[1] : 0, t, raw: s };
+  if (id && (m[2] === 'begin' || m[2] === 'end' || rep))
+    return { kind: 'sync', id, base: rep ? 'repeat' : m[2], n: rep ? +rep[1] : 0, t, raw: s };
   if (!EVENTS.test(m[2])) return { kind: 'other', raw: s };
   return { kind: 'event', id, ev: m[2], t, raw: s };
 }
-export const parseList = v => (v || '').split(';').filter(x => x.trim()).map(parseItem);
+export const parseList = v =>
+  (v || '')
+    .split(';')
+    .filter(x => x.trim())
+    .map(parseItem);
 
-const sec = t => { const r = Math.round(t * 1000) / 1000; return (Object.is(r, -0) ? 0 : r) + 's'; };
+const sec = t => {
+  const r = Math.round(t * 1000) / 1000;
+  return (Object.is(r, -0) ? 0 : r) + 's';
+};
 function serialize(it) {
   if (it.id) return it.raw;
   if (it.kind === 'offset') return sec(it.t);
@@ -46,7 +55,8 @@ function serialize(it) {
 export function activeDur(a) {
   if (a.hasAttribute('end') || a.hasAttribute('min') || a.hasAttribute('max')) return null;
   const d = clock(a.getAttribute('dur'));
-  const rc = a.getAttribute('repeatCount'), rd = a.getAttribute('repeatDur');
+  const rc = a.getAttribute('repeatCount'),
+    rd = a.getAttribute('repeatDur');
   if (d == null || rc === 'indefinite' || rd === 'indefinite') return null;
   let ad = rc != null ? d * +rc : d;
   if (rd) ad = Math.min(ad, clock(rd));
@@ -67,8 +77,16 @@ function resolveSync(it, ids, depth = 0) {
   else if (bi.kind === 'sync') base = resolveSync(bi, ids, depth + 1);
   if (!base) return null;
   let add = it.t;
-  if (it.base === 'end') { const d = activeDur(b); if (d == null) return null; add += d; }
-  if (it.base === 'repeat') { const d = clock(b.getAttribute('dur')); if (d == null) return null; add += d * it.n; }
+  if (it.base === 'end') {
+    const d = activeDur(b);
+    if (d == null) return null;
+    add += d;
+  }
+  if (it.base === 'repeat') {
+    const d = clock(b.getAttribute('dur'));
+    if (d == null) return null;
+    add += d * it.n;
+  }
   return base.abs != null ? { abs: base.abs + add } : { ev: base.ev, src: base.src, t: base.t + add };
 }
 
@@ -83,7 +101,8 @@ export function resolveTiming(root, ids) {
   for (const a of root.querySelectorAll('*')) {
     if (!isAnim(a)) continue;
     const tgt = targetOf(a, ids);
-    let ok = true, touched = false;
+    let ok = true,
+      touched = false;
     for (const attr of ['begin', 'end']) {
       const items = parseList(a.getAttribute(attr));
       if (!items.some(it => it.id)) continue;
@@ -99,7 +118,10 @@ export function resolveTiming(root, ids) {
       });
       a.setAttribute(attr, out.map(serialize).join(';'));
     }
-    if (touched) { if (ok) fixed++; else broken.push(a); }
+    if (touched) {
+      if (ok) fixed++;
+      else broken.push(a);
+    }
   }
   return { fixed, broken };
 }
@@ -121,7 +143,10 @@ export function touchToClick(root) {
       a.setAttribute(attr, [...items, ...touch.map(it => ({ ...it, ev: 'click' }))].map(serialize).join(';'));
       hit = true;
     }
-    if (hit) { if (!a.hasAttribute('restart')) a.setAttribute('restart', 'whenNotActive'); n++; }
+    if (hit) {
+      if (!a.hasAttribute('restart')) a.setAttribute('restart', 'whenNotActive');
+      n++;
+    }
   }
   return n;
 }

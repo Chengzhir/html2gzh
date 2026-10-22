@@ -13,7 +13,8 @@ import { findChrome } from '../lib/chrome.ts';
 import { NEUTRAL } from '../ui/convert/reader.ts';
 import { pixelDiff } from '../test/pixeldiff.mjs';
 
-const pos = [], AT = [];
+const pos = [],
+  AT = [];
 let SWAP = false;
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i];
@@ -26,22 +27,37 @@ for (let i = 2; i < process.argv.length; i++) {
   } else pos.push(a);
 }
 const [url, dir, sw = '375'] = pos;
-if (!url || !dir) { console.error('用法：node tools/wxshot.mjs <预览链接> <文章目录> [屏宽] [--swap] [--at 时刻,…]'); process.exit(1); }
-const SW = +sw, CW = SW - 40;
+if (!url || !dir) {
+  console.error('用法：node tools/wxshot.mjs <预览链接> <文章目录> [屏宽] [--swap] [--at 时刻,…]');
+  process.exit(1);
+}
+const SW = +sw,
+  CW = SW - 40;
 const OUT = 'test/out';
 fs.mkdirSync(OUT, { recursive: true });
-const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.50(0x1800322d) NetType/WIFI Language/zh_CN';
+const UA =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.50(0x1800322d) NetType/WIFI Language/zh_CN';
 
 const b = await puppeteer.launch({ executablePath: findChrome(), headless: true, protocolTimeout: 300000 });
 /** CSS 动画的时钟停住（use 影子树里的动画 getAnimations 拿不到，只能这样停在 0）；SMIL 在 freeze 里停 */
 async function stopClock(pg) {
   const cdp = await pg.createCDPSession();
-  await cdp.send('Animation.enable').then(() => cdp.send('Animation.setPlaybackRate', { playbackRate: 0 })).catch(() => {});
+  await cdp
+    .send('Animation.enable')
+    .then(() => cdp.send('Animation.setPlaybackRate', { playbackRate: 0 }))
+    .catch(() => {});
 }
-const freeze = (pg, t) => pg.evaluate(t => {
-  for (const a of document.getAnimations()) { a.pause(); a.currentTime = t * 1000; }
-  for (const s of document.querySelectorAll('svg')) { s.pauseAnimations(); s.setCurrentTime(t); }
-}, t);
+const freeze = (pg, t) =>
+  pg.evaluate(t => {
+    for (const a of document.getAnimations()) {
+      a.pause();
+      a.currentTime = t * 1000;
+    }
+    for (const s of document.querySelectorAll('svg')) {
+      s.pauseAnimations();
+      s.setCurrentTime(t);
+    }
+  }, t);
 
 async function openPreview() {
   const pv = await b.newPage();
@@ -51,7 +67,10 @@ async function openPreview() {
   await pv.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
   // 滚到底触发懒加载图片
   await pv.evaluate(async () => {
-    for (let y = 0; y < document.body.scrollHeight; y += 400) { window.scrollTo(0, y); await new Promise(r => setTimeout(r, 120)); }
+    for (let y = 0; y < document.body.scrollHeight; y += 400) {
+      window.scrollTo(0, y);
+      await new Promise(r => setTimeout(r, 120));
+    }
     window.scrollTo(0, 0);
   });
   if (SWAP) {
@@ -61,7 +80,9 @@ async function openPreview() {
       const srcs = [...jc.querySelectorAll('img')].map(i => i.dataset.src || i.src).filter(s => /mmbiz/.test(s));
       jc.innerHTML = h;
       const imgs = [...jc.querySelectorAll('img')];
-      imgs.forEach((im, i) => { if (srcs[i]) im.src = srcs[i]; });
+      imgs.forEach((im, i) => {
+        if (srcs[i]) im.src = srcs[i];
+      });
       return [imgs.length, srcs.length];
     }, html);
     console.log(`已换成本地成品：${n[0]} 张图，沿用 ${n[1]} 个 mmbiz 地址`);
@@ -69,18 +90,36 @@ async function openPreview() {
   // 懒加载：正文图先是占位图，真地址在 data-src；背景图换成 1×1 占位，真地址在 data-lazy-bgimg。
   // 懒加载模块要等微信客户端的接口就绪才启动，无头浏览器里不会运行，这里直接换上。再把悬浮的作者栏、底栏等 fixed 元素藏掉
   await pv.evaluate(() => {
-    for (const im of document.querySelectorAll('#js_content img[data-src]')) if (im.src !== im.dataset.src) im.src = im.dataset.src;
-    for (const el of document.querySelectorAll('#js_content [data-lazy-bgimg]')) el.style.backgroundImage = `url("${el.getAttribute('data-lazy-bgimg')}")`;
+    for (const im of document.querySelectorAll('#js_content img[data-src]'))
+      if (im.src !== im.dataset.src) im.src = im.dataset.src;
+    for (const el of document.querySelectorAll('#js_content [data-lazy-bgimg]'))
+      el.style.backgroundImage = `url("${el.getAttribute('data-lazy-bgimg')}")`;
     for (const el of document.querySelectorAll('body *')) {
       const p = getComputedStyle(el).position;
-      if ((p === 'fixed' || p === 'sticky') && !el.closest('#js_content')) el.style.setProperty('visibility', 'hidden', 'important');
+      if ((p === 'fixed' || p === 'sticky') && !el.closest('#js_content'))
+        el.style.setProperty('visibility', 'hidden', 'important');
     }
   });
   await pv.waitForNetworkIdle({ idleTime: 800, timeout: 30000 }).catch(() => {});
-  await pv.evaluate(() => Promise.all([
-    ...[...document.querySelectorAll('#js_content img')].map(im => im.complete ? 0 : new Promise(r => { im.onload = im.onerror = r; })),
-    ...[...document.querySelectorAll('#js_content [data-lazy-bgimg]')].map(el => new Promise(r => { const i = new Image(); i.onload = i.onerror = r; i.src = el.getAttribute('data-lazy-bgimg'); })),
-  ]));
+  await pv.evaluate(() =>
+    Promise.all([
+      ...[...document.querySelectorAll('#js_content img')].map(im =>
+        im.complete
+          ? 0
+          : new Promise(r => {
+              im.onload = im.onerror = r;
+            }),
+      ),
+      ...[...document.querySelectorAll('#js_content [data-lazy-bgimg]')].map(
+        el =>
+          new Promise(r => {
+            const i = new Image();
+            i.onload = i.onerror = r;
+            i.src = el.getAttribute('data-lazy-bgimg');
+          }),
+      ),
+    ]),
+  );
   await pv.evaluate(() => document.fonts.ready);
   return pv;
 }
@@ -94,14 +133,31 @@ async function openOriginal() {
   await og.evaluate(() => document.fonts.ready);
   return og;
 }
-const rootBox = pg => pg.evaluate(() => {
-  const root = document.querySelector('#js_content > section') || document.querySelector('#js_content');
-  const r = root.getBoundingClientRect();
-  return { x: r.left + scrollX, y: r.top + scrollY, w: r.width, h: r.height, missing: [...document.querySelectorAll('#js_content img')].filter(i => !i.naturalWidth || i.naturalWidth < 10 && i.width > 50).length };
-});
+const rootBox = pg =>
+  pg.evaluate(() => {
+    const root = document.querySelector('#js_content > section') || document.querySelector('#js_content');
+    const r = root.getBoundingClientRect();
+    return {
+      x: r.left + scrollX,
+      y: r.top + scrollY,
+      w: r.width,
+      h: r.height,
+      missing: [...document.querySelectorAll('#js_content img')].filter(
+        i => !i.naturalWidth || (i.naturalWidth < 10 && i.width > 50),
+      ).length,
+    };
+  });
 /** 不比像素的区域，坐标相对截图左上角 */
-const maskRects = (pg, sampled, o) => pg.evaluate((sampled, o) => [...document.querySelectorAll(sampled ? '[data-pixel-skip],[data-sample-skip]' : '[data-pixel-skip]')]
-  .map(e => { const r = e.getBoundingClientRect(); return [r.left + scrollX - o.x, r.top + scrollY - o.y, r.width, r.height]; }), sampled, o);
+const maskRects = (pg, sampled, o) =>
+  pg.evaluate(
+    (sampled, o) =>
+      [...document.querySelectorAll(sampled ? '[data-pixel-skip],[data-sample-skip]' : '[data-pixel-skip]')].map(e => {
+        const r = e.getBoundingClientRect();
+        return [r.left + scrollX - o.x, r.top + scrollY - o.y, r.width, r.height];
+      }),
+    sampled,
+    o,
+  );
 
 /** 逐像素比：屏蔽区域外扩 3px 画成浅蓝，不计入；返回差异图与并排图（原稿 | 预览 | 差异） */
 async function compare(A, B, masks) {
@@ -112,30 +168,41 @@ async function compare(A, B, masks) {
 }
 
 try {
-  const pv = await openPreview(), og = await openOriginal();
+  const pv = await openPreview(),
+    og = await openOriginal();
   const sfx = SW === 375 ? '' : '-' + SW;
   for (const s of [{ t: 0, c: null }, ...AT]) {
     // 点击会改变状态，每个点击时刻重开两边的页面
     const fresh = s.c != null;
-    const P = fresh ? await openPreview() : pv, O = fresh ? await openOriginal() : og;
-    await freeze(P, s.t); await freeze(O, s.t);
+    const P = fresh ? await openPreview() : pv,
+      O = fresh ? await openOriginal() : og;
+    await freeze(P, s.t);
+    await freeze(O, s.t);
     if (fresh) {
       // 无头浏览器不给后台标签页排版出帧：点击（要等元素进入视口）和截图前，先把那一页切到前台。
       // 预览页的点击不往上冒泡：阅读页在 document 上挂了点击处理（图片预览等）；同一元素上的 SMIL 点击触发不受影响
       const tap = h => Promise.race([h.click(), new Promise(r => setTimeout(r, 10000))]).catch(() => {});
       await P.bringToFront();
-      await P.evaluate(() => { for (const e of document.querySelectorAll('#js_content [data-click]')) e.addEventListener('click', ev => ev.stopPropagation()); });
+      await P.evaluate(() => {
+        for (const e of document.querySelectorAll('#js_content [data-click]'))
+          e.addEventListener('click', ev => ev.stopPropagation());
+      });
       for (const h of await P.$$('#js_content [data-click]')) await tap(h);
       await O.bringToFront();
       for (const h of await O.$$('[data-click]')) await tap(h);
-      await freeze(P, s.c); await freeze(O, s.c);
+      await freeze(P, s.c);
+      await freeze(O, s.c);
     }
     const box = await rootBox(P);
     if (box.missing) console.log(`预览页有 ${box.missing} 张图没加载出来`);
     const sampled = s.t !== 0 || fresh;
-    const masks = [...await maskRects(P, sampled, box), ...await maskRects(O, sampled, { x: 0, y: 0 })];
+    const masks = [...(await maskRects(P, sampled, box)), ...(await maskRects(O, sampled, { x: 0, y: 0 }))];
     await P.bringToFront();
-    const B = await P.screenshot({ clip: { x: box.x, y: box.y, width: box.w, height: box.h }, captureBeyondViewport: true, encoding: 'base64' });
+    const B = await P.screenshot({
+      clip: { x: box.x, y: box.y, width: box.w, height: box.h },
+      captureBeyondViewport: true,
+      encoding: 'base64',
+    });
     await O.bringToFront();
     const A = await O.screenshot({ fullPage: true, encoding: 'base64' });
     const r = await compare(A, B, masks);
@@ -146,8 +213,13 @@ try {
     fs.writeFileSync(path.join(OUT, `wx-side${tag}.png`), Buffer.from(r.side, 'base64'));
     const when = fresh ? `冻结在 ${s.t}s、点击后跳到 ${s.c}s` : `t=${s.t}s`;
     console.log(`屏宽 ${SW}，${when}：原稿 ${r.wa}×${r.ha}，预览正文 ${r.wb}×${r.hb}`);
-    console.log(`  差异像素 ${(r.bad / (r.total - r.area) * 100).toFixed(3)}%（${r.bad}/${r.total - r.area}${r.area ? `，屏蔽 ${(r.area / r.total * 100).toFixed(1)}%` : ''}）  图：${OUT}/wx-side${tag}.png`);
-    if (fresh) { await P.close(); await O.close(); }
+    console.log(
+      `  差异像素 ${((r.bad / (r.total - r.area)) * 100).toFixed(3)}%（${r.bad}/${r.total - r.area}${r.area ? `，屏蔽 ${((r.area / r.total) * 100).toFixed(1)}%` : ''}）  图：${OUT}/wx-side${tag}.png`,
+    );
+    if (fresh) {
+      await P.close();
+      await O.close();
+    }
   }
 } finally {
   await b.close();

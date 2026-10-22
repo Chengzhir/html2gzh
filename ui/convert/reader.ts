@@ -36,7 +36,9 @@ export function readerImages(doc = document, exact = false) {
     if (!exact) return p.clientWidth;
     const w = num(c.width);
     if (!w) return 0;
-    return c.boxSizing === 'border-box' ? w - num(c.borderLeftWidth) - num(c.borderRightWidth) : w + num(c.paddingLeft) + num(c.paddingRight);
+    return c.boxSizing === 'border-box'
+      ? w - num(c.borderLeftWidth) - num(c.borderRightWidth)
+      : w + num(c.paddingLeft) + num(c.paddingRight);
   };
   const parentW = el => {
     let outer = 0;
@@ -44,7 +46,13 @@ export function readerImages(doc = document, exact = false) {
       const c = win.getComputedStyle(p);
       const w = client(p, c) - num(c.paddingLeft) - num(c.paddingRight) - outer;
       if (w > 0) return w;
-      outer += num(c.paddingLeft) + num(c.paddingRight) + num(c.marginLeft) + num(c.marginRight) + num(c.borderLeftWidth) + num(c.borderRightWidth);
+      outer +=
+        num(c.paddingLeft) +
+        num(c.paddingRight) +
+        num(c.marginLeft) +
+        num(c.marginRight) +
+        num(c.borderLeftWidth) +
+        num(c.borderRightWidth);
     }
     return 0;
   };
@@ -59,11 +67,12 @@ export function readerImages(doc = document, exact = false) {
     if (w === 'inherit') w = parentW(img) || maxW;
     if (exact && typeof w === 'string' && w.includes('%')) {
       img.style.cssText += `;height: auto !important; aspect-ratio: calc(1/${ratio});`;
-      n++; continue;
+      n++;
+      continue;
     }
     if (typeof w === 'string' && w.includes('%')) {
       img.style.cssText += `;width: ${img.naturalWidth}px !important;`;
-      w = parseFloat(w) / 100 * (parentW(img) || maxW);
+      w = (parseFloat(w) / 100) * (parentW(img) || maxW);
     }
     if (w === 'auto') w = img.naturalWidth;
     const m = /^(\d+(?:\.\d+)?)([a-zA-Z%]+)?$/.exec(w);
@@ -79,8 +88,16 @@ export function readerImages(doc = document, exact = false) {
 }
 
 const edges = c => ({
-  w: parseFloat(c.paddingLeft) + parseFloat(c.paddingRight) + parseFloat(c.borderLeftWidth) + parseFloat(c.borderRightWidth),
-  h: parseFloat(c.paddingTop) + parseFloat(c.paddingBottom) + parseFloat(c.borderTopWidth) + parseFloat(c.borderBottomWidth),
+  w:
+    parseFloat(c.paddingLeft) +
+    parseFloat(c.paddingRight) +
+    parseFloat(c.borderLeftWidth) +
+    parseFloat(c.borderRightWidth),
+  h:
+    parseFloat(c.paddingTop) +
+    parseFloat(c.paddingBottom) +
+    parseFloat(c.borderTopWidth) +
+    parseFloat(c.borderBottomWidth),
 });
 
 /**
@@ -100,9 +117,14 @@ export function pinImages(doc, root, pins) {
     const before = measure(doc, true);
     readerImages(doc);
     const after = measure(doc, true);
-    all.forEach((img, k) => { if (saved[k] == null) img.removeAttribute('style'); else img.setAttribute('style', saved[k]); });
+    all.forEach((img, k) => {
+      if (saved[k] == null) img.removeAttribute('style');
+      else img.setAttribute('style', saved[k]);
+    });
     for (const img of imgs) {
-      const id = img.getAttribute(ID), a = before.get(id), b = after.get(id);
+      const id = img.getAttribute(ID),
+        a = before.get(id),
+        b = after.get(id);
       if (pins.has(id)) continue;
       // 0.5px 以内是阅读页按 clientWidth（取整）算宽度带来的，不算变形
       pins.set(id, { w: !!(a && b) && Math.abs(a.w - b.w) > 0.5, h: !!(a && b) && Math.abs(a.h - b.h) > 0.5 });
@@ -111,7 +133,8 @@ export function pinImages(doc, root, pins) {
   const now = measure(doc, true);
   let n = 0;
   for (const img of imgs) {
-    const p = pins.get(img.getAttribute(ID)), r = now.get(img.getAttribute(ID));
+    const p = pins.get(img.getAttribute(ID)),
+      r = now.get(img.getAttribute(ID));
     if (!p || !r || !(p.w || p.h)) continue;
     const c = win.getComputedStyle(img);
     const e = c.boxSizing === 'content-box' ? edges(c) : { w: 0, h: 0 };

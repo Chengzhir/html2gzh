@@ -18,8 +18,15 @@ export const imgServer = http.createServer(wrap(imgRoute));
 /** 取图口绑到 port；成功 resolve，失败 reject（EADDRINUSE 等） */
 export function listenImg(port: number) {
   return new Promise<void>((resolve, reject) => {
-    const fail = e => { imgServer.off('listening', ok); reject(e); };
-    const ok = () => { imgServer.off('error', fail); setImgPort(port); resolve(); };
+    const fail = e => {
+      imgServer.off('listening', ok);
+      reject(e);
+    };
+    const ok = () => {
+      imgServer.off('error', fail);
+      setImgPort(port);
+      resolve();
+    };
     imgServer.once('error', fail);
     imgServer.once('listening', ok);
     imgServer.listen(port, '0.0.0.0');
@@ -30,7 +37,11 @@ export async function changeImgPort(port: number) {
   const old = IMG_PORT;
   imgServer.closeAllConnections();
   await new Promise<void>(r => imgServer.close(() => r()));
-  try { await listenImg(port); }
-  catch (e) { await listenImg(old); throw e; }
+  try {
+    await listenImg(port);
+  } catch (e) {
+    await listenImg(old);
+    throw e;
+  }
   console.log(`${stamp()}  取图  本机端口改为 ${port}`);
 }

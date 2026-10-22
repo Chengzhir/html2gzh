@@ -4,12 +4,86 @@ import type { FindingSink } from './types.ts';
 // 粘贴后编辑器（ProseMirror）的实测行为：div 会被重建成 p 并丢掉容器样式，section 原样保留；
 // 空的行内元素没有文字可挂，会被吞掉。下面的改写都围绕这两点。
 // blockquote 也改：阅读页给它强加灰字、左侧 ::before 竖条和 15px 字号，发表/预览时还会删掉它身上的 color
-const TO_SECTION = new Set(['div', 'article', 'header', 'footer', 'main', 'nav', 'aside', 'hgroup', 'address', 'dl', 'dt', 'dd',
-  'details', 'summary', 'center', 'search', 'figcaption', 'blockquote']);
-const MARKS = new Set(['b', 'strong', 'i', 'em', 'u', 's', 'del', 'ins', 'mark', 'small', 'code', 'kbd', 'samp', 'var', 'cite', 'abbr', 'time', 'label', 'sub', 'sup', 'big', 'font', 'dfn']);
-const FREEZE = ['display', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'padding-top', 'padding-right', 'padding-bottom',
-  'padding-left', 'font-weight', 'font-style', 'font-size', 'font-family', 'text-decoration-line', 'color', 'vertical-align'];
-const VOID = new Set(['img', 'svg', 'br', 'hr', 'video', 'audio', 'iframe', 'canvas', 'input', 'textarea', 'select', 'object', 'embed', 'picture', 'math']);
+const TO_SECTION = new Set([
+  'div',
+  'article',
+  'header',
+  'footer',
+  'main',
+  'nav',
+  'aside',
+  'hgroup',
+  'address',
+  'dl',
+  'dt',
+  'dd',
+  'details',
+  'summary',
+  'center',
+  'search',
+  'figcaption',
+  'blockquote',
+]);
+const MARKS = new Set([
+  'b',
+  'strong',
+  'i',
+  'em',
+  'u',
+  's',
+  'del',
+  'ins',
+  'mark',
+  'small',
+  'code',
+  'kbd',
+  'samp',
+  'var',
+  'cite',
+  'abbr',
+  'time',
+  'label',
+  'sub',
+  'sup',
+  'big',
+  'font',
+  'dfn',
+]);
+const FREEZE = [
+  'display',
+  'margin-top',
+  'margin-right',
+  'margin-bottom',
+  'margin-left',
+  'padding-top',
+  'padding-right',
+  'padding-bottom',
+  'padding-left',
+  'font-weight',
+  'font-style',
+  'font-size',
+  'font-family',
+  'text-decoration-line',
+  'color',
+  'vertical-align',
+];
+const VOID = new Set([
+  'img',
+  'svg',
+  'br',
+  'hr',
+  'video',
+  'audio',
+  'iframe',
+  'canvas',
+  'input',
+  'textarea',
+  'select',
+  'object',
+  'embed',
+  'picture',
+  'math',
+]);
 const JUNK = 'script,style,link,meta,title,base,noscript,template,slot';
 const BLOCKISH = /^(block|flex|grid|table|list-item|flow-root)/;
 
@@ -37,18 +111,26 @@ export function cleanStructure(doc: Document, root: Element, findings: FindingSi
   const win = doc.defaultView;
   const cs = el => win.getComputedStyle(el);
   root.querySelectorAll(JUNK).forEach(e => e.remove());
-  root.querySelectorAll('picture').forEach(p => { const im = p.querySelector('img'); if (im) p.replaceWith(im); else p.remove(); });
+  root.querySelectorAll('picture').forEach(p => {
+    const im = p.querySelector('img');
+    if (im) p.replaceWith(im);
+    else p.remove();
+  });
   root.querySelectorAll('source,track').forEach(e => e.remove());
   const lost = root.querySelectorAll('form,input,button,select,textarea,iframe,video,audio,canvas,object,embed');
   if (lost.length) findings.warn('interactive', { n: lost.length }, { els: [...lost] });
 
   // 链接：只有 mp.weixin.qq.com 能留；页内锚点会让草稿存不下去，站外链接保存后变纯文字
-  let anchors = 0, outside = 0;
+  let anchors = 0,
+    outside = 0;
   const outEls = [];
   for (const a of [...root.querySelectorAll('a')]) {
     const href = (a.getAttribute('href') || '').trim();
     if (/^https?:\/\/mp\.weixin\.qq\.com\//i.test(href)) continue;
-    if (/^https?:/i.test(href)) { outside++; outEls.push(a); } else if (href) anchors++;
+    if (/^https?:/i.test(href)) {
+      outside++;
+      outEls.push(a);
+    } else if (href) anchors++;
     rename(doc, a, 'span').removeAttribute('href');
   }
   if (anchors) findings.fixed('anchors', { n: anchors });
@@ -59,27 +141,42 @@ export function cleanStructure(doc: Document, root: Element, findings: FindingSi
     const li = [...el.children].filter(k => k.localName === 'li');
     const plain = li.every(k => cs(k).display !== 'list-item' || cs(k).listStyleType === 'none');
     if (!plain) continue;
-    li.forEach(k => { rename(doc, k, 'section'); n++; });
-    rename(doc, el, 'section'); n++;
+    li.forEach(k => {
+      rename(doc, k, 'section');
+      n++;
+    });
+    rename(doc, el, 'section');
+    n++;
   }
   for (const el of [...root.querySelectorAll('*')]) {
     if (!isHtmlEl(el) || el === root) continue;
     const t = el.localName;
-    if (TO_SECTION.has(t)) { rename(doc, el, 'section'); n++; } else if (MARKS.has(t) && el.hasAttribute('style')) { rename(doc, el, 'span'); n++; }
+    if (TO_SECTION.has(t)) {
+      rename(doc, el, 'section');
+      n++;
+    } else if (MARKS.has(t) && el.hasAttribute('style')) {
+      rename(doc, el, 'span');
+      n++;
+    }
   }
   if (n) findings.fixed('containers', { n });
 }
 
 const isTextContext = (win, el) => {
   for (const c of el.childNodes) if (c.nodeType === 3 && c.data.trim()) return true;
-  return /^(p|h[1-6]|span|li|blockquote|td|th|pre|figcaption|b|strong|i|em|u|s|label|sub|sup|small|code|mark)$/.test(el.localName)
-    || /^inline/.test(win.getComputedStyle(el).display) && !/flex|grid/.test(win.getComputedStyle(el).display);
+  return (
+    /^(p|h[1-6]|span|li|blockquote|td|th|pre|figcaption|b|strong|i|em|u|s|label|sub|sup|small|code|mark)$/.test(
+      el.localName,
+    ) ||
+    (/^inline/.test(win.getComputedStyle(el).display) && !/flex|grid/.test(win.getComputedStyle(el).display))
+  );
 };
 
 /** 空元素（色块、圆点、线条）：文字环境里换成 svg，块环境里在 section 里塞一个零尺寸 svg 占位（秀米同款） */
 export function keepShapes(doc: Document, root: Element, findings: FindingSink) {
   const win = doc.defaultView;
-  let shapes = 0, dropped = 0;
+  let shapes = 0,
+    dropped = 0;
   for (const el of [...root.querySelectorAll('*')].reverse()) {
     // foreignObject 里的 HTML 由 SVG 自己排版，不按段落规则改
     if (!isHtmlEl(el) || VOID.has(el.localName) || el === root || el.closest('svg')) continue;
@@ -88,7 +185,10 @@ export function keepShapes(doc: Document, root: Element, findings: FindingSink) 
     const c = win.getComputedStyle(el);
     if (c.display === 'none') continue;
     if (r.width < 0.1 && r.height < 0.1) {
-      if (el.hasAttribute('data-wxc-pseudo')) { el.remove(); dropped++; }
+      if (el.hasAttribute('data-wxc-pseudo')) {
+        el.remove();
+        dropped++;
+      }
       continue;
     }
     const P = el.parentElement;
@@ -103,7 +203,8 @@ export function keepShapes(doc: Document, root: Element, findings: FindingSink) 
       s.style.setProperty('overflow', s.style.overflow || 'hidden');
     } else {
       const sec = el.localName === 'section' ? el : rename(doc, el, 'section');
-      if (!BLOCKISH.test(win.getComputedStyle(sec).display) && !sec.style.display) sec.style.setProperty('display', c.display === 'inline' ? 'inline-block' : c.display);
+      if (!BLOCKISH.test(win.getComputedStyle(sec).display) && !sec.style.display)
+        sec.style.setProperty('display', c.display === 'inline' ? 'inline-block' : c.display);
       const s = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
       s.setAttribute('viewBox', '0 0 1 1');
       s.setAttribute('style', 'float:left;width:0;height:0;overflow:hidden;display:block');
@@ -121,8 +222,10 @@ export function squashWhitespace(doc, root) {
   const walker = doc.createTreeWalker(root, 4 | 128);
   const nodes = [];
   while (walker.nextNode()) nodes.push(walker.currentNode);
-  const isBlock = n => n && n.nodeType === 1 && (BLOCKISH.test(win.getComputedStyle(n).display) || n.hasAttribute('data-wxc-float'));
-  const isBox = n => n === root || BLOCKISH.test(win.getComputedStyle(n).display) || /flex|grid/.test(win.getComputedStyle(n).display);
+  const isBlock = n =>
+    n && n.nodeType === 1 && (BLOCKISH.test(win.getComputedStyle(n).display) || n.hasAttribute('data-wxc-float'));
+  const isBox = n =>
+    n === root || BLOCKISH.test(win.getComputedStyle(n).display) || /flex|grid/.test(win.getComputedStyle(n).display);
   /** 这一侧在行内流里挨着的是块边界吗：没有兄弟就往上找，直到碰到块容器 */
   const edge = (t, dir) => {
     let n = t;
@@ -135,7 +238,11 @@ export function squashWhitespace(doc, root) {
   };
   let saved = 0;
   for (const t of nodes) {
-    if (t.nodeType === 8) { saved += t.data.length + 7; t.remove(); continue; }
+    if (t.nodeType === 8) {
+      saved += t.data.length + 7;
+      t.remove();
+      continue;
+    }
     const P = t.parentElement;
     if (!P || /^pre|^break-spaces/.test(win.getComputedStyle(P).whiteSpace)) continue;
     const before = t.data.length;
@@ -143,7 +250,8 @@ export function squashWhitespace(doc, root) {
     const flexParent = /flex|grid/.test(win.getComputedStyle(P).display);
     if (flexParent || edge(t, 'previousSibling')) s = s.replace(/^ /, '');
     if (flexParent || edge(t, 'nextSibling')) s = s.replace(/ $/, '');
-    if (!s) t.remove(); else if (s !== t.data) t.data = s;
+    if (!s) t.remove();
+    else if (s !== t.data) t.data = s;
     saved += before - s.length;
   }
   return saved;
@@ -159,11 +267,13 @@ export function keepNoWrap(doc, root) {
   const nowrap = el => /^nowrap$/.test(win.getComputedStyle(el).whiteSpace);
   let n = 0;
   for (const el of [...root.querySelectorAll('*')]) {
-    if (!isHtmlEl(el) || !nowrap(el) || (el.parentElement && el.parentElement !== root && nowrap(el.parentElement))) continue;
+    if (!isHtmlEl(el) || !nowrap(el) || (el.parentElement && el.parentElement !== root && nowrap(el.parentElement)))
+      continue;
     const walker = doc.createTreeWalker(el, 4);
     const texts = [];
     // SVG 文字按字定位（x 列表一个值对应一个字），插连接符会错位
-    while (walker.nextNode()) if (walker.currentNode.data && isHtmlEl(walker.currentNode.parentElement)) texts.push(walker.currentNode);
+    while (walker.nextNode())
+      if (walker.currentNode.data && isHtmlEl(walker.currentNode.parentElement)) texts.push(walker.currentNode);
     texts.forEach((t, i) => {
       const chars = [...t.data.replace(/ /g, '\u00a0')];
       t.data = chars.join(WJ) + (i < texts.length - 1 ? WJ : '');
@@ -178,7 +288,22 @@ export function cleanAttributes(root) {
     for (const a of [...el.attributes]) {
       const k = a.name;
       if (k === ID || k.startsWith('data-wxc')) continue;
-      if (/^on/i.test(k) || /^data-v-/.test(k) || ['class', 'loading', 'decoding', 'srcset', 'sizes', 'contenteditable', 'tabindex', 'draggable', 'fetchpriority'].includes(k)) el.removeAttribute(k);
+      if (
+        /^on/i.test(k) ||
+        /^data-v-/.test(k) ||
+        [
+          'class',
+          'loading',
+          'decoding',
+          'srcset',
+          'sizes',
+          'contenteditable',
+          'tabindex',
+          'draggable',
+          'fetchpriority',
+        ].includes(k)
+      )
+        el.removeAttribute(k);
     }
   }
 }

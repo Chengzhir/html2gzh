@@ -13,8 +13,13 @@ const ASCII = String.fromCharCode(...Array.from({ length: 95 }, (_, i) => 32 + i
 /** 生成 fonts/ 下的字体与样式表；测试稿没改过就不重做 */
 export async function buildWebfontFixture(dir) {
   const html = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');
-  const out = path.join(dir, 'fonts'), marker = path.join(out, '.built');
-  const sig = crypto.createHash('sha256').update(html + fs.readFileSync(new URL(import.meta.url))).digest('hex').slice(0, 16);
+  const out = path.join(dir, 'fonts'),
+    marker = path.join(out, '.built');
+  const sig = crypto
+    .createHash('sha256')
+    .update(html + fs.readFileSync(new URL(import.meta.url)))
+    .digest('hex')
+    .slice(0, 16);
   if (fs.existsSync(marker) && fs.readFileSync(marker, 'utf8') === sig) return;
   fs.mkdirSync(path.join(out, 'remote'), { recursive: true });
   const read = f => fs.readFileSync(path.join(WIN_FONTS, f));
@@ -32,10 +37,19 @@ export async function buildWebfontFixture(dir) {
   ];
   for (const [name, file, chars, fmt] of jobs) fs.writeFileSync(path.join(out, name), await sub(file, chars, fmt));
   const inline = await sub('times.ttf', ASCII, 'sfnt');
-  fs.writeFileSync(path.join(out, 'inline.css'), `@font-face{font-family:"Inline Serif";src:url(data:font/ttf;base64,${inline.toString('base64')}) format("truetype")}\n`);
+  fs.writeFileSync(
+    path.join(out, 'inline.css'),
+    `@font-face{font-family:"Inline Serif";src:url(data:font/ttf;base64,${inline.toString('base64')}) format("truetype")}\n`,
+  );
   // 站外样式表里的字体地址是相对样式表自己的
-  fs.writeFileSync(path.join(out, 'remote', 'remote.css'), '@font-face{font-family:"Remote Sans";src:url(remote.woff2) format("woff2")}\n');
-  fs.writeFileSync(path.join(out, 'remote', 'imported.css'), '@font-face{font-family:"Imported Serif";src:url(imported.woff) format("woff")}\n');
+  fs.writeFileSync(
+    path.join(out, 'remote', 'remote.css'),
+    '@font-face{font-family:"Remote Sans";src:url(remote.woff2) format("woff2")}\n',
+  );
+  fs.writeFileSync(
+    path.join(out, 'remote', 'imported.css'),
+    '@font-face{font-family:"Imported Serif";src:url(imported.woff) format("woff")}\n',
+  );
   fs.writeFileSync(marker, sig);
 }
 
@@ -46,9 +60,18 @@ export function serveRemote(dir) {
   const srv = http.createServer((req, res) => {
     const name = path.basename(decodeURIComponent(new URL(req.url, 'http://x').pathname));
     const file = path.join(root, name);
-    if (!name || !fs.existsSync(file)) { res.writeHead(404, { 'access-control-allow-origin': '*' }); return res.end(); }
-    res.writeHead(200, { 'content-type': TYPES[path.extname(name)] || 'application/octet-stream', 'access-control-allow-origin': '*' });
+    if (!name || !fs.existsSync(file)) {
+      res.writeHead(404, { 'access-control-allow-origin': '*' });
+      return res.end();
+    }
+    res.writeHead(200, {
+      'content-type': TYPES[path.extname(name)] || 'application/octet-stream',
+      'access-control-allow-origin': '*',
+    });
     res.end(fs.readFileSync(file));
   });
-  return new Promise((resolve, reject) => { srv.once('error', reject); srv.listen(REMOTE_PORT, '127.0.0.1', () => resolve(srv)); });
+  return new Promise((resolve, reject) => {
+    srv.once('error', reject);
+    srv.listen(REMOTE_PORT, '127.0.0.1', () => resolve(srv));
+  });
 }

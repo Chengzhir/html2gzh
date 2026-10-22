@@ -4,14 +4,31 @@ export const ID = 'data-wxc';
 
 /** 按顶层逗号切分（跳过括号与引号内） */
 export function splitTop(s, sep = ',') {
-  const out = []; let depth = 0, q = '', cur = '';
+  const out = [];
+  let depth = 0,
+    q = '',
+    cur = '';
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
-    if (q) { cur += c; if (c === '\\') { cur += s[++i] || ''; } else if (c === q) q = ''; continue; }
-    if (c === '"' || c === "'") { q = c; cur += c; continue; }
+    if (q) {
+      cur += c;
+      if (c === '\\') {
+        cur += s[++i] || '';
+      } else if (c === q) q = '';
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      q = c;
+      cur += c;
+      continue;
+    }
     if (c === '(' || c === '[') depth++;
     else if (c === ')' || c === ']') depth--;
-    if (c === sep && depth === 0) { out.push(cur); cur = ''; continue; }
+    if (c === sep && depth === 0) {
+      out.push(cur);
+      cur = '';
+      continue;
+    }
     cur += c;
   }
   if (cur.trim()) out.push(cur);
@@ -19,7 +36,10 @@ export function splitTop(s, sep = ',') {
 }
 
 /** 去掉首尾空白与一层引号（字体名等） */
-export const unq = s => String(s || '').trim().replace(/^["']|["']$/g, '');
+export const unq = s =>
+  String(s || '')
+    .trim()
+    .replace(/^["']|["']$/g, '');
 
 /** unicode-range → [[lo, hi]]；空值表示全部，写错的段跳过（全写错时为空数组） */
 export function unicodeRanges(s) {
@@ -35,10 +55,18 @@ export function unicodeRanges(s) {
 }
 
 /** 作者样式表（带 data-wxc-author 的）的规则列表逐个交给 fn；读不了的（跨域等）交给 unreadable */
-export function eachAuthorSheet(doc: Document, fn: (rules: CSSRuleList) => void, unreadable?: (sheet: CSSStyleSheet) => void) {
+export function eachAuthorSheet(
+  doc: Document,
+  fn: (rules: CSSRuleList) => void,
+  unreadable?: (sheet: CSSStyleSheet) => void,
+) {
   for (const sh of doc.styleSheets as Iterable<CSSStyleSheet & { ownerNode: Element | null }>) {
     if (!sh.ownerNode || !sh.ownerNode.hasAttribute('data-wxc-author')) continue;
-    try { fn(sh.cssRules); } catch { if (unreadable) unreadable(sh); }
+    try {
+      fn(sh.cssRules);
+    } catch {
+      if (unreadable) unreadable(sh);
+    }
   }
 }
 
@@ -60,11 +88,13 @@ export function parseDecls(text) {
 }
 
 export const isEl = (n, name) => n && n.nodeType === 1 && (!name || n.localName === name);
-export const isHtmlEl = (n): n is HTMLElement => n && n.nodeType === 1 && n.namespaceURI === 'http://www.w3.org/1999/xhtml';
+export const isHtmlEl = (n): n is HTMLElement =>
+  n && n.nodeType === 1 && n.namespaceURI === 'http://www.w3.org/1999/xhtml';
 export const round = n => Math.round(n * 1000) / 1000;
 
 /** 临时去掉所有变换，量布局位置用 */
-export const NO_TRANSFORM = '*{transform:none!important;translate:none!important;rotate:none!important;scale:none!important}';
+export const NO_TRANSFORM =
+  '*{transform:none!important;translate:none!important;rotate:none!important;scale:none!important}';
 // measure 还要停住伪元素与过渡、动画：量的是每个元素的静止布局
 const NO_TF = `*,*::before,*::after{transform:none!important;translate:none!important;rotate:none!important;scale:none!important;transition:none!important;animation:none!important}`;
 
@@ -74,7 +104,11 @@ const NO_TF = `*,*::before,*::after{transform:none!important;translate:none!impo
  */
 export function measure(doc, layout) {
   let st;
-  if (layout) { st = doc.createElement('style'); st.textContent = NO_TF; doc.head.appendChild(st); }
+  if (layout) {
+    st = doc.createElement('style');
+    st.textContent = NO_TF;
+    doc.head.appendChild(st);
+  }
   const b = doc.body.getBoundingClientRect();
   const cs = doc.defaultView.getComputedStyle(doc.body);
   const ox = b.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft);
@@ -94,7 +128,13 @@ export function diffBoxes(a, b, tol = 0.75) {
   for (const [id, r] of a) {
     const s = b.get(id);
     if (!s) continue;
-    if (Math.abs(r.x - s.x) > tol || Math.abs(r.y - s.y) > tol || Math.abs(r.w - s.w) > tol || Math.abs(r.h - s.h) > tol) bad.push(id);
+    if (
+      Math.abs(r.x - s.x) > tol ||
+      Math.abs(r.y - s.y) > tol ||
+      Math.abs(r.w - s.w) > tol ||
+      Math.abs(r.h - s.h) > tol
+    )
+      bad.push(id);
   }
   return bad;
 }
@@ -108,8 +148,23 @@ export function loadFrame(frame: HTMLIFrameElement, html: string, width: number,
     frame.onload = async () => {
       clearTimeout(t);
       const doc = frame.contentDocument;
-      try { await Promise.race([doc.fonts.ready, sleep(4000)]); } catch { /* 无字体 API */ }
-      await Promise.race([Promise.all([...doc.images].map(im => im.complete ? 0 : new Promise(r => { im.onload = im.onerror = r; }))), sleep(10000)]);
+      try {
+        await Promise.race([doc.fonts.ready, sleep(4000)]);
+      } catch {
+        /* 无字体 API */
+      }
+      await Promise.race([
+        Promise.all(
+          [...doc.images].map(im =>
+            im.complete
+              ? 0
+              : new Promise(r => {
+                  im.onload = im.onerror = r;
+                }),
+          ),
+        ),
+        sleep(10000),
+      ]);
       resolve(doc);
     };
     frame.srcdoc = html;

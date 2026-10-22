@@ -4,11 +4,17 @@
 import { useTemplateRef, onBeforeUnmount } from 'vue';
 import { NTooltip } from 'naive-ui';
 
-const props = withDefaults(defineProps<{ text: string; placement?: 'top' | 'bottom' | 'right' | 'left' | 'top-start' | 'right-start' }>(), { placement: 'top' });
+const props = withDefaults(
+  defineProps<{ text: string; placement?: 'top' | 'bottom' | 'right' | 'left' | 'top-start' | 'right-start' }>(),
+  { placement: 'top' },
+);
 const tooltip = useTemplateRef('tooltip-ref');
-const closeOnEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setShown(false); };
+const closeOnEsc = (e: KeyboardEvent) => {
+  if (e.key === 'Escape') setShown(false);
+};
 function onShowChange(shown: boolean) {
-  if (shown) document.addEventListener('keydown', closeOnEsc, true); else document.removeEventListener('keydown', closeOnEsc, true);
+  if (shown) document.addEventListener('keydown', closeOnEsc, true);
+  else document.removeEventListener('keydown', closeOnEsc, true);
 }
 function setShown(shown: boolean) {
   if (!tooltip.value) return;
@@ -19,8 +25,17 @@ onBeforeUnmount(() => document.removeEventListener('keydown', closeOnEsc, true))
 </script>
 
 <template>
-  <NTooltip ref="tooltip-ref" trigger="hover" :placement="placement" :disabled="!props.text" :delay="80" :duration="150" keep-alive-on-hover
-    :style="{ maxWidth: '300px' }" @update:show="onShowChange">
+  <NTooltip
+    ref="tooltip-ref"
+    trigger="hover"
+    :placement="placement"
+    :disabled="!props.text"
+    :delay="80"
+    :duration="150"
+    keep-alive-on-hover
+    :style="{ maxWidth: '300px' }"
+    @update:show="onShowChange"
+  >
     <template #trigger>
       <span class="tip-anchor" @focusin="setShown(true)" @focusout="setShown(false)"><slot /></span>
     </template>

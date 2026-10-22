@@ -7,18 +7,39 @@ import type { HostConfig, HostExit, HostState } from '../ui/convert/types.ts';
 import { settings, saveSettings, stamp, validPort, UI_PORT, IMG_PORT, TOKEN } from './config.ts';
 
 const validPub = (n: number) => Number.isInteger(n) && n >= 1 && n <= 65535;
-const PUB: Omit<HostConfig, 'imgPort'> = { host: typeof settings.host === 'string' ? settings.host : '', port: validPub(settings.port) ? settings.port : 0, proto: 'http' };
+const PUB: Omit<HostConfig, 'imgPort'> = {
+  host: typeof settings.host === 'string' ? settings.host : '',
+  port: validPub(settings.port) ? settings.port : 0,
+  proto: 'http',
+};
 if (PUB.host && settings.proto === 'https') PUB.proto = 'https';
 // list：自动检测到的出口 [{ base, ip, seen, ok, passes, stale }]，seen = 本轮多少次探测落在这个出口；manual：填了公网地址时它的检测结果
-const host: Omit<HostState, 'pick' | 'config'> & { manual: { base: string; ok: boolean } | null } = { checking: false, list: [], manual: null, checkedAt: 0, probes: 0 };
-let recheck = false, gen = 0;
-const bracket = (h: string) => h.includes(':') ? `[${h}]` : h;
+const host: Omit<HostState, 'pick' | 'config'> & { manual: { base: string; ok: boolean } | null } = {
+  checking: false,
+  list: [],
+  manual: null,
+  checkedAt: 0,
+  probes: 0,
+};
+let recheck = false,
+  gen = 0;
+const bracket = (h: string) => (h.includes(':') ? `[${h}]` : h);
 function baseOf(h: string) {
-  const def = PUB.proto === 'https' ? 443 : 80, port = PUB.port || (PUB.proto === 'https' ? 443 : IMG_PORT);
+  const def = PUB.proto === 'https' ? 443 : 80,
+    port = PUB.port || (PUB.proto === 'https' ? 443 : IMG_PORT);
   return `${PUB.proto}://${bracket(h)}${port === def ? '' : ':' + port}`;
 }
-const IP_SRCS = ['https://myip.ipip.net', 'http://ddns.oray.com/checkip', 'https://ip.3322.net', 'http://members.3322.org/dyndns/getip',
-  'https://api-ipv4.ip.sb/ip', 'https://ifconfig.me/ip', 'https://checkip.amazonaws.com', 'https://v4.ident.me', 'https://ipv4.icanhazip.com'];
+const IP_SRCS = [
+  'https://myip.ipip.net',
+  'http://ddns.oray.com/checkip',
+  'https://ip.3322.net',
+  'http://members.3322.org/dyndns/getip',
+  'https://api-ipv4.ip.sb/ip',
+  'https://ifconfig.me/ip',
+  'https://checkip.amazonaws.com',
+  'https://v4.ident.me',
+  'https://ipv4.icanhazip.com',
+];
 const ROUNDS = 3;
 const TTL = 5 * 60000;
 
@@ -29,7 +50,9 @@ function getText(u: string, ms: number) {
     const req = lib.get(u, { agent: false, family: 4, timeout: ms, headers: { 'user-agent': 'curl/8' } }, r => {
       let b = '';
       r.setEncoding('utf8');
-      r.on('data', c => { if (b.length < 4096) b += c; });
+      r.on('data', c => {
+        if (b.length < 4096) b += c;
+      });
       r.on('end', () => resolve(r.statusCode === 200 ? b : null));
       // 读到一半连接断开或超时被掐断时没有 end，只有 close；不 resolve 的话这一轮检测永远结束不了
       r.on('close', () => resolve(null));
@@ -47,8 +70,17 @@ function isPublicIPv4(ip: string) {
   const o = ip.split('.').map(Number);
   if (o.some(n => n > 255)) return false;
   const [a, b] = o;
-  return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b < 128) || (a === 169 && b === 254)
-    || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)));
+  return !(
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    a >= 224 ||
+    (a === 100 && b >= 64 && b < 128) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b < 32) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19))
+  );
 }
 /** 检测回连也会被分到不同出口，一个出口试三次，有一次通就算通 */
 async function pingN(base: string, n = 3) {
@@ -57,13 +89,17 @@ async function pingN(base: string, n = 3) {
 }
 export async function checkHosts() {
   // 检测进行中又要求检测：这一轮结束后再测一轮；这一轮里设置改了（gen 变了），结果作废
-  if (host.checking) { recheck = true; return; }
+  if (host.checking) {
+    recheck = true;
+    return;
+  }
   host.checking = true;
   const g = gen;
   try {
     if (PUB.host) {
       // 填了公网地址就不查公网 IP，只测这个地址
-      const base = baseOf(PUB.host), ok = (await pingN(base)) > 0;
+      const base = baseOf(PUB.host),
+        ok = (await pingN(base)) > 0;
       if (g !== gen) return;
       Object.assign(host, { manual: { base, ok }, list: [], probes: 0, checkedAt: Date.now() });
       console.log(`${stamp()}  取图地址  ${base}  ${ok ? '可以访问' : '无法访问'}`);
@@ -76,50 +112,80 @@ export async function checkHosts() {
       const ip = t && (t.match(/\b\d{1,3}(\.\d{1,3}){3}\b/) || [])[0];
       if (ip && isPublicIPv4(ip)) seen.set(ip, (seen.get(ip) || 0) + 1);
     }
-    const fresh = await Promise.all([...seen].map(async ([ip, n]): Promise<HostExit> => {
-      const base = baseOf(ip);
-      const passes = await pingN(base);
-      return { base, ip, seen: n, ok: passes > 0, passes, stale: false };
-    }));
+    const fresh = await Promise.all(
+      [...seen].map(async ([ip, n]): Promise<HostExit> => {
+        const base = baseOf(ip);
+        const passes = await pingN(base);
+        return { base, ip, seen: n, ok: passes > 0, passes, stale: false };
+      }),
+    );
     if (g !== gen) return;
     // 上一轮见过、这轮没探到的出口先留着（可能只是这轮没分到），标成 stale
     const old = host.list.filter(h => !seen.has(h.ip)).map(h => ({ ...h, seen: 0, stale: true }));
-    Object.assign(host, { list: [...fresh, ...old].sort((a: any, b: any) => b.ok - a.ok || b.seen - a.seen), manual: null, probes: jobs.length, checkedAt: Date.now() });
-    for (const h of fresh) console.log(`${stamp()}  取图地址  ${h.base}  ${h.ok ? '可以访问' : '无法访问'}  （${jobs.length} 次查询中有 ${h.seen} 次查到这个 IP）`);
+    Object.assign(host, {
+      list: [...fresh, ...old].sort((a: any, b: any) => b.ok - a.ok || b.seen - a.seen),
+      manual: null,
+      probes: jobs.length,
+      checkedAt: Date.now(),
+    });
+    for (const h of fresh)
+      console.log(
+        `${stamp()}  取图地址  ${h.base}  ${h.ok ? '可以访问' : '无法访问'}  （${jobs.length} 次查询中有 ${h.seen} 次查到这个 IP）`,
+      );
     if (!fresh.length) console.log(`${stamp()}  取图地址  没有检测到公网 IP`);
   } finally {
     host.checking = false;
-    if (recheck || g !== gen) { recheck = false; checkHosts(); }
+    if (recheck || g !== gen) {
+      recheck = false;
+      checkHosts();
+    }
   }
 }
 /** 页面开着（每 1.5 秒来问一次状态）才定期重测；没人看时不去打扰查 IP 的网站 */
-export function checkIfStale() { if (!host.checking && Date.now() - host.checkedAt > TTL) checkHosts(); }
+export function checkIfStale() {
+  if (!host.checking && Date.now() - host.checkedAt > TTL) checkHosts();
+}
 function pickBase(): HostState['pick'] {
   if (PUB.host) return host.manual || { base: baseOf(PUB.host), ok: null };
   const ok = host.list.find(h => h.ok);
   if (ok) return { base: ok.base, ok: true };
   return host.list[0] ? { base: host.list[0].base, ok: false } : null;
 }
-export const hostState = (): HostState => ({ checking: host.checking, list: host.list, checkedAt: host.checkedAt, probes: host.probes, pick: pickBase(),
-  config: { imgPort: IMG_PORT, host: PUB.host, port: PUB.port, proto: PUB.proto } });
+export const hostState = (): HostState => ({
+  checking: host.checking,
+  list: host.list,
+  checkedAt: host.checkedAt,
+  probes: host.probes,
+  pick: pickBase(),
+  config: { imgPort: IMG_PORT, host: PUB.host, port: PUB.port, proto: PUB.proto },
+});
 
 /** 公网地址：域名、IPv4 或 IPv6，不带协议、端口和路径；内网地址微信服务器连不上，不收 */
 function cleanHost(v: unknown) {
   const s = String(v || '').trim();
   if (!s) return '';
   let u = null;
-  try { u = new URL(`http://${s.includes(':') && !s.startsWith('[') ? `[${s}]` : s}/`); } catch { /* 下面报错 */ }
-  if (!u || u.username || u.password || u.port || u.pathname !== '/' || u.search || u.hash) throw new CodedError('api.badHost');
+  try {
+    u = new URL(`http://${s.includes(':') && !s.startsWith('[') ? `[${s}]` : s}/`);
+  } catch {
+    /* 下面报错 */
+  }
+  if (!u || u.username || u.password || u.port || u.pathname !== '/' || u.search || u.hash)
+    throw new CodedError('api.badHost');
   const h = u.hostname.replace(/^\[|\]$/g, '');
-  const inner = /^localhost$/i.test(h) || /^\d+\.\d+\.\d+\.\d+$/.test(h) && !isPublicIPv4(h) || h.includes(':') && /^(::1?$|::ffff:|f[cd]|fe[89ab])/i.test(h);
+  const inner =
+    /^localhost$/i.test(h) ||
+    (/^\d+\.\d+\.\d+\.\d+$/.test(h) && !isPublicIPv4(h)) ||
+    (h.includes(':') && /^(::1?$|::ffff:|f[cd]|fe[89ab])/i.test(h));
   if (inner) throw new CodedError('api.innerHost', { host: h });
   return h;
 }
 /** 页面上“取图地址”表单 { imgPort, host, port, proto } → 校验过的设置；不合格时抛出 CodedError（文案 api.*） */
 export function parseHostForm(b: Record<string, unknown>): HostConfig {
   // 空串表示留空；其余按数字解析，解析不出是 NaN，下面的校验会拒绝
-  const num = (v: unknown) => v == null || String(v).trim() === '' ? 0 : Number(v);
-  const imgPort = num(b.imgPort), port = num(b.port);
+  const num = (v: unknown) => (v == null || String(v).trim() === '' ? 0 : Number(v));
+  const imgPort = num(b.imgPort),
+    port = num(b.port);
   if (!validPort(imgPort)) throw new CodedError('api.badImgPort');
   if (imgPort === UI_PORT) throw new CodedError('api.uiPort', { port: imgPort });
   if (port !== 0 && !validPub(port)) throw new CodedError('api.badPubPort');

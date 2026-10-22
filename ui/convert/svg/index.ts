@@ -4,14 +4,29 @@ import { SVG_NS, isSvg, tally } from './dom.ts';
 import { captureCss, cssToSmil } from './css.ts';
 import { resolveTiming, touchToClick } from './timing.ts';
 import { fixWhitelist } from './whitelist.ts';
-import { normalizeHref, retarget, expandUse, inlineMpath, linksToG, imagesToFo, cleanup, danglingRefs } from './structure.ts';
+import {
+  normalizeHref,
+  retarget,
+  expandUse,
+  inlineMpath,
+  linksToG,
+  imagesToFo,
+  cleanup,
+  danglingRefs,
+} from './structure.ts';
 import { liftRigid, rasterAll } from './raster.ts';
 import { fixRefs } from './paint.ts';
 import { msg } from '../types.ts';
 import type { FindingLevel, FindingPart, Msg, Param } from '../types.ts';
 
 /** SVG 转换的检查结果：文案 finding.svg.<code>，els 是要标出的最外层 svg */
-export interface SvgFinding { level: FindingLevel; code: string; params: Record<string, Param>; parts: FindingPart[]; els: Element[] }
+export interface SvgFinding {
+  level: FindingLevel;
+  code: string;
+  params: Record<string, Param>;
+  parts: FindingPart[];
+  els: Element[];
+}
 
 /** 样式表删掉之前调用：建 id 表，读下 SVG 上的 CSS 动画 */
 export function prepareSvgs(doc) {
@@ -22,8 +37,26 @@ export function prepareSvgs(doc) {
 }
 
 /** 各类改写的处数 */
-interface SvgStat { retarget?: number; use?: number; mpath?: number; links?: number; timing?: number; css?: number; whitelist?: number; touch?: number; raster?: number; clip?: number; filter?: number; images?: number }
-const freeze = doc => { for (const s of doc.getElementsByTagNameNS(SVG_NS, 'svg')) { s.pauseAnimations(); s.setCurrentTime(0); } };
+interface SvgStat {
+  retarget?: number;
+  use?: number;
+  mpath?: number;
+  links?: number;
+  timing?: number;
+  css?: number;
+  whitelist?: number;
+  touch?: number;
+  raster?: number;
+  clip?: number;
+  filter?: number;
+  images?: number;
+}
+const freeze = doc => {
+  for (const s of doc.getElementsByTagNameNS(SVG_NS, 'svg')) {
+    s.pauseAnimations();
+    s.setCurrentTime(0);
+  }
+};
 
 /**
  * 层叠已内联、样式表已删掉之后调用。ctx: { raster(dataUri) → 地址, rasterCache: Map, spline }。
@@ -31,13 +64,16 @@ const freeze = doc => { for (const s of doc.getElementsByTagNameNS(SVG_NS, 'svg'
  */
 export async function convertSvgs(doc: Document, st, ctx): Promise<{ stat?: SvgStat; findings: SvgFinding[] }> {
   if (!st) return { findings: [] };
-  const win = doc.defaultView, t = tally(), rep = t.add;
+  const win = doc.defaultView,
+    t = tally(),
+    rep = t.add;
   const stat: SvgStat = {};
   freeze(doc);
   normalizeHref(doc);
   stat.retarget = retarget(doc, st.ids);
   const u = expandUse(doc, st.ids, st.anims);
-  stat.use = u.n; if (u.bad) rep('use:bad', null, u.bad);
+  stat.use = u.n;
+  if (u.bad) rep('use:bad', null, u.bad);
   stat.mpath = inlineMpath(doc, st.ids);
   stat.links = linksToG(doc);
   const tm = resolveTiming(doc, st.ids);
@@ -49,11 +85,12 @@ export async function convertSvgs(doc: Document, st, ctx): Promise<{ stat?: SvgS
   freeze(doc);
   for (const root of [...doc.getElementsByTagNameNS(SVG_NS, 'svg')].filter(s => !isSvg(s.parentElement))) {
     liftRigid(root, win, st.ids);
-    stat.raster = (stat.raster || 0) + await rasterAll(root, ctx, win, st.ids, rep);
+    stat.raster = (stat.raster || 0) + (await rasterAll(root, ctx, win, st.ids, rep));
   }
   freeze(doc);
   const fr = fixRefs(doc.documentElement, st.ids, win, rep);
-  stat.clip = fr.clip; stat.filter = fr.filter;
+  stat.clip = fr.clip;
+  stat.filter = fr.filter;
   stat.images = imagesToFo(doc, rep);
   danglingRefs(doc, rep);
   cleanup(doc);
@@ -61,17 +98,37 @@ export async function convertSvgs(doc: Document, st, ctx): Promise<{ stat?: SvgS
 }
 
 /** 对 SVG 做了的改写，按这个顺序列出；文案 finding.svg.done.<键> */
-const DONE: (keyof SvgStat)[] = ['use', 'css', 'whitelist', 'timing', 'touch', 'retarget', 'mpath', 'images', 'raster', 'clip', 'filter', 'links'];
+const DONE: (keyof SvgStat)[] = [
+  'use',
+  'css',
+  'whitelist',
+  'timing',
+  'touch',
+  'retarget',
+  'mpath',
+  'images',
+  'raster',
+  'clip',
+  'filter',
+  'links',
+];
 /** CSS 动画改写不了的原因（文案 svgWhy.<键>）；css:prop:<属性> 另说 */
 const CSS_WHY = new Set(['root', 'paused', 'composite', 'zero', 'easing', 'transform', 'mixed']);
 /** 有动画的图形上保留不了的效果（文案 svgRef.<键>） */
 const REF_WHAT = new Set(['clip', 'filter', 'mask', 'marker', 'textPath', 'other']);
 /** 汇总成检查结果 */
 function findings(s: SvgStat, t: ReturnType<typeof tally>): SvgFinding[] {
-  const out: SvgFinding[] = [], roots = (keys: string[]) => [...new Set(keys.flatMap(k => t.roots(k)))];
-  const keys = [...t.m.keys()], sum = (ks: string[]) => ks.reduce((n, k) => n + t.n(k), 0);
-  const add = (level: FindingLevel, code: string, params: Record<string, Param>, els: Element[] = [], parts: FindingPart[] = []) =>
-    out.push({ level, code: 'svg.' + code, params, parts, els });
+  const out: SvgFinding[] = [],
+    roots = (keys: string[]) => [...new Set(keys.flatMap(k => t.roots(k)))];
+  const keys = [...t.m.keys()],
+    sum = (ks: string[]) => ks.reduce((n, k) => n + t.n(k), 0);
+  const add = (
+    level: FindingLevel,
+    code: string,
+    params: Record<string, Param>,
+    els: Element[] = [],
+    parts: FindingPart[] = [],
+  ) => out.push({ level, code: 'svg.' + code, params, parts, els });
   const done = DONE.filter(k => s[k]).map(k => msg('finding.svg.done.' + k, { n: s[k] }));
   if (done.length) add('fixed', 'done', { n: done.length }, [], [{ items: done }]);
   const timing = keys.filter(k => k === 'timing');
@@ -93,7 +150,9 @@ function findings(s: SvgStat, t: ReturnType<typeof tally>): SvgFinding[] {
   if (paint.length) add('warn', 'paint', { n: sum(paint) }, roots(paint));
   const ref = keys.filter(k => k.startsWith('ref:'));
   if (ref.length) {
-    const what = [...new Set(ref)].map(k => REF_WHAT.has(k.slice(4)) ? msg('svgRef.' + k.slice(4)) : msg('common.raw', { msg: k }));
+    const what = [...new Set(ref)].map(k =>
+      REF_WHAT.has(k.slice(4)) ? msg('svgRef.' + k.slice(4)) : msg('common.raw', { msg: k }),
+    );
     add('warn', 'ref', { n: sum(ref), what }, roots(ref));
   }
   if (t.n('clip:approx')) add('info', 'clipApprox', { n: t.n('clip:approx') }, t.roots('clip:approx'));

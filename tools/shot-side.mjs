@@ -7,7 +7,8 @@ import { pickDefault } from '../test/ui.mjs';
 import { startServer } from '../test/serve.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const [ARTICLE, MODE = 'svg'] = process.argv.slice(2);
-const IMG = 48982, UI = 48983;
+const IMG = 48982,
+  UI = 48983;
 const srv = await startServer({ article: ARTICLE, img: IMG, ui: UI });
 const browser = await puppeteer.launch({ executablePath: findChrome(), headless: true });
 try {
@@ -19,8 +20,13 @@ try {
   // 侧栏可滚动：把它撑开到内容高度再截
   const h = await page.$eval('.side', e => e.scrollHeight);
   await page.setViewport({ width: 1400, height: h + 20 });
-  await page.$eval('.side', e => { e.style.height = 'auto'; });
+  await page.$eval('.side', e => {
+    e.style.height = 'auto';
+  });
   const card = await page.$('section[aria-labelledby="fontTitle"]');
   await card.screenshot({ path: path.join(HERE, '..', 'test', 'out', `side-fonts-${MODE}.png`) });
   console.log('saved', `test/out/side-fonts-${MODE}.png`);
-} finally { await browser.close(); srv.stop(); }
+} finally {
+  await browser.close();
+  srv.stop();
+}
