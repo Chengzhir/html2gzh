@@ -97,7 +97,8 @@ export async function convert(
     notes: { miss: new Map(), kinds: new Set(), server: null as Msg | null },
     // spline：白名单属性的 <animate> 带 calcMode="spline" 存得住（2026-10-21 实测），缓动直接写成 keySplines
     sizes: { A: null, B: null } as Sizes,
-    svg: { raster, rasterCache: new Map(), spline: true },
+    // copyText：画成位图的文字上方放透明文字，与转为路径的字共用一个选项
+    svg: { raster, rasterCache: new Map(), spline: true, copyText: o.svgCopy },
   };
   const wb = width < 400 ? width + 64 : width - 64;
   // 字体表的字号按 335px 正文宽折算：在两个转换宽度下量原稿字号，线性插值。主宽度就是 335 时不用量

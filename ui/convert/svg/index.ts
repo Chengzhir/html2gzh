@@ -160,5 +160,6 @@ function findings(s: SvgStat, t: ReturnType<typeof tally>): SvgFinding[] {
   const rf = keys.filter(k => k === 'raster:fail' || k === 'raster:image' || k === 'image:size' || k === 'use:bad');
   if (rf.length) add('warn', 'fail', { n: sum(rf) }, roots(rf));
   if (t.n('raster:text')) add('info', 'rasterText', { n: t.n('raster:text') }, t.roots('raster:text'));
+  if (t.n('raster:textCopy')) add('info', 'rasterTextCopy', { n: t.n('raster:textCopy') }, t.roots('raster:textCopy'));
   return out;
 }

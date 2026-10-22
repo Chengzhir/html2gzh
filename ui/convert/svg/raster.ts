@@ -14,7 +14,7 @@ import {
   hrefOf,
   refId,
 } from './dom.ts';
-import { inv, fromDom, mul, ID_M, matrixAttr } from './path.ts';
+import { inv, fromDom, mul, ID_M, isId, matrixAttr } from './path.ts';
 import { bakeStyleTransform } from './transform.ts';
 
 const DPR = 3,
@@ -465,9 +465,81 @@ async function rasterize(run, ctx, win, ids, rep) {
   sec.style.cssText = `width:100%;height:100%;margin:0;padding:0;background-image:url("${hit.src}");background-size:100% 100%;background-repeat:no-repeat`;
   fo.appendChild(sec);
   run[0].before(fo);
+  const copies = text && ctx.copyText ? textCopies(run, parent, win) : null;
+  if (copies) fo.after(...copies.nodes);
   for (const el of run) el.remove();
-  if (text) rep('raster:text', fo);
+  if (text) rep(copies && !copies.skipped ? 'raster:textCopy' : 'raster:text', fo);
   return true;
+}
+
+const TEXT_PROPS = [
+  'font-family',
+  'font-size',
+  'font-weight',
+  'font-style',
+  'font-stretch',
+  'font-variant',
+  'font-kerning',
+  'font-feature-settings',
+  'font-variation-settings',
+  'letter-spacing',
+  'word-spacing',
+  'text-anchor',
+  'dominant-baseline',
+  'baseline-shift',
+  'direction',
+  'writing-mode',
+];
+/**
+ * 画成位图的文字：每个 <text> 复制一份透明的放在位图上方，读者仍可选中、复制。
+ * 副本放在 parent 里，变换写成原文字到 parent 的相对矩阵；继承来的字体属性逐个写明，填充、描边与效果都去掉。
+ * 沿路径排列的文字（textPath）引用不到路径，跳过
+ */
+function textCopies(run: Element[], parent: Element, win: SvgWindow) {
+  const P = fromDom((parent as SVGGraphicsElement).getScreenCTM());
+  const nodes: Element[] = [];
+  let skipped = 0;
+  for (const text of run.flatMap(el => (el.localName === 'text' ? [el] : [...el.querySelectorAll('text')]))) {
+    const M = fromDom((text as SVGTextElement).getScreenCTM());
+    if (!P || !M || text.querySelector('textPath')) {
+      skipped++;
+      continue;
+    }
+    const copy = text.cloneNode(true) as SVGTextElement;
+    const from = [text, ...text.querySelectorAll('*')],
+      to = [copy, ...copy.querySelectorAll('*')];
+    from.forEach((el, i) => {
+      const c = to[i] as SVGElement;
+      if (isAnim(c)) {
+        c.remove();
+        return;
+      }
+      for (const a of ['id', 'class', 'style', 'fill', 'stroke', 'filter', 'mask', 'clip-path', 'data-wxc'])
+        c.removeAttribute(a);
+      // 只写与副本所在位置继承来的值不同的属性：副本的上一层是 parent，tspan 的上一层是副本里对应的元素
+      const cs = win.getComputedStyle(el),
+        up = win.getComputedStyle(i ? el.parentElement : parent);
+      for (const p of TEXT_PROPS) {
+        const v = cs.getPropertyValue(p);
+        // baseline-shift 不继承，与初始值比
+        if (v !== (p === 'baseline-shift' ? '0px' : up.getPropertyValue(p))) c.style.setProperty(p, v);
+      }
+      // 属性与 style 各写一份：路径上方的透明文字用的是 fill-opacity 属性（2026-10-20 实测存得住）
+      for (const [p, v] of [
+        ['fill', '#000'],
+        ['fill-opacity', '0'],
+        ['stroke', 'none'],
+      ]) {
+        c.setAttribute(p, v);
+        c.style.setProperty(p, v);
+      }
+    });
+    const rel = mul(inv(P), M);
+    if (isId(rel)) copy.removeAttribute('transform');
+    else copy.setAttribute('transform', matrixAttr(rel));
+    nodes.push(copy);
+  }
+  return { nodes, skipped };
 }
 
 /** 依赖 id 的静态部分逐组画成位图；ctx.raster 不可用时跳过（改由 paint 近似） */

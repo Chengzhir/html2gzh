@@ -275,6 +275,33 @@ try {
     svgLeft.slice(0, 4).join(' | '),
   );
   check(count(/href="#/g) === 0, '没有页内锚点');
+  if (r.findings.some(f => f.code === 'svg.rasterTextCopy')) {
+    // 位图上方的透明文字：放在位图（foreignObject）之后、落在位图的范围内
+    const pg = await browser.newPage();
+    await pg.setViewport({ width: 335, height: 800 });
+    await pg.setContent(previewDoc(r.preview), { waitUntil: 'networkidle0' });
+    const copies = await pg.evaluate(() =>
+      [...document.querySelectorAll('svg text')]
+        .filter(t => getComputedStyle(t).fillOpacity === '0')
+        .map(t => {
+          let fo = t.previousElementSibling;
+          while (fo && fo.localName !== 'foreignObject') fo = fo.previousElementSibling;
+          if (!fo) return null;
+          const a = t.getBoundingClientRect(),
+            b = fo.getBoundingClientRect();
+          const inside =
+            a.left >= b.left - 2 && a.right <= b.right + 2 && a.top >= b.top - 2 && a.bottom <= b.bottom + 2;
+          return { text: t.textContent, inside };
+        })
+        .filter(Boolean),
+    );
+    await pg.close();
+    check(
+      copies.length > 0 && copies.every(c => c.inside),
+      '画成位图的文字上方有透明文字，位置落在位图内',
+      copies.map(c => `${c.text}${c.inside ? '' : '（超出位图）'}`).join(' | ') || '没有找到',
+    );
+  }
   check(count(/data-wxc/g) === 0, '没有工具属性');
   check(!r.findings.some(f => f.code === 'htmlAnim') && !/extfake|extvar/.test(p), '忽略非文章样式表（扩展注入）');
   check(count(/>\s*\n\s*</g) === 0, '没有标签间换行');
