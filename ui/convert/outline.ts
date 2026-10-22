@@ -3,7 +3,8 @@ import { GLYPH_BATCH as BATCH } from './glyphlimits.ts';
 import { faceKey } from './fonts.ts';
 import { annotateContainerWidths } from './responsive.ts';
 import { resolveWebFonts, usesMissing } from './webfonts.ts';
-import type { FontPlanRow, GlyphFont, GlyphItem, GlyphRequest, GlyphResponse, GlyphShape, OutlineVerdict } from './types.ts';
+import { CodedError, msg } from './types.ts';
+import type { FontPlanRow, GlyphFont, GlyphItem, GlyphRequest, GlyphResponse, GlyphShape, Msg, OutlineVerdict } from './types.ts';
 
 // 字体表里勾选的字转为 SVG 路径：字形取自本机字体文件（服务端 /api/glyphs），摆在转换帧里实测的逐字位置上；同位叠一层透明 <text> 供选中复制。
 // 单元 = 一个块元素的全部内容，或块容器/弹性容器里的一段行内内容（包进一个块级 span 后整体替换）。
@@ -23,14 +24,17 @@ const glyphCache = new Map(), runCache = new Map();
 
 const isFloat = n => n.nodeType === 1 && n.hasAttribute('data-wxc-float');
 const f3 = n => String(Math.round(n * 1000) / 1000);
-const MISS = { nofont: '无法确定实际使用的字体', webfont: '网页字体的声明与字体文件不匹配', webfile: '无法获取网页字体的文件', notindexed: '这台电脑的字体目录中没有这个字体',
-  color: '是彩色字体', shape: '字形排版失败', notdef: '字体中没有这个字', long: '组合符号过多' };
-/** 拼成"字体名：原因"计数，同一原因在不同字体上分开记 */
-const noteMiss = (notes, kind, ps) => {
-  const k = ps ? `${ps}：${MISS[kind] || kind}` : MISS[kind] || kind;
+/** 缺字形的原因（文案 miss.<kind>）按"原因|字体名"计数，同一原因在不同字体上分开记 */
+const noteMiss = (notes, kind: string, ps?: string) => {
+  const k = `${kind}|${ps || ''}`;
   notes.miss.set(k, (notes.miss.get(k) || 0) + 1);
   notes.kinds.add(kind);
 };
+/** notes.miss → 每条"字体名：原因"的文案 */
+export const missMsgs = (miss: Map<string, number>): Msg[] => [...miss.keys()].map(k => {
+  const [kind, ps] = k.split('|');
+  return ps ? msg('miss.named', { name: ps, why: msg('miss.' + kind) }) : msg('miss.' + kind);
+});
 
 /**
  * 原稿真正用上的网页字体（@font-face）的字体名。用到它们的字转为路径时，字形取自文章引用的字体文件（见 webfonts.ts）。
@@ -119,24 +123,12 @@ function ineligible(win, box, nodes, root) {
   }
   return '';
 }
-/** 字没转为路径的原因：选单元时的原因代码，加上 outline/decide 的结论代码 */
-export const WHY_TEXT = {
-  vote: '所在段落中的大部分文字属于没有勾选的行（一个段落整体转换或整体不转换）',
-  inline: '所在段落中有带背景、边框或上下标的行内元素',
-  deco: '所在段落中有下划线、删除线等装饰线',
-  effect: '所在段落中有描边、阴影或背景裁切文字（background-clip: text）',
-  case: '所在段落中有大小写变换或小型大写字母（text-transform、font-variant）',
-  dir: '所在段落为竖排或从右到左排列',
-  clip: '所在的块用省略号截断文字（text-overflow、line-clamp）',
-  other: '不支持这种排版结构', empty: '不支持这种排版结构',
-  font: '无法获取原稿字体的字形', server: '获取字形失败',
-  layout: '转为路径后周围的元素会移位',
-  reflow: '换行位置或缩放方式随屏宽变化，路径无法随之调整',
-  shaping: '连字或随上下文变化的字形与浏览器的排版结果不一致',
-  baseline: '无法准确测量文字基线',
-  mismatch: '在其他屏宽下排版结构不同', missing: '在其他屏宽下排版结构不同',
-  ineligible: '在其他屏宽下不再符合转换条件',
-};
+/**
+ * 字没转为路径的原因：选单元时的原因代码，加上 outline/decide 的结论代码；说法见文案 why.<代码>。
+ * 说法相同的几种归成一种，计数时合在一起
+ */
+const WHY_SAME: Record<string, string> = { empty: 'other', missing: 'mismatch' };
+export const whyCode = (why: string) => WHY_SAME[why] || why;
 
 /**
  * 字体表与要转的单元。
@@ -248,8 +240,8 @@ export function planFonts(doc: Document, root: Element, { picked, web, sizeAt }:
     const s = status.get(t) || 'other';
     if (!isPicked(r) || typeof s !== 'string') continue;
     if (!skip.has(r.key)) skip.set(r.key, new Map());
-    const m = skip.get(r.key);
-    m.set(s, (m.get(s) || 0) + cnt.get(t));
+    const m = skip.get(r.key), w = whyCode(s);
+    m.set(w, (m.get(w) || 0) + cnt.get(t));
   }
   return { rows: list, units, skip };
 }
@@ -612,7 +604,10 @@ export async function outline(doc, root, descs, ctx, notes) {
   const fonts = { web: ctx.web || new Set(), sig: ctx.webSig || '' };
   for (const u of units) if (!u.fail) { u.html = originalHtml(u); u.orig = [...u.nodes]; wrapRun(doc, u); measureChars(doc, u, fonts); u.cw = nearestCw(win, u.box, root); }
   if (units.some(u => !u.fail)) {
-    try { await fetchGlyphs(units, ctx, notes); } catch (e) { notes.server = e.message; for (const u of units) if (!u.fail) u.fail = 'server'; }
+    try { await fetchGlyphs(units, ctx, notes); } catch (e) {
+      notes.server = e instanceof CodedError ? msg(e.key, e.params) : msg('common.raw', { msg: String(e && e.message || e) });
+      for (const u of units) if (!u.fail) u.fail = 'server';
+    }
   }
   const apply = u => {
     if (u.d.from != null && u.box === u.outer) wrapRun(doc, u);

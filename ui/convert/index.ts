@@ -4,13 +4,14 @@ import { convertPositions, correctOffsets, INHERITED } from './position.ts';
 import { cleanStructure, keepShapes, squashWhitespace, keepNoWrap, cleanAttributes } from './structure.ts';
 import { mergeWidths, annotateContainerWidths, stripTool, markIgnoreWidth } from './responsive.ts';
 import { DEFAULT_OPTS, REF_W, parseRules, phoneFonts } from './fonts.ts';
-import { planFonts, outline, decide, finalize, webFamilies, WHY_TEXT } from './outline.ts';
+import { planFonts, outline, decide, finalize, webFamilies, whyCode, missMsgs } from './outline.ts';
 import type { FontPlan } from './outline.ts';
 import { READER_CSS, NEUTRAL, previewDoc, readerImages, pinImages } from './reader.ts';
 import { prepareSvgs, convertSvgs } from './svg/index.ts';
 import { wechatClean, webkitFilter } from './wechat.ts';
 import { usedWebFonts, fontFaceCss, sigOf } from './webfonts.ts';
-import type { BoxRect, ConvertResult, Finding, FindingEls, FindingLevel, FindingSink, FontRow, GlyphRequest, GlyphResponse, OutlineVerdict } from './types.ts';
+import { msg } from './types.ts';
+import type { AddFinding, BoxRect, ConvertResult, Finding, FindingLevel, FindingSink, FontRow, GlyphRequest, GlyphResponse, Msg, OutlineVerdict } from './types.ts';
 
 /** 阅读页直接给这几个标签上色、不从父级继承（在线上文章正文里逐个标签实测得出）：转换时把继承到的颜色写到它们自己身上。
  *  blockquote 不在此列：预览/发表时它身上的 color 会被删，所以 structure.ts 直接把它改成 section */
@@ -20,13 +21,13 @@ interface Sizes { A: Map<string, number> | null; B: Map<string, number> | null; 
 
 function collector(): FindingSink {
   const list: Finding[] = [];
-  // 标题、一句结论、可选的详细说明（界面上点开才显示）、要在预览里标出的元素；没有说明时第三个参数直接给元素
-  const add = (level: FindingLevel) => (title: string, text: string, detail?: string | FindingEls, els?: FindingEls) => {
-    if (typeof detail !== 'string') { els = detail; detail = ''; }
-    list.push({ level, title, text, detail, ids: (els || []).map(e => typeof e === 'string' ? e : e.getAttribute && e.getAttribute(ID)).filter(Boolean) });
+  // 文案代码与参数；parts 是说明后面按情况追加的句子与列表（假值跳过），els 是要在预览里标出的元素
+  const add = (level: FindingLevel): AddFinding => (code, params = {}, { parts = [], els = [] } = {}) => {
+    list.push({ level, code, params, parts: parts.filter(Boolean) as Finding['parts'], ids: els.map(e => typeof e === 'string' ? e : e.getAttribute && e.getAttribute(ID)).filter(Boolean) });
   };
   return { list, fixed: add('fixed'), warn: add('warn'), info: add('info'), error: add('error') };
 }
+const sumOf = (m: Map<string, number>) => [...m.values()].reduce((a, b) => a + b, 0);
 const FORCED = ['max-width', 'min-height', 'clear', 'box-sizing', 'height'];
 // 微信正文样式里这几项带 !important，只有它们补回时也得带；其余内联声明本来就压得过（规范不建议用 !important）
 const READER_IMPORTANT = new Set(['max-width', 'box-sizing', 'height']);
@@ -55,7 +56,7 @@ export async function convert(html: string, { width, frame, verifyFrame, opts = 
   const o = { ...DEFAULT_OPTS, ...opts };
   const { rules: fontRules, bad: badRules } = parseRules(o.rules);
   // web：原稿用上的网页字体名；webUsed：它们的 @font-face 与文件地址；fontBytes(url) → 本机服务里的文件 id
-  const ctx = { o, fontRules, glyphs, fontBytes, plan: null, web: null, webUsed: null, webSig: '', webResolved: null, pins: new Map(), notes: { miss: new Map(), kinds: new Set(), server: '' },
+  const ctx = { o, fontRules, glyphs, fontBytes, plan: null, web: null, webUsed: null, webSig: '', webResolved: null, pins: new Map(), notes: { miss: new Map(), kinds: new Set(), server: null as Msg | null },
     // spline：白名单属性的 <animate> 带 calcMode="spline" 存得住（2026-10-21 实测），缓动直接写成 keySplines
     sizes: { A: null, B: null } as Sizes, svg: { raster, rasterCache: new Map(), spline: true } };
   const wb = width < 400 ? width + 64 : width - 64;
@@ -85,16 +86,15 @@ export async function convert(html: string, { width, frame, verifyFrame, opts = 
   const F = A.F;
   if (outlineStat) outlineFindings(F, outlineStat, ctx);
   // 用网页字体、又没转为路径的字：公众号正文加载不了网页字体，手机上换成别的字体
-  const webLeft = new Map();
+  const webLeft = new Map<string, number>();
   for (const r of fonts) if (r.web && r.chars > r.done) webLeft.set(r.web, (webLeft.get(r.web) || 0) + r.chars - r.done);
-  if (webLeft.size) F.warn('网页字体', `${[...webLeft.values()].reduce((a, b) => a + b, 0)} 个字使用网页字体，没有转为 SVG 路径`,
-    `字体：${[...webLeft.keys()].join('、')}。公众号正文无法加载网页字体，这些字在手机上显示为备用字体或手机的默认字体；字宽可能随之改变，换行位置也可能与原稿不同。如需保留原稿字形，请在“字体”卡片中勾选这些字体所在的行。`);
+  if (webLeft.size) F.warn('webfont', { n: sumOf(webLeft), fonts: [...webLeft.keys()] });
   // 内容结构检测就在 375/585/677 三个宽度下来量（见其 xr 数组），超出正文区的节点会被判"存在溢出问题"
   const overIds = new Set<string>();
   for (const w of CHECK_WIDTHS.filter(w => w > 460 || w === 375)) for (const id of overflowing(await loadFrame(verifyFrame, previewDoc(mergedRaw), w))) overIds.add(id);
   const { html: marked, n: ignored } = markIgnoreWidth(mergedRaw, [...overIds]);
   const merged = wechatClean(marked);
-  if (ignored) F.fixed('超出版面', `${overIds.size} 处有意超出版面的元素添加了 data-ignore-width`, '这些元素是原稿中被裁切的出血图、旋转色块等，以及它们的外层容器。不添加这一属性时，后台的“内容结构检测”会把它们判定为溢出。', [...overIds]);
+  if (ignored) F.fixed('overflow', { n: overIds.size }, { els: [...overIds] });
 
   // 主宽度排最后：循环结束时 verifyFrame 停在所选宽度上（复制时的纯文本取自它）
   const widths = [...new Set([...CHECK_WIDTHS.filter(w => w !== width), width])];
@@ -109,16 +109,19 @@ export async function convert(html: string, { width, frame, verifyFrame, opts = 
     if (w === width) { visualBad = bad; verified = V.size; } else if (bad.length) others.push([w, bad]);
   }
 
-  if (A.pageBg && A.pageBg !== 'rgb(255, 255, 255)') F.warn('页面底色', `原稿的页面底色（${A.pageBg}）粘贴后只铺满正文区`, '阅读页的正文区左右各留 20px 页边距。页边距显示阅读页自身的底色（浅色模式为白色，深色模式为 #191919），正文的样式无法改变它。效果见“公众号阅读页”预览。');
-  if (badRules.length) F.warn('备用字体规则', `第 ${badRules.join('、')} 行格式有误，已跳过`, '每行的格式应为“原稿字体, … => 备用字体, …”。');
-  if (stat.cq) F.fixed('等比缩放', `${stat.cq} 个尺寸改写为 cqw，随手机屏宽等比缩放`, '1cqw 等于外层查询容器宽度的 1%，最外层的查询容器即正文区。' + (stat.split ? `其中 ${stat.split} 处位移拆分为固定值与比例值两部分。` : ''));
+  if (A.pageBg && A.pageBg !== 'rgb(255, 255, 255)') F.warn('pageBg', { color: A.pageBg });
+  if (badRules.length) F.warn('badRules', { lines: badRules });
+  if (stat.cq) F.fixed('cq', { n: stat.cq }, { parts: [stat.split && msg('finding.cq.split', { n: stat.split })] });
   // 多宽度比对都过了就只是说明，不必处理
-  if (stat.approx) (others.length ? F.warn : F.info)('缩放近似', `${stat.approx} 个尺寸只在正文宽度为 ${width}px 时完全精确`, '这些尺寸由固定值与比例值合成（相当于 calc()）。公众号会删除 calc()，因此这些尺寸在其他屏宽下按比例近似。' + (others.length ? '' : '各比对宽度下的偏差均不超过 1.5px。'));
-  if (stat.diverged) F.warn('缩放近似', `${stat.diverged} 处排版结构随屏宽变化，以正文宽度为 ${width}px 时的排版为准等比缩放`, '例如不同屏宽下的换行位置不同。这种变化无法用等比缩放表示，因此其他屏宽下这几处可能与原稿不同。');
+  if (stat.approx) (others.length ? F.warn : F.info)('approx', { n: stat.approx, width }, { parts: [!others.length && msg('finding.approx.allWithin')] });
+  if (stat.diverged) F.warn('diverged', { n: stat.diverged, width });
   // 375/585/677 是内容结构检测直接用的正文宽，460 补在手机与电脑之间
   const phones = widths.filter(w => w !== width && w < 375), rest = widths.filter(w => w !== width && w >= 375);
-  if (others.length) F.warn('其他屏宽', `在 ${others.length} 种正文宽度下，有元素与原稿相差超过 1.5px`, others.map(([w, b]) => `· 正文宽度 ${w}px：${b.length} 个元素`).join('\n') + `\n成品在各屏宽下都由正文宽度为 ${width}px 时的排版等比缩放而来。原稿在这些宽度下换行位置不同，或用 @media 规则切换了样式时，成品会与原稿不同。`, [...new Set(others.flatMap(([, b]) => b))]);
-  else F.info('其他屏宽', `正文宽度为 ${phones.join('、')}px 与 ${rest.join('、')}px 时，各元素的位置、尺寸也与原稿一致`, '前一组是常见手机的正文宽度，后一组包括公众号“内容结构检测”使用的宽度。');
+  if (others.length) F.warn('otherWidths', { n: others.length }, {
+    parts: [{ items: others.map(([w, b]) => msg('finding.otherWidths.item', { w, n: b.length })) }, msg('finding.otherWidths.tail', { width })],
+    els: [...new Set(others.flatMap(([, b]) => b))],
+  });
+  else F.info('otherWidthsOk', { phones, rest });
 
   const payload = webkitFilter(stripTool(merged));
   return {
@@ -138,7 +141,7 @@ function fontRows(ctx: { plan: FontPlan; fontRules; o: typeof DEFAULT_OPTS }, ve
     for (const [k, n] of Object.entries(units[i].rows)) {
       const r = out.get(k);
       if (v.keep) r.done += n;
-      else if (ctx.o.paths.includes(k)) r.why[v.why] = (r.why[v.why] || 0) + n;
+      else if (ctx.o.paths.includes(k)) { const w = whyCode(v.why); r.why[w] = (r.why[w] || 0) + n; }
     }
   });
   return [...out.values()];
@@ -174,21 +177,25 @@ function sizeAtRef(sizes, pseudoSrc) {
 }
 
 function outlineFindings(F: FindingSink, s, ctx) {
-  if (s.kept) F.fixed('SVG 路径', `${s.kept} 段（${s.chars} 字）已转为 SVG 路径`, `手机上的字形与原稿相同，代码增加约 ${Math.round(s.bytes / 1024)} KB。` + (ctx.o.svgCopy ? '路径上方放置了一层透明文字，读者可以选中、复制这些字。' : '路径上方没有放置透明文字，读者无法选中、复制这些字。'));
-  if (ctx.notes.server) return F.warn('SVG 路径', '获取字形失败，勾选的字仍保留为文字', `${ctx.notes.server}。手机上没有原稿字体时，这些字显示为备用字体。`);
-  // 按显示出来的原因合并计数（几种内部原因说法相同）；没有可见字的段不算问题
-  const why = new Map(), left = [];
+  if (s.kept) F.fixed('svgPath', { n: s.kept, chars: s.chars, kb: Math.round(s.bytes / 1024) }, { parts: [msg(ctx.o.svgCopy ? 'finding.svgPath.copy' : 'finding.svgPath.noCopy')] });
+  if (ctx.notes.server) return F.warn('svgPathServer', { reason: ctx.notes.server as Msg });
+  // 按原因合并计数（几种内部原因说法相同，whyCode 归成一种）；没有可见字的段不算问题
+  const why = new Map<string, number>(), left = [];
   s.verdicts.forEach((v, i) => {
     if (v.keep || v.why === 'empty') return;
-    const k = WHY_TEXT[v.why] || v.why;
+    const k = whyCode(v.why);
     why.set(k, (why.get(k) || 0) + 1); left.push(ctx.plan.units[i].id);
   });
   if (!why.size) return;
-  const miss = [...ctx.notes.miss.keys()];
-  const fonts = miss.length ? `（${miss.slice(0, 3).join('；')}）` : '';
-  // 字由、Adobe Fonts 一类工具激活的字体不装进系统字体目录，浏览器能用，字形接口找不到文件
-  const hint = ctx.notes.kinds.has('notindexed') ? '\n通过 Adobe Fonts 等工具临时激活的字体，需要正式安装后才能转为 SVG 路径。' : '';
-  F.warn('SVG 路径', `${left.length} 段勾选的字未能转为 SVG 路径`, '这些字保留为文字，手机上没有原稿字体时显示为备用字体。原因：\n' + [...why].map(([k, n]) => `· ${n} 段：${k}${k === WHY_TEXT.font ? fonts : ''}`).join('\n') + hint, left);
+  const miss = missMsgs(ctx.notes.miss).slice(0, 3);
+  const item = (k: string, n: number) => k === 'font' && miss.length
+    ? msg('finding.svgPathLeft.itemFonts', { n, why: msg('why.' + k), fonts: { list: miss, sep: 'common.semi' } })
+    : msg('finding.svgPathLeft.item', { n, why: msg('why.' + k) });
+  F.warn('svgPathLeft', { n: left.length }, {
+    // 字由、Adobe Fonts 一类工具激活的字体不装进系统字体目录，浏览器能用，字形接口找不到文件
+    parts: [{ items: [...why].map(([k, n]) => item(k, n)) }, ctx.notes.kinds.has('notindexed') && msg('finding.svgPathLeft.notIndexed')],
+    els: left,
+  });
 }
 
 /** 与内容结构检测同一判据：盒子左右任一侧超出正文区 1px 以上、且不是左右对称居中 */
@@ -216,7 +223,7 @@ function dropVisuallyHidden(doc: Document, F: FindingSink) {
     if (c.overflow === 'visible' && c.clipPath === 'none' && c.clip === 'auto') continue;
     el.remove(); n++;
   }
-  if (n) F.fixed('隐藏文字', `删除了 ${n} 处仅供读屏软件读取的隐藏文字`, '这些文字多为供读屏软件读取的页面标题，通过裁切为 1px 的方式隐藏。公众号文章已有标题，正文中无需重复；而且这种写法会被后台的“内容结构检测”判定为溢出，因此删除。');
+  if (n) F.fixed('hiddenText', { n });
 }
 
 /** 微信给所有元素加 max-width:100%!important，作者的 max-width 会失效；块级自动宽度的元素改写成 width，效果等同 min(原上限, 100%) */
@@ -374,7 +381,7 @@ async function convertAt(html, width, frame, ctx) {
   }
   dropVisuallyHidden(doc, F);
   const svg = await convertSvgs(doc, svgState, ctx.svg);
-  for (const [level, title, text, detail, els] of svg.findings) F[level](title, text, detail, els);
+  for (const { level, code, params, parts, els } of svg.findings) F[level](code, params, { parts, els });
   // 根容器自身是查询容器：原稿里没有容器祖先的 cqw 相对视口，成品里相对正文宽度，两者一致
   const root = doc.createElement('section');
   root.setAttribute(ID, 'root');
@@ -444,23 +451,23 @@ async function convertAt(html, width, frame, ctx) {
   root.querySelectorAll('[data-wxc-float],[data-wxc-pseudo]').forEach(e => { e.removeAttribute('data-wxc-float'); e.removeAttribute('data-wxc-pseudo'); });
   const preview = root.outerHTML;
 
-  if (pn) F.fixed('伪元素', `${pn} 个 ::before/::after 改写为真实元素`);
-  if (capped) F.fixed('最大宽度', `${capped} 处 max-width 改写为 width`, '阅读页把所有元素的 max-width 强制设为 100%，原稿中的 max-width 因此失效。这些是自动宽度的块级元素，改写为 width 后效果与原来相同，也不需要用 !important 覆盖阅读页的样式。');
-  if (colorFixed) F.fixed('文字颜色', `为 ${colorFixed} 个链接与 mark 元素指定了文字颜色`, '阅读页的样式表为链接与 mark 元素单独设定了颜色，它们不继承外层元素的文字颜色。原稿没有为它们指定颜色时，它们在阅读页上显示为阅读页设定的颜色，在深色底、浅色字的区域中会与周围的文字不一致。');
-  if (pinned) F.fixed('图片尺寸', `为 ${pinned} 张图片写明了原稿中的显示尺寸`, '阅读页按原图的宽高比重新计算图片高度，带边框或内边距、被拉伸或裁切的图片会因此变形。图片高度改用相等的 min-height 与 max-height 指定；原稿中没有写明宽度的图片，宽度也改为具体数值。这些尺寸同样随屏宽等比缩放。', [...root.querySelectorAll('img')].filter(i => { const p = ctx.pins.get(i.getAttribute(ID)); return p && (p.w || p.h); }));
-  if (forcedN) F.fixed('阅读页默认样式', `${forcedN} 处会被阅读页默认样式覆盖的属性写入了元素的 style 属性`, '阅读页的正文区有 max-width、段落最小高度等默认样式，会覆盖原稿中的同名属性。写入 style 属性后，这些属性以原稿为准。其中 max-width、box-sizing 与图片高度在阅读页的样式中带有 !important，写入时也同样加上 !important。');
-  if (nw) F.fixed('不换行', `${nw} 处原本不换行的文字改用不换行空格与 U+2060，防止自动换行`, '公众号会删除 white-space: nowrap。这些文字中的空格改为不换行空格，字与字之间插入 U+2060（单词连接符）。后台统计的正文字数会把 U+2060 也计算在内。');
-  if (hit.font) F.fixed('备用字体', `为 ${hit.font} 处字体栈添加了 iOS 与安卓自带的相近字体`, '电脑与手机自带的字体不同。手机上没有原稿指定的字体时，会依次尝试字体栈中的其他字体；添加相近的备用字体，可以让此时的显示效果尽量接近原稿。网页字体（@font-face）在公众号正文中无法加载，同样会改用备用字体。规则见“字体”卡片中的“备用字体规则”。');
-  if (ws > 200) F.fixed('空白', `删除了 ${ws} 个标签之间的空白字符`, '这些空白在手机上会显示为多余的空行。');
-  if (htmlAnims) F.warn('动画', `${htmlAnims} 个 HTML 元素的 CSS 动画在公众号文章中不会播放`, '这些元素停留在没有动画时的状态；原稿中依靠动画淡入的元素，粘贴后可能始终不可见，请在“公众号阅读页”预览中核对。SVG 中的动画不在此列，见“SVG 动画”。');
-  if (notes.dynamic) F.warn('交互样式', `${notes.dynamic} 条 :hover、:focus 等交互样式已忽略`, '这类样式只能写在样式表中，而公众号会删除样式表，相关元素始终显示为默认状态。');
-  if (notes.otherPseudo) F.warn('伪元素', `${notes.otherPseudo} 条伪元素规则无法改写，已忽略`, '::before 与 ::after 可以改写为真实元素；::marker、::first-line 等其他伪元素，以及用 counter() 等函数生成的内容无法改写，相应的样式不会生效。请在“公众号阅读页”预览中核对。');
-  if (notes.unreadable || notes.imports) F.warn('样式表', `${notes.unreadable + notes.imports} 个样式表或 @import 无法读取，相应的样式缺失`, '多为嵌套超过四层的 @import。两侧预览中都没有这些样式的效果。');
-  if (notes.container) F.warn('容器查询', `${notes.container} 条 @container 规则已忽略，相应的样式缺失`, '转换时不处理 @container 规则，成品中的相关元素按没有这些规则时的样式显示。“原稿”预览中这些规则照常生效，可以对照两侧预览核对差异。');
-  if (hit.badVar) F.warn('CSS 变量', `${hit.badVar} 处 var() 引用的变量未定义或为空，这几条样式已忽略`, '请在原稿中定义这些变量，或者为 var() 指定默认值。');
-  if (cascadeBad.length) F.warn('样式内联', `${cascadeBad.length} 个元素的样式写入 style 属性后，位置或尺寸与原稿不同`, '请在“公众号阅读页”预览中核对这些元素。', cascadeBad.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean));
-  if (stuck.length) F.warn('位置偏差', `${stuck.length} 个行内元素无法用位移校正`, '这些元素多为文字片段，位置可能与原稿略有偏差。', stuck.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean));
-  if (notes.media) F.info('屏宽适配', `${notes.media} 条 @media 规则按正文宽度 ${width}px 判断是否生效`, '成品依靠等比缩放适配其他屏宽，不再随断点切换样式。');
+  if (pn) F.fixed('pseudo', { n: pn });
+  if (capped) F.fixed('maxWidth', { n: capped });
+  if (colorFixed) F.fixed('linkColor', { n: colorFixed });
+  if (pinned) F.fixed('imgSize', { n: pinned }, { els: [...root.querySelectorAll('img')].filter(i => { const p = ctx.pins.get(i.getAttribute(ID)); return p && (p.w || p.h); }) });
+  if (forcedN) F.fixed('forced', { n: forcedN });
+  if (nw) F.fixed('noWrap', { n: nw });
+  if (hit.font) F.fixed('fallback', { n: hit.font });
+  if (ws > 200) F.fixed('whitespace', { n: ws });
+  if (htmlAnims) F.warn('htmlAnim', { n: htmlAnims });
+  if (notes.dynamic) F.warn('dynamic', { n: notes.dynamic });
+  if (notes.otherPseudo) F.warn('otherPseudo', { n: notes.otherPseudo });
+  if (notes.unreadable || notes.imports) F.warn('sheetsBad', { n: notes.unreadable + notes.imports });
+  if (notes.container) F.warn('container', { n: notes.container });
+  if (hit.badVar) F.warn('badVar', { n: hit.badVar });
+  if (cascadeBad.length) F.warn('cascade', { n: cascadeBad.length }, { els: cascadeBad.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean) });
+  if (stuck.length) F.warn('stuck', { n: stuck.length }, { els: stuck.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean) });
+  if (notes.media) F.info('media', { n: notes.media, width });
 
   return { F, preview, original, targetV, n, moved, outlined, pageBg };
 }

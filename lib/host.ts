@@ -2,6 +2,7 @@
 // 公网端口为 0 时：http 与本机端口相同（路由器端口转发通常两边一致），https 用 443（只有内网穿透、反向代理才给得出 https）
 import http from 'node:http';
 import https from 'node:https';
+import { CodedError } from '../ui/convert/types.ts';
 import type { HostConfig, HostExit, HostState } from '../ui/convert/types.ts';
 import { settings, saveSettings, stamp, validPort, UI_PORT, IMG_PORT, TOKEN } from './config.ts';
 
@@ -108,20 +109,20 @@ function cleanHost(v: unknown) {
   if (!s) return '';
   let u = null;
   try { u = new URL(`http://${s.includes(':') && !s.startsWith('[') ? `[${s}]` : s}/`); } catch { /* 下面报错 */ }
-  if (!u || u.username || u.password || u.port || u.pathname !== '/' || u.search || u.hash) throw new Error('公网地址应为域名或 IP，不含协议、端口与路径。以 http:// 或 https:// 开头的完整地址可以整体粘贴，将自动拆分');
+  if (!u || u.username || u.password || u.port || u.pathname !== '/' || u.search || u.hash) throw new CodedError('api.badHost');
   const h = u.hostname.replace(/^\[|\]$/g, '');
   const inner = /^localhost$/i.test(h) || /^\d+\.\d+\.\d+\.\d+$/.test(h) && !isPublicIPv4(h) || h.includes(':') && /^(::1?$|::ffff:|f[cd]|fe[89ab])/i.test(h);
-  if (inner) throw new Error(`${h} 是内网地址，微信服务器无法访问`);
+  if (inner) throw new CodedError('api.innerHost', { host: h });
   return h;
 }
-/** 页面上“取图地址”表单 { imgPort, host, port, proto } → 校验过的设置；不合格时抛出给用户看的说明 */
+/** 页面上“取图地址”表单 { imgPort, host, port, proto } → 校验过的设置；不合格时抛出 CodedError（文案 api.*） */
 export function parseHostForm(b: Record<string, unknown>): HostConfig {
   // 空串表示留空；其余按数字解析，解析不出是 NaN，下面的校验会拒绝
   const num = (v: unknown) => v == null || String(v).trim() === '' ? 0 : Number(v);
   const imgPort = num(b.imgPort), port = num(b.port);
-  if (!validPort(imgPort)) throw new Error('本机端口应为 1024–65535 之间的整数');
-  if (imgPort === UI_PORT) throw new Error(`${imgPort} 是本页面使用的端口，请改用其他端口`);
-  if (port !== 0 && !validPub(port)) throw new Error('公网端口应为 1–65535 之间的整数，或者留空');
+  if (!validPort(imgPort)) throw new CodedError('api.badImgPort');
+  if (imgPort === UI_PORT) throw new CodedError('api.uiPort', { port: imgPort });
+  if (port !== 0 && !validPub(port)) throw new CodedError('api.badPubPort');
   const h = cleanHost(b.host);
   return { imgPort, host: h, port, proto: h && b.proto === 'https' ? 'https' : 'http' };
 }

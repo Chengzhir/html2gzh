@@ -3,7 +3,7 @@
 // 微信给的 1080 版比 Lanczos 缩小 + JPEG 质量 92 的 PSNR 低 6.3–6.8 dB；1080 宽的图微信只重新压缩、不缩小，PSNR 41.6 dB）。
 // 所以比 1080 宽的图先自己缩到 1080 宽，画质从高往低试；不到 1080 宽、但超过体积上限的，在原尺寸下降画质
 import sharp from 'sharp';
-import type { ShrinkResult, ShrinkOutput } from '../ui/convert/types.ts';
+import type { ShrinkHow, ShrinkResult, ShrinkOutput } from '../ui/convert/types.ts';
 
 const LIMIT_PIXELS = 2e8;
 const SERVED_W = 1080;
@@ -20,7 +20,7 @@ const LOSSLESS_RATIO = 1.5, PALETTE_RATIO = 1.2;
 
 interface Step { jpeg?: number; cs?: string; png?: number | 'lossless'; flatten?: boolean }
 interface Source { buf: Buffer; W: number; H: number; opaque: boolean }
-interface Encoded { buf: Buffer; ext: string; how: string; width: number; height: number; f: number }
+interface Encoded { buf: Buffer; ext: string; how: ShrinkHow; width: number; height: number; f: number }
 const JPEG = (q: number, cs = '4:2:0'): Step => ({ jpeg: q, cs });
 const PNG = (q: number | 'lossless'): Step => ({ png: q });
 // full：目标尺寸下依次尝试的画质，最后一档仍放不下时用它缩小尺寸；better：full 第一档放得下时再试的更好的编码；
@@ -143,9 +143,9 @@ async function encode(src: Source, f: number, step: Step): Promise<Encoded> {
   if (w !== src.W || h !== src.H) p = p.resize(w, h, { fit: 'fill', kernel: 'lanczos3', fastShrinkOnLoad: false });
   if (src.opaque) p = p.removeAlpha();
   else if (step.flatten) p = p.flatten({ background: '#808080' });
-  let b, ext, how;
-  if (step.jpeg) { b = await p.jpeg({ quality: step.jpeg, mozjpeg: true, chromaSubsampling: step.cs }).toBuffer(); ext = '.jpg'; how = `JPEG（质量 ${step.jpeg}）`; }
-  else if (step.png === 'lossless') { b = await p.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer(); ext = '.png'; how = 'PNG'; }
-  else { b = await p.png({ palette: true, quality: step.png, effort: 10, dither: 1, compressionLevel: 9 }).toBuffer(); ext = '.png'; how = 'PNG（256 色）'; }
+  let b: Buffer, ext: string, how: ShrinkHow;
+  if (step.jpeg) { b = await p.jpeg({ quality: step.jpeg, mozjpeg: true, chromaSubsampling: step.cs }).toBuffer(); ext = '.jpg'; how = { fmt: 'jpeg', q: step.jpeg }; }
+  else if (step.png === 'lossless') { b = await p.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer(); ext = '.png'; how = { fmt: 'png' }; }
+  else { b = await p.png({ palette: true, quality: step.png, effort: 10, dither: 1, compressionLevel: 9 }).toBuffer(); ext = '.png'; how = { fmt: 'palette' }; }
   return { buf: b, ext, how, width: w, height: h, f };
 }

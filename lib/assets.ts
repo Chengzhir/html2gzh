@@ -6,12 +6,13 @@ import { stamp } from './config.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { send } from './http.ts';
 
-export const ASSET_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.avif', '.woff', '.woff2', '.ttf', '.otf', '.ttc', '.otc', '.css']);
+// .ico 只用作阅读页模拟里的公众号头像，不在正文里，不对外提供
+export const ASSET_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.avif', '.ico', '.woff', '.woff2', '.ttf', '.otf', '.ttc', '.otc', '.css']);
 /** 取图口只对外提供图片 */
 export const PUBLIC_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.avif']);
 export const MIME: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
-  '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.avif': 'image/avif', '.woff': 'font/woff', '.woff2': 'font/woff2',
+  '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.avif': 'image/avif', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2',
   '.ttf': 'font/ttf', '.otf': 'font/otf', '.ttc': 'font/collection', '.otc': 'font/collection', '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json',
 };

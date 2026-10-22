@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stamp } from './config.ts';
+import { CodedError } from '../ui/convert/types.ts';
 
 export const article = { file: '', rev: 0 };
 function findHtml(p) {
@@ -17,15 +18,13 @@ function cleanPath(s) {
   if (/^file:\/\//i.test(s)) s = fileURLToPath(s);
   return s;
 }
-/** 打开文件或文件夹（文件夹里取 index.html，或唯一的 HTML 文件）；打不开时抛出给用户看的说明 */
+/** 打开文件或文件夹（文件夹里取 index.html，或唯一的 HTML 文件）；打不开时抛出 CodedError（文案 api.*） */
 export function openArticle(input) {
   const p = path.resolve(cleanPath(input));
-  if (!fs.existsSync(p)) throw new Error('路径不存在：' + p);
+  if (!fs.existsSync(p)) throw new CodedError('api.notFound', { path: p });
   const f = findHtml(p);
-  if (!f && !fs.statSync(p).isDirectory()) throw new Error('不是 HTML 文件：' + p);
-  if (!f) throw new Error(fs.readdirSync(p).some(n => /\.html?$/i.test(n))
-    ? '文件夹中有多个 HTML 文件，无法确定要打开哪一个：请把要使用的文件改名为 index.html，或直接粘贴它的完整路径'
-    : '这个文件夹中没有 HTML 文件：' + p);
+  if (!f && !fs.statSync(p).isDirectory()) throw new CodedError('api.notHtml', { path: p });
+  if (!f) throw fs.readdirSync(p).some(n => /\.html?$/i.test(n)) ? new CodedError('api.manyHtml') : new CodedError('api.noHtml', { path: p });
   article.file = f; article.rev++;
   console.log(`${stamp()}  打开  ${f}`);
 }

@@ -6,6 +6,7 @@ import { convert as convertFont } from 'fontverter';
 import { ASSET_ID } from '../ui/convert/assetid.ts';
 import { GLYPH_LIMITS as LIMITS } from '../ui/convert/glyphlimits.ts';
 import { splitTop, unq, unicodeRanges } from '../ui/convert/util.ts';
+import { CodedError } from '../ui/convert/types.ts';
 import type { GlyphChar, GlyphFace, GlyphFont, GlyphFontSrc, GlyphItem, GlyphMiss, GlyphMissKind, GlyphOutline, GlyphPath, GlyphRef, GlyphResponse, GlyphRun, GlyphShape } from '../ui/convert/types.ts';
 
 const IDLE_MS = 5 * 60000;
@@ -30,7 +31,7 @@ async function session() {
   if (!browserP) {
     const p = browserP = (async () => {
       const exe = findChrome();
-      if (!exe) throw new Error('未找到 Chrome 或 Edge：转为 SVG 路径时，需要通过它确定每个字实际使用的字体（浏览器安装在其他位置时，请设置环境变量 CHROME_PATH）');
+      if (!exe) throw new CodedError('api.noChrome');
       const { default: puppeteer } = await import('puppeteer-core');
       const browser = await puppeteer.launch({ executablePath: exe, headless: true, args: ['--no-first-run', '--disable-extensions'] });
       // 浏览器崩了或被关掉时丢掉缓存，下次请求重新启动

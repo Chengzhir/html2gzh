@@ -6,11 +6,11 @@ import { assets, ASSET_EXT, PUBLIC_EXT, MIME, register, registerFile, serveAsset
 import { article, openArticle } from './article.ts';
 import { checkHosts, checkIfStale, hostState, parseHostForm, applyHost } from './host.ts';
 import { changeImgPort } from './imgserver.ts';
-import { send, json, readBody } from './http.ts';
+import { send, json, readBody, fail, failWith } from './http.ts';
 import { handleGlyphs } from './glyphs.ts';
 import { shrink } from './shrink.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { ApiState, ShrinkOutput, ShrinkResponse, ShrinkSkip } from '../ui/convert/types.ts';
+import type { ApiState, ArticleResponse, ShrinkOutput, ShrinkResponse, ShrinkSkip } from '../ui/convert/types.ts';
 
 const LOCAL_HOSTS = new Set([`127.0.0.1:${UI_PORT}`, `localhost:${UI_PORT}`]);
 
@@ -23,9 +23,12 @@ function apiState(req: IncomingMessage, res: ServerResponse) {
   return json(res, 200, { app: 'html2gzh', article: { ...article, mtime }, host: hostState(), fetches, imgPort: IMG_PORT } satisfies ApiState);
 }
 function apiArticle(req: IncomingMessage, res: ServerResponse) {
-  if (!article.file) return json(res, 404, { error: '尚未载入文章' });
-  try { return json(res, 200, { file: article.file, rev: article.rev, html: fs.readFileSync(article.file, 'utf8') }); }
-  catch (e) { return json(res, 500, { error: '无法读取文件：' + e.message }); }
+  if (!article.file) return failWith(res, 404, 'noArticle');
+  try {
+    const html = fs.readFileSync(article.file, 'utf8');
+    return json(res, 200, { file: article.file, rev: article.rev, mtime: fs.statSync(article.file).mtimeMs, html } satisfies ArticleResponse);
+  }
+  catch (e) { return failWith(res, 500, 'readFailed', { msg: e.message }); }
 }
 function serveUi(res: ServerResponse, p: string) {
   if (!fs.existsSync(path.join(UI_DIR, 'index.html'))) return send(res, 503, '页面还没有构建：请在本工具的目录中运行 npm run build，然后刷新本页。');
@@ -36,7 +39,7 @@ function serveUi(res: ServerResponse, p: string) {
 /** 页面生成的位图、内嵌图片：原样登记 */
 function apiBlob(res: ServerResponse, url: URL, body: Buffer) {
   const ext = '.' + String(url.searchParams.get('ext') || '').toLowerCase().replace(/^\./, '');
-  if (!ASSET_EXT.has(ext)) return json(res, 400, { error: '不支持的文件类型 ' + ext });
+  if (!ASSET_EXT.has(ext)) return failWith(res, 400, 'badExt', { ext });
   return json(res, 200, { id: register(body, ext, url.searchParams.get('name') || 'blob' + ext) });
 }
 
@@ -46,11 +49,11 @@ const shrunk = new Map<string, ShrinkResponse>();
 const POST: Record<string, (res: ServerResponse, b: any) => unknown> = {
   '/api/open': (res, b) => {
     try { openArticle(b.path); return json(res, 200, { file: article.file, rev: article.rev }); }
-    catch (e) { return json(res, 400, { error: e.message }); }
+    catch (e) { return fail(res, 400, e); }
   },
   // refs 是相对文章所在目录的路径；只认白名单扩展名
   '/api/assets': (res, b) => {
-    if (!article.file) return json(res, 400, { error: '尚未载入文章' });
+    if (!article.file) return failWith(res, 400, 'noArticle');
     const dir = path.dirname(article.file);
     const out: Record<string, string | null> = {};
     for (const ref of b.refs || []) {
@@ -71,12 +74,12 @@ const POST: Record<string, (res: ServerResponse, b: any) => unknown> = {
     const a = assets.get(String(b.id || ''));
     const max = Math.floor(Number(b.max));
     const scale = b.scale == null ? null : Number(b.scale);
-    if (!a || !PUBLIC_EXT.has(a.ext)) return json(res, 404, { error: '图片不存在' } satisfies ShrinkResponse);
-    if (!(max >= 1024) || scale != null && !(scale > 0)) return json(res, 400, { error: '参数有误' } satisfies ShrinkResponse);
+    if (!a || !PUBLIC_EXT.has(a.ext)) return failWith(res, 404, 'noImage');
+    if (!(max >= 1024) || scale != null && !(scale > 0)) return failWith(res, 400, 'badParams');
     const key = `${b.id}|${scale}|${max}`;
     if (!shrunk.has(key)) {
       let r: Omit<Partial<ShrinkOutput>, 'skip'> & { skip?: ShrinkSkip };
-      try { r = await shrink(a.buf, { scale, max }); } catch (e) { return json(res, 500, { error: '压缩失败：' + e.message } satisfies ShrinkResponse); }
+      try { r = await shrink(a.buf, { scale, max }); } catch (e) { return failWith(res, 500, 'shrinkFailed', { msg: e.message }); }
       const base = a.name.replace(/\.[^.]+$/, '');
       shrunk.set(key, r.skip ? { skip: r.skip, size: a.buf.length } : {
         id: register(r.buf, r.ext, `${base}（压缩）${r.ext}`), size: r.buf.length, srcSize: a.buf.length, how: r.how,
@@ -88,16 +91,16 @@ const POST: Record<string, (res: ServerResponse, b: any) => unknown> = {
   },
   '/api/glyphs': async (res, b) => {
     try { return json(res, 200, await handleGlyphs(b, id => { const a = assets.get(id); return a ? a.buf : null; })); }
-    catch (e) { return json(res, 400, { error: e.message }); }
+    catch (e) { return fail(res, 400, e); }
   },
   '/api/recheck': async res => { await checkHosts(); return json(res, 200, { ok: true }); },
   // { imgPort, host, port, proto }：先全部校验，再换绑本机端口，最后存设置、重测
   '/api/host': async (res, b) => {
     let cfg;
-    try { cfg = parseHostForm(b); } catch (e) { return json(res, 400, { error: e.message }); }
+    try { cfg = parseHostForm(b); } catch (e) { return fail(res, 400, e); }
     if (cfg.imgPort !== IMG_PORT) {
       try { await changeImgPort(cfg.imgPort); }
-      catch (e) { return json(res, 409, { error: e.code === 'EADDRINUSE' ? `端口 ${cfg.imgPort} 已被其他程序占用，仍使用 ${IMG_PORT}` : `无法改用端口 ${cfg.imgPort}（${e.message}），仍使用 ${IMG_PORT}` }); }
+      catch (e) { return e.code === 'EADDRINUSE' ? failWith(res, 409, 'portBusy', { port: cfg.imgPort, old: IMG_PORT }) : failWith(res, 409, 'portFailed', { port: cfg.imgPort, msg: e.message, old: IMG_PORT }); }
     }
     applyHost(cfg);
     return json(res, 200, { host: hostState() });
@@ -115,11 +118,11 @@ export async function uiRoute(req: IncomingMessage, res: ServerResponse) {
   if (req.method !== 'POST') return p.startsWith('/a/') ? serveAsset(req, res, p.slice(3), false) : serveUi(res, p);
 
   let body: Buffer;
-  try { body = await readBody(req); } catch (e) { return json(res, 413, { error: e.message }); }
+  try { body = await readBody(req); } catch (e) { return fail(res, 413, e); }
   if (p === '/api/blob') return apiBlob(res, url, body);
   const handler = POST[p];
   if (!handler) return send(res, 404, 'not found');
   let b;
-  try { b = JSON.parse(body.toString('utf8') || '{}'); } catch { return json(res, 400, { error: '请求不是 JSON' }); }
+  try { b = JSON.parse(body.toString('utf8') || '{}'); } catch { return failWith(res, 400, 'notJson'); }
   return handler(res, b);
 }

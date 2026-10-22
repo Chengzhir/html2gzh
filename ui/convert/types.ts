@@ -1,21 +1,40 @@
-// 跨模块（转换器 ↔ 页面、页面 ↔ 本机服务）传递的数据形状
+// 跨模块（转换器 ↔ 页面、页面 ↔ 本机服务）传递的数据形状，以及带文案键的错误
+
+// ---------- 文案 ----------
+// 转换器与本机服务不写给用户看的句子，只给文案键（ui/src/locales 里的键）与参数，由页面排成句子
+export type Param = string | number | Msg | Param[] | { list: Param[]; sep: string };
+export interface Msg { key: string; params?: Record<string, Param> }
+export const msg = (key: string, params?: Record<string, Param>): Msg => ({ key, params });
+/** 带文案键的错误：页面按 key 显示；message 只给日志看 */
+export class CodedError extends Error {
+  key: string;
+  params: Record<string, Param>;
+  constructor(key: string, params: Record<string, Param> = {}) {
+    super(`${key} ${JSON.stringify(params)}`);
+    this.key = key;
+    this.params = params;
+  }
+}
 
 // ---------- 检查结果 ----------
 export type FindingLevel = 'error' | 'warn' | 'fixed' | 'info';
 /** 要在预览里标出的元素：元素本身或它的 data-wxc */
 export type FindingEls = (Element | string)[];
+/** 详细说明里接在 finding.<code>.detail 之后的部分：一句话，或者一个列表 */
+export type FindingPart = Msg | { items: Msg[] };
+/**
+ * 一条检查结果。标题、结论、详细说明分别是文案 finding.<code>.title / .text / .detail（说明可以没有），
+ * 都用 params 填空；parts 是说明后面按情况追加的句子与列表
+ */
 export interface Finding {
   level: FindingLevel;
-  title: string;
-  /** 一句结论 */
-  text: string;
-  /** 详细说明，界面上点开才显示；没有为空串 */
-  detail: string;
+  code: string;
+  params: Record<string, Param>;
+  parts: FindingPart[];
   /** 要在预览里标出的元素的 data-wxc */
   ids: string[];
 }
-/** 没有说明时第三个参数直接给元素 */
-export type AddFinding = (title: string, text: string, detail?: string | FindingEls, els?: FindingEls) => void;
+export type AddFinding = (code: string, params?: Record<string, Param>, more?: { parts?: (FindingPart | false | null | undefined)[]; els?: FindingEls }) => void;
 export interface FindingSink {
   list: Finding[];
   fixed: AddFinding;
@@ -23,8 +42,6 @@ export interface FindingSink {
   info: AddFinding;
   error: AddFinding;
 }
-/** SVG 转换的检查结果：[等级, 标题, 结论, 详细说明, 要标出的最外层 svg] */
-export type SvgFinding = [level: FindingLevel, title: string, text: string, detail: string, els: Element[]];
 
 // ---------- 字体表 ----------
 export interface FontPlanRow {
@@ -181,13 +198,17 @@ export interface ApiState {
   fetches: Record<string, number[]>;
   imgPort: number;
 }
+/** /api/article：当前文章的路径、HTML 与最后修改时间（毫秒） */
+export interface ArticleResponse { file: string; rev: number; mtime: number; html: string }
 
 // ---------- 大图处理 /api/shrink ----------
 export type ShrinkSkip = 'fits' | 'vector' | 'animated' | 'unreadable' | 'noGain';
+/** 存成什么格式：JPEG 带质量；PNG 为无损或 256 色 */
+export interface ShrinkHow { fmt: 'jpeg' | 'png' | 'palette'; q?: number }
 export interface ShrinkOutput {
   buf: Buffer;
   ext: string;
-  how: string;
+  how: ShrinkHow;
   width: number;
   height: number;
   srcWidth: number;
@@ -199,8 +220,9 @@ export interface ShrinkOutput {
 export type ShrinkResult = ShrinkOutput | { skip: ShrinkSkip };
 export type ShrinkResponse =
   | { skip: ShrinkSkip; size: number }
-  | { id: string; size: number; srcSize: number; how: string; width: number; height: number; srcWidth: number; srcHeight: number; over: boolean }
-  | { error: string };
+  | { id: string; size: number; srcSize: number; how: ShrinkHow; width: number; height: number; srcWidth: number; srcHeight: number; over: boolean };
+/** 接口出错时的响应：code 是 ui/src/locales 里 api.<code> 的文案；error 是给日志看的原文 */
+export interface ApiErrorBody { code: string; params?: Record<string, Param>; error: string }
 
 // ---------- convert() ----------
 export interface BoxRect { x: number; y: number; w: number; h: number }

@@ -10,7 +10,7 @@ import { findChrome } from '../lib/chrome.ts';
 import { alignUnits } from './align.mjs';
 import { previewDoc, readerImages } from '../ui/convert/reader.ts';
 import { WX_ANIM_OK } from '../ui/convert/svg/dom.ts';
-import { settled, pickDefault } from './ui.mjs';
+import { settled, pickDefault, openFontList, isChecked, setChecked, typeNumber } from './ui.mjs';
 import { buildWebfontFixture, serveRemote } from './webfonts.mjs';
 import { startServer } from './serve.mjs';
 import { pixelDiff as diffIn } from './pixeldiff.mjs';
@@ -63,6 +63,7 @@ try {
   });
   await page.goto(`http://127.0.0.1:${UI}/`);
   await page.waitForFunction(() => window.__wxc.result || window.__wxc.error, { timeout: 90000 });
+  const foldedAtStart = await page.evaluate(() => !document.getElementById('faceBox').open);
   // --svg：在字体表里勾选测试用的行，等重新转换完
   if (SVG_MODE && await page.evaluate(() => !!window.__wxc.result)) await pickDefault(page);
   const r = await page.evaluate(() => {
@@ -97,7 +98,8 @@ try {
     return out;
   });
   check(!toastMoves.length, '提示浮在预览上方，两栏位置不变', toastMoves.join(' | '));
-  for (const f of [...r.findings].sort((a, b) => a.level.localeCompare(b.level))) console.log(`    [${f.level}] ${f.title}：${f.text}`);
+  const shown = await page.evaluate(fs => fs.map(f => window.__wxcFinding(f)), [...r.findings].sort((a, b) => a.level.localeCompare(b.level)));
+  [...r.findings].sort((a, b) => a.level.localeCompare(b.level)).forEach((f, i) => console.log(`    [${f.level}] ${f.code} ${shown[i].title}：${shown[i].text}`));
   console.log(`    图片 本地 ${r.report.local} · 缺失 ${r.report.missing.length} · data: ${r.report.dataUri} · 外链 ${r.report.remote}`);
 
   const p = r.payload;
@@ -164,11 +166,11 @@ try {
   check(!svgLeft.length, 'SVG 不依赖公众号会删的东西（id/class/xlink、url(#)、白名单外的动画、本机 <image>）', svgLeft.slice(0, 4).join(' | '));
   check(count(/href="#/g) === 0, '没有页内锚点');
   check(count(/data-wxc/g) === 0, '没有工具属性');
-  check(!r.findings.some(f => f.title === '动画') && !/extfake|extvar/.test(p), '忽略非文章样式表（扩展注入）');
+  check(!r.findings.some(f => f.code === 'htmlAnim') && !/extfake|extvar/.test(p), '忽略非文章样式表（扩展注入）');
   check(count(/>\s*\n\s*</g) === 0, '没有标签间换行');
   check(r.stats.visualBad.length === 0, '成品与原稿逐元素一致', `${r.stats.verified} 个元素，偏差 ${r.stats.visualBad.length}：${r.stats.visualBad.slice(0, 8).join(',')}`);
   const otherIds = new Set(r.stats.others.flatMap(([, b]) => b));
-  const listed = new Set(r.findings.filter(f => f.title === '其他屏宽').flatMap(f => f.ids));
+  const listed = new Set(r.findings.filter(f => f.code === 'otherWidths' || f.code === 'otherWidthsOk').flatMap(f => f.ids));
   check([...otherIds].every(id => listed.has(id)), '其他宽度下逐元素一致，或偏差已列入检查结果', r.stats.others.map(([w, b]) => `${w}px:${b.length}(${b.slice(0, 5).join(',')})`).join(' ') || '无偏差');
   if (SVG_MODE) {
     const o = r.stats.outline;
@@ -294,10 +296,14 @@ try {
   console.log('\n字体表');
   {
     const fonts = await page.evaluate(() => window.__wxc.result.fonts);
-    const rows = await page.$$eval('#faceList tr[data-key]', trs => trs.map(t => t.dataset.key));
+    check(foldedAtStart, '字体列表默认折叠');
+    await openFontList(page);
+    const summary = await page.$eval('#faceBox > summary', e => e.textContent);
+    check(summary.includes(`共 ${fonts.length} 行`), '折叠的标题中写出行数与勾选的行数', summary);
+    const rows = await page.$$eval('#faceList [data-key]', els => els.map(t => t.dataset.key));
     check(rows.length === fonts.length && rows.length > 0 && fonts.every(f => rows.includes(f.key)), '每套字的每个字号列成一行',
       `${rows.length} 行：` + fonts.slice(0, 8).map(f => `${f.family} ${f.weight} ${f.size}px（${f.chars} 字${f.done ? `，已转 ${f.done}` : ''}）`).join('、') + (fonts.length > 8 ? ' …' : ''));
-    const keyed = sel => `#faceList tr[data-key="${sel.replace(/["\\]/g, '\\$&')}"] input`;
+    const keyed = sel => `#faceList [data-key="${sel.replace(/["\\]/g, '\\$&')}"] [role="checkbox"]`;
     if (SVG_MODE) {
       const t = fonts.find(f => f.done > 0);
       if (t) {
@@ -320,10 +326,10 @@ try {
       await settled(page);
     }
     if (ARTICLE === path.join(HERE, 'fixture')) {
-      const all = '#faceList input[data-scope="all"]';
+      const all = '#faceList [role="checkbox"][data-scope="all"]';
       await page.click(all);
       await settled(page);
-      if (!await page.$eval(all, c => c.checked)) { await page.click(all); await settled(page); }
+      if (!await isChecked(page, all)) { await page.click(all); await settled(page); }
       const on = await page.evaluate(() => { const s = window.__wxc.result; return { paths: s.paths.length, rows: s.fonts.length, units: s.stats.outline ? s.stats.outline.units : 0 }; });
       await page.click(all);
       await settled(page);
@@ -346,6 +352,28 @@ try {
     check(light.title && light.bar && light.left === 20 && light.right === 20 && light.n > 0 && light.bg === 'rgb(255, 255, 255)', '浅色：标题、底栏、正文左右各 20px',
       `左 ${light.left} 右 ${light.right}，${light.n} 个元素，底色 ${light.bg}`);
     check(light.verify > 0, '比对用的隐藏 iframe 里有正文（复制时的纯文本取自这里）', `${light.verify} 字`);
+    // 页头与底栏取自原稿：<title>、作者（没有站点名时作为公众号名称）、文件修改时间、网站图标（没有声明时取 favicon.ico）
+    {
+      const entry = fs.statSync(ARTICLE).isDirectory() ? path.join(ARTICLE, 'index.html') : ARTICLE;
+      const src = fs.readFileSync(entry, 'utf8');
+      const title = (src.match(/<title>([^<]*)<\/title>/) || [])[1]?.replace(/\s+/g, ' ').trim() || '文章标题';
+      const author = (src.match(/<meta name="author" content="([^"]*)"/) || [])[1] || '';
+      const d = new Date(fs.statSync(entry).mtimeMs), pad = n => String(n).padStart(2, '0');
+      const time = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      const hasIcon = fs.existsSync(path.join(path.dirname(entry), 'favicon.ico'));
+      await page.waitForFunction(() => { const img = document.getElementById('paneB').contentDocument.querySelector('.wx_avatar img'); return !img || img.complete; }, { timeout: 10000 }).catch(() => {});
+      const frame = await page.evaluate(() => {
+        const d = document.getElementById('paneB').contentDocument, img = d.querySelector('.wx_avatar img');
+        return { title: d.querySelector('.rich_media_title').textContent, name: d.querySelector('.wx_name').textContent, bar: d.querySelector('.wx_bar_name').textContent,
+          time: d.querySelector('.wx_time').textContent, icon: img ? { src: img.getAttribute('src'), w: img.naturalWidth } : null };
+      });
+      const iconOk = hasIcon ? !!frame.icon && /\.ico$/.test(frame.icon.src) && frame.icon.w === 32 : !frame.icon;
+      check(frame.title === title && frame.name === (author || '公众号名称') && frame.bar === frame.name && frame.time === time && iconOk,
+        '页头与底栏：原稿的标题、作者、文件修改时间与网站图标', JSON.stringify(frame));
+    }
+    // 侧栏里每行末尾的 "?" 靠右对齐成一列
+    const helpRights = await page.$$eval('.side .row > .tip-anchor:last-child > .help', els => [...new Set(els.map(e => Math.round(e.getBoundingClientRect().right)))]);
+    check(helpRights.length === 1, '侧栏中行末的说明按钮对齐成一列', `右边缘 ${helpRights.join('、')}px`);
     await page.screenshot({ path: path.join(OUT, `stage-light${SVG_MODE ? '-svg' : ''}.png`) });
     await page.click('#dark');
     await page.waitForFunction(() => { const d = document.getElementById('paneB').contentDocument; return !!(d && d.documentElement && d.documentElement.classList.contains('data_color_scheme_dark') && d.readyState === 'complete'); }, { timeout: 60000 }).catch(() => {});
@@ -389,9 +417,9 @@ try {
     check(/sandbox/.test(h['content-security-policy'] || '') && h['x-content-type-options'] === 'nosniff', '取图口的文件带 CSP sandbox 与 nosniff（文章里的 SVG 脚本跑不起来）');
   }
   {
-    // 文章文件夹外的文件不登记：用相对路径指向仓库里的 ui/app.css
+    // 文章文件夹外的文件不登记：用相对路径指向仓库里的 ui/src/app.css
     const dir = fs.statSync(ARTICLE).isDirectory() ? ARTICLE : path.dirname(ARTICLE);
-    const outside = path.relative(dir, path.join(HERE, '..', 'ui', 'app.css')).split(path.sep).join('/');
+    const outside = path.relative(dir, path.join(HERE, '..', 'ui', 'src', 'app.css')).split(path.sep).join('/');
     const r2 = await raw(UI, '/api/assets', { method: 'POST', headers: { host: '127.0.0.1:' + UI, origin: 'http://127.0.0.1:' + UI }, body: JSON.stringify({ refs: [outside] }) });
     check(r2.status === 200 && JSON.parse(r2.body)[outside] === null, '不登记文章文件夹以外的文件', outside);
   }
@@ -447,9 +475,9 @@ try {
     // 读者拿到的图最宽 1080px：更宽的先缩到 1080 宽，再在上限内选尽量高的画质
     const r1 = await shrinkApi({ id: photoId, scale: 0.5, max: 400 << 10 });
     check(r1.id && r1.width === 1080 && r1.height === 720 && /\.jpg$/.test(r1.id) && r1.size <= 400 << 10 && r1.srcSize === photo.length && !r1.over,
-      '比 1080px 宽的照片缩到 1080px 宽，在上限内用尽量高的画质，存为 JPEG', `${photo.length} → ${r1.size} 字节，${r1.width}×${r1.height}，${r1.how}`);
+      '比 1080px 宽的照片缩到 1080px 宽，在上限内用尽量高的画质，存为 JPEG', `${photo.length} → ${r1.size} 字节，${r1.width}×${r1.height}，${JSON.stringify(r1.how)}`);
     const roomy = await shrinkApi({ id: photoId, scale: 0.5, max: photo.length - 1024 });
-    check(roomy.width === 1080 && /质量 92/.test(roomy.how) && !roomy.over, '上限宽裕时缩到 1080px 宽、用最高一档画质', `${roomy.width}×${roomy.height}，${roomy.how}，${roomy.size} 字节`);
+    check(roomy.width === 1080 && roomy.how && roomy.how.fmt === 'jpeg' && roomy.how.q === 92 && !roomy.over, '上限宽裕时缩到 1080px 宽、用最高一档画质', `${roomy.width}×${roomy.height}，${JSON.stringify(roomy.how)}，${roomy.size} 字节`);
     const served = r1.id ? await raw(IMG, '/a/' + r1.id) : { status: 0, headers: {} };
     check(served.status === 200 && served.headers['content-type'] === 'image/jpeg', '压缩后的副本由取图端口提供', `${served.status} ${served.headers['content-type']}`);
     const small = await sharp({ create: { width: 1000, height: 600, channels: 3, background: '#468' } }).jpeg().toBuffer();
@@ -459,7 +487,7 @@ try {
     for (let i = 0; i < tall.length; i++) { seed = (seed * 1103515245 + 12345) & 0x7fffffff; tall[i] = 128 + (seed % 96) - 48; }
     const tallBuf = await sharp(tall, { raw: { width: TW, height: TH, channels: 3 } }).jpeg({ quality: 98 }).toBuffer();
     const r4 = await shrinkApi({ id: await blob(tallBuf, 'jpg', 'tall.jpg'), scale: 1, max: 600 << 10 });
-    check(r4.width === TW && r4.height === TH && (r4.size <= 600 << 10 || r4.over), '不到 1080px 宽但超过上限的图片保持原尺寸，降低画质', `${tallBuf.length} → ${r4.size} 字节，${r4.width}×${r4.height}，${r4.how}${r4.over ? '，仍超过上限' : ''}`);
+    check(r4.width === TW && r4.height === TH && (r4.size <= 600 << 10 || r4.over), '不到 1080px 宽但超过上限的图片保持原尺寸，降低画质', `${tallBuf.length} → ${r4.size} 字节，${r4.width}×${r4.height}，${JSON.stringify(r4.how)}${r4.over ? '，仍超过上限' : ''}`);
     const alpha = await sharp({ create: { width: 1600, height: 1600, channels: 4, background: { r: 200, g: 30, b: 60, alpha: 0.5 } } }).png({ compressionLevel: 0 }).toBuffer();
     const r2 = await shrinkApi({ id: await blob(alpha, 'png', 'alpha.png'), scale: 0.5, max: 400 << 10 });
     const r2meta = r2.id ? await sharp(Buffer.from(await (await fetch(`http://127.0.0.1:${UI}/a/${r2.id}`)).arrayBuffer())).metadata() : {};
@@ -502,20 +530,17 @@ try {
       r.report.names.set(id, 'img/photo.jpg');
       return keep;
     }, photoId);
-    const setShrink = (on, kbv) => page.evaluate((on, kbv) => {
-      const k = document.getElementById('shrinkKb'); k.value = String(kbv); k.dispatchEvent(new Event('change'));
-      const c = document.getElementById('shrinkOn'); c.checked = on; c.dispatchEvent(new Event('change'));
-    }, on, kbv);
+    const setShrink = async (on, kbv) => { await typeNumber(page, '#shrinkKb', kbv); await setChecked(page, '#shrinkOn', on); };
     await setShrink(true, 400);
     await page.waitForFunction(id => { const r = window.__wxc.result; return !window.__wxc.shrinking && r.report.shrunk && r.report.shrunk.length && !r.payload.includes('/a/' + id); }, { timeout: 30000 }, photoId).catch(() => {});
-    const on = await page.evaluate(id => { const r = window.__wxc.result; return { has: r.payload.includes('/a/' + id), shrunk: (r.report.shrunk || []).map(s => s.id), check: document.getElementById('checks').textContent.includes('图片压缩') }; }, photoId);
-    check(!on.has && on.shrunk.includes(r1.id) && on.check, '勾选后成品中的大图换成压缩后的副本，检查结果列出“图片压缩”', JSON.stringify(on));
+    const on = await page.evaluate(id => { const r = window.__wxc.result; return { kb: window.__wxc.shrink.kb, has: r.payload.includes('/a/' + id), shrunk: (r.report.shrunk || []).map(s => s.id), check: document.getElementById('checks').textContent.includes('图片压缩') }; }, photoId);
+    check(on.kb === 400 && !on.has && on.shrunk.includes(r1.id) && on.check, '勾选后成品中的大图换成压缩后的副本，检查结果列出“图片压缩”', JSON.stringify(on));
     await setShrink(false, 1000);
     await page.waitForFunction(id => !window.__wxc.shrinking && window.__wxc.result.payload.includes('/a/' + id), { timeout: 30000 }, photoId).catch(() => {});
-    const off = await page.evaluate(id => { const r = window.__wxc.result; return { has: r.payload.includes('/a/' + id), big: (r.report.big || []).map(b => b.name) }; }, photoId);
-    check(off.has && off.big.includes('img/photo.jpg'), '取消勾选后换回原图，超过上限的图片列为“图片过大”', JSON.stringify(off));
+    const off = await page.evaluate(id => { const r = window.__wxc.result; return { kb: window.__wxc.shrink.kb, has: r.payload.includes('/a/' + id), big: (r.report.big || []).map(b => b.name) }; }, photoId);
+    check(off.kb === 1000 && off.has && off.big.includes('img/photo.jpg'), '取消勾选后换回原图，超过上限的图片列为“图片过大”', JSON.stringify(off));
     await page.evaluate(keep => { const r = window.__wxc.result; r.base = keep.base; r.scales = new Map(keep.scales); }, saved);
-    await page.evaluate(() => { const c = document.getElementById('shrinkOn'); c.checked = false; c.dispatchEvent(new Event('change')); });
+    await setChecked(page, '#shrinkOn', false);
     await page.waitForFunction(() => !window.__wxc.shrinking, { timeout: 30000 }).catch(() => {});
   }
 
@@ -527,7 +552,9 @@ try {
     const busy = http.createServer().listen(IMG + 3, '0.0.0.0');
     await new Promise(r => busy.once('listening', r));
     const submit = async (fields, until) => {
-      await page.evaluate(f => { for (const [id, v] of Object.entries(f)) { const e = document.getElementById(id); e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); } }, fields);
+      const { hfProto, ...text } = fields;
+      await page.evaluate(f => { for (const [id, v] of Object.entries(f)) { const e = document.getElementById(id); e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); } }, text);
+      if (hfProto) await page.click(`#hfProto .n-radio-button:has(input[value="${hfProto}"])`);
       await page.click('#hostForm button[type="submit"]');
       await page.waitForFunction(until, { timeout: 10000 }).catch(() => {});
     };
@@ -540,7 +567,7 @@ try {
       `端口 ${imgNow}，设置文件 ${settingsNow().imgPort}` + (id ? `，新端口取图 ${onNew}，旧端口 ${onOld || '连不上'}` : ''));
     // 粘贴完整地址拆进三格；默认端口不写进地址。.invalid 域名按规范解析不到，自测必然不通过
     await submit({ hfHost: 'https://tunnel.example.invalid' }, `(window.__wxc.server.host.pick || {}).base === 'https://tunnel.example.invalid'`);
-    const form = await page.evaluate(() => ({ host: hfHost.value, port: hfPubPort.value, proto: hfProto.value, pick: window.__wxc.server.host.pick, list: window.__wxc.server.host.list.length }));
+    const form = await page.evaluate(() => ({ host: hfHost.value, port: hfPubPort.value, proto: document.querySelector('#hfProto input:checked').value, pick: window.__wxc.server.host.pick, list: window.__wxc.server.host.list.length }));
     check(form.host === 'tunnel.example.invalid' && form.port === '443' && form.proto === 'https' && form.pick && form.pick.base === 'https://tunnel.example.invalid' && !form.list,
       '粘贴完整地址：拆成协议、地址、端口，取图地址不带默认端口，不再自动检测', JSON.stringify(form));
     await submit({ hfHost: 'pic.example.invalid', hfPubPort: '', hfProto: 'http' }, `(window.__wxc.server.host.pick || {}).base === 'http://pic.example.invalid:${NEW}'`);
@@ -557,7 +584,7 @@ try {
       '无法访问时列出可能的原因（含本机端口），并说明以实际下载为准', JSON.stringify(helpNow).slice(0, 160));
     const taken = await post({ imgPort: IMG + 3, host: '', port: '', proto: 'http' });
     const stay = id ? (await raw(NEW, '/a/' + id)).status : 200;
-    check(taken.status === 409 && stay === 200, '本机端口被占用时报错并保持原端口', `${taken.status} ${JSON.parse(taken.body).error || ''}`);
+    check(taken.status === 409 && JSON.parse(taken.body).code === 'portBusy' && stay === 200, '本机端口被占用时报错并保持原端口', `${taken.status} ${taken.body}`);
     const bad = await Promise.all([{ imgPort: 80 }, { imgPort: UI }, { imgPort: 'x' }, { imgPort: NEW, port: 70000 }, { imgPort: NEW, port: 'x' },
       { imgPort: NEW, host: '192.168.1.10' }, { imgPort: NEW, host: 'localhost' }, { imgPort: NEW, host: 'a.com/path' }, { imgPort: NEW, host: 'fd00::1' }].map(post));
     check(bad.every(r => r.status === 400), '不合法的设置被拒绝（端口越界、与页面端口相同、内网地址、带路径）', bad.map(r => r.status).join(','));

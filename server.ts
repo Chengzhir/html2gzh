@@ -9,6 +9,7 @@ import { checkHosts } from './lib/host.ts';
 import { imgServer, listenImg } from './lib/imgserver.ts';
 import { uiRoute } from './lib/uiroute.ts';
 import { wrap } from './lib/http.ts';
+import { ensureUi } from './lib/uibuild.ts';
 
 function openBrowser(u: string) {
   if (NO_OPEN) return;
@@ -36,6 +37,7 @@ async function handOver() {
   process.exit(0);
 }
 
+await ensureUi();
 const uiServer = http.createServer(wrap(uiRoute));
 uiServer.once('error', (e: NodeJS.ErrnoException) => { if (e.code === 'EADDRINUSE') handOver(); else throw e; });
 uiServer.listen(UI_PORT, '127.0.0.1', async () => {

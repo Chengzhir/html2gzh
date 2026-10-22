@@ -1,3 +1,5 @@
+import { CodedError } from './types.ts';
+
 export const ID = 'data-wxc';
 
 /** 按顶层逗号切分（跳过括号与引号内） */
@@ -102,7 +104,7 @@ export function loadFrame(frame: HTMLIFrameElement, html: string, width: number,
   return new Promise<Document>((resolve, reject) => {
     frame.style.width = width + 'px';
     frame.style.height = height + 'px';
-    const t = setTimeout(() => reject(new Error('预览在 20 秒内没有加载完成，可能是文中的网络图片加载过慢。请点击“重新转换”')), 20000);
+    const t = setTimeout(() => reject(new CodedError('convert.frameTimeout')), 20000);
     frame.onload = async () => {
       clearTimeout(t);
       const doc = frame.contentDocument;
