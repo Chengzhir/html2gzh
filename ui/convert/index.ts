@@ -186,7 +186,7 @@ export async function convert(
         els: [...new Set(others.flatMap(([, b]) => b))],
       },
     );
-  else F.info('otherWidthsOk', { phones, rest });
+  else F.info('otherWidthsOk', { n: phones.length + rest.length, phones, rest });
 
   const payload = webkitFilter(stripTool(merged));
   return {
