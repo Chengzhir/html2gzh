@@ -1,5 +1,4 @@
 ui/dist/
-ui/vendor/
 test/out/
 package-lock.json
 *.md

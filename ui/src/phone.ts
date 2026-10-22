@@ -1,6 +1,7 @@
-// 公众号阅读页模拟：正文外面套上阅读页的框架（标题、作者行、阅读数、底栏），浅色或深色。
-// 深色用微信公开的转换算法 mp-darkmode（ui/vendor）：在只允许脚本、不同源的隐藏 iframe 里跑，结果拿回来放进不允许脚本的预览 iframe
-import darkmodeUrl from '../vendor/mp-darkmode/darkmode.min.js?url';
+// 模拟在手机微信中打开公众号文章时的页面：正文外面套上这个页面的框架（标题、作者行、阅读数、底栏），浅色或深色。
+// 深色用 mp-darkmode：在只允许脚本、不同源的隐藏 iframe 里运行，结果拿回来放进不允许脚本的预览 iframe。
+// 使用的版本与调用参数都与公众号文章页面相同；公众号更新后用 tools/wxdarkmode.mjs 查找对应的版本
+import darkmodeUrl from 'mp-darkmode/dist/darkmode.min.js?url';
 import { READER_CSS, NEUTRAL, readerImages } from '../convert/reader.ts';
 import { CodedError } from '../convert/types.ts';
 import { t } from './i18n.ts';
@@ -80,10 +81,12 @@ export function readerDoc(fragment: string, frame: ReaderFrame, dark: boolean) {
 
 let darkmodeSource: string | null = null;
 const loadDarkmode = async () => (darkmodeSource ??= await (await fetch(darkmodeUrl)).text());
-// 隐藏 iframe 里执行：先照阅读页脚本改图片尺寸，再跑深色转换（处理正文区里的节点，和阅读页一样），删掉脚本后把整页交回来
+// 公众号文章页面调用 mp-darkmode 时传入的参数；mode 在页面中为空（跟随系统设置），这里固定为深色
+const DARK_OPTIONS = { mode: 'dark', defaultDarkTextColor: '#989898', whitelist: { attribute: ['data-no-dark'] } };
+// 在隐藏 iframe 里执行：先按公众号文章页面的脚本调整图片尺寸，再运行深色转换（与这个页面一样，只处理正文区的子孙节点），删掉脚本后把整页交回来
 const runner = (nonce: string) =>
   `<script>addEventListener('load',function(){var m={type:'wxc-dark',nonce:${JSON.stringify(nonce)}};` +
-  `try{(${readerImages})(document);Darkmode.run(document.querySelectorAll('#js_content,#js_content *'),{mode:'dark'});` +
+  `try{(${readerImages})(document);Darkmode.run(document.querySelectorAll('#js_content *'),${JSON.stringify(DARK_OPTIONS)});` +
   `var s=document.querySelectorAll('script');for(var i=0;i<s.length;i++)s[i].remove();m.html='<!DOCTYPE html>'+document.documentElement.outerHTML;}` +
   `catch(e){m.error=String(e&&e.message||e);}parent.postMessage(m,'*');});<\/script>`;
 

@@ -164,10 +164,18 @@ code {
   margin-left: auto;
 }
 .tip-body {
-  white-space: pre-line;
   overflow-wrap: anywhere;
   font-size: var(--ui-fs-sm);
   line-height: 1.6;
+}
+.tip-item {
+  position: relative;
+  padding-left: 1em;
+}
+.tip-item::before {
+  content: '•';
+  position: absolute;
+  left: 0.15em;
 }
 .tipbtn {
   padding: 0;

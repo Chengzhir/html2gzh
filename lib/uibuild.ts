@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, UI_DIR, stamp } from './config.ts';
 
-const SOURCES = ['ui/src', 'ui/convert', 'ui/vendor', 'ui/index.html', 'vite.config.ts', 'package.json'].map(p =>
+const SOURCES = ['ui/src', 'ui/convert', 'ui/index.html', 'vite.config.ts', 'package.json'].map(p =>
   path.join(ROOT, p),
 );
 function newest(p: string): number {
