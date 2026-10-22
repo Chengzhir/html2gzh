@@ -10,14 +10,14 @@ const factor = s => {
   const m = /^(-?[\d.]+(?:e-?\d+)?)(%)?$/.exec(s.trim());
   return m ? +m[1] / (m[2] ? 100 : 1) : null;
 };
-/** 长度 → user units；box 是百分比参照框 { bw, bh }，fs 是字号 */
+/** 长度 → user units；box 是百分比参照框 { bw, bh }，box.unit 是 1 CSS px 合多少 user units（最外层 svg 有 viewBox 时不为 1），fs 是字号 */
 function length(s, axis, box, fs) {
   const m = /^(-?[\d.]+(?:e-?\d+)?)(px|%|em)?$/.exec(s.trim());
   if (!m) return null;
   const n = +m[1];
   if (!m[2]) return n === 0 ? 0 : null;
-  if (m[2] === 'px') return n;
-  if (m[2] === 'em') return n * fs;
+  if (m[2] === 'px') return n * (box.unit ?? 1);
+  if (m[2] === 'em') return n * fs * (box.unit ?? 1);
   return (n / 100) * (axis === 'x' ? box.bw : box.bh);
 }
 

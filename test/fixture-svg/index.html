@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>svg fixture</title>
 <!-- SVG 兼容的测试稿：每段一种写法。data-click：e2e 在暂停的时间线上点它再采样；
-     data-sample-skip：原稿的动画在 use 影子树里或写在最外层 svg 上，e2e 控制不了它的时间，只比 t=0；data-pixel-skip：转换后必然不同（近似） -->
+     data-sample-skip：转换后不再动（或原稿的动画在 use 影子树里，e2e 控制不了它的时间），只比 t=0；data-pixel-skip：转换后必然不同（近似） -->
 <style>
 body{margin:8px;font:15px/1.6 sans-serif;color:#222}
 .page{container-type:inline-size}
@@ -23,6 +23,8 @@ body{margin:8px;font:15px/1.6 sans-serif;color:#222}
 .slide{animation:slide 2.5s ease-in-out infinite alternate}
 .blade{transform-origin:12px 12px;animation:spin 3s linear infinite}
 .bob{animation:bob 2s ease-in-out infinite}
+.bobfade{animation:bob 2s ease-in-out infinite,fade 2s ease-in-out infinite}
+@keyframes fade{50%{opacity:.3}}
 </style></head>
 <body><div class="page">
 <svg style="display:none" xmlns="http://www.w3.org/2000/svg">
@@ -92,6 +94,10 @@ body{margin:8px;font:15px/1.6 sans-serif;color:#222}
 <a href="https://example.com/"><rect x="64" y="36" width="20" height="16" fill="#2f6db3"/></a>
 <text x="10" y="58" font-size="7" fill="#333">普通文字留成矢量</text></svg></section>
 
-<section class="case" data-sample-skip><p>写在最外层 svg 上的 CSS 动画（公众号里留不下，会报出来）</p>
-<svg class="bob" viewBox="0 0 200 40"><rect x="80" y="10" width="40" height="20" fill="#2f6db3"/></svg></section>
+<section class="case"><p>写在最外层 svg 上的 CSS 动画：上下浮动连同 svg 的裁切一起移动（下边的圆被裁掉一半）；浮动加淡出，svg 自身的静态透明度 0.8</p>
+<svg class="bob" viewBox="0 0 200 40"><rect x="80" y="10" width="40" height="20" fill="#2f6db3"/><rect x="130" y="0" width="20" height="40" fill="#e90"/><circle cx="175" cy="40" r="12" fill="#dc2626"/></svg>
+<svg class="bobfade" viewBox="0 0 200 40" style="opacity:.8"><rect x="80" y="10" width="40" height="20" fill="#2a2"/></svg></section>
+
+<section class="case" data-sample-skip><p>最外层 svg 带背景色又有 CSS 动画（动画挪到内层会与原效果不同，会报出来）</p>
+<svg class="bob" viewBox="0 0 200 40" style="background:#eef3fa"><rect x="80" y="10" width="40" height="20" fill="#2f6db3"/></svg></section>
 </div></body></html>

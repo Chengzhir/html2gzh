@@ -4,6 +4,7 @@ import { parseEasing, reverseEasing, compile, compileDiscrete, KINDS } from './e
 import { parseFns, parseProp, align, fnMatrix, computedMatrix, measureBox, bakeStyleTransform } from './transform.ts';
 import { mul, isId, matrixAttr, geometryReader } from './path.ts';
 import { displayToVisibility } from './whitelist.ts';
+import { wrapRoot, rootDecorated, rootTransformed, rootBox, moveClip, moveOpacity } from './root.ts';
 
 const r4 = n => {
   const r = Math.round(n * 10000) / 10000;
@@ -264,26 +265,37 @@ function framesOf(kfs, p, cs) {
 export function cssToSmil(doc, anims, { spline, rep }) {
   const win = doc.defaultView;
   let done = 0;
-  for (const [el, recs] of anims) {
-    if (!el.isConnected) continue;
-    if (!isSvg(el.parentElement)) {
-      rep('css:root', el);
-      continue;
-    }
-    if (inResource(el)) continue;
-    const cs = win.getComputedStyle(el),
+  for (const [svgEl, recs] of anims) {
+    if (!svgEl.isConnected || inResource(svgEl)) continue;
+    const cs = win.getComputedStyle(svgEl),
       fs = parseFloat(cs.fontSize) || 16;
+    // 最外层 svg 上的动画写到包住它全部内容的 g 上（见 root.ts）；g 在第一次用到时才建
+    const root = isSvg(svgEl.parentElement) ? null : svgEl;
+    const rootOpacity = root && cs.opacity;
+    let target = root ? null : svgEl,
+      opacityMoved = false;
+    const host = () => (target ||= wrapRoot(root));
+    const rootBlocked = (p: string) =>
+      root &&
+      (GEOM.has(p) ||
+        p === 'display' ||
+        ((LAYERS.includes(p) || p === 'opacity' || p === 'visibility') && rootDecorated(cs)) ||
+        (LAYERS.includes(p) && rootTransformed(cs)));
     let box = null,
       ok = false;
     const layers = new Map(),
       shifts = [];
+    // 最外层 svg 的静态透明度在写第一条透明度动画时挪到 g 上；之后各帧补的静态值仍取挪动前的
+    const base = root
+      ? { getPropertyValue: (q: string) => (q === 'opacity' ? rootOpacity : cs.getPropertyValue(q)) }
+      : cs;
     for (const r of recs) {
       if (r.paused) {
-        rep('css:paused', el);
+        rep('css:paused', svgEl);
         continue;
       }
       if (r.composite && r.composite !== 'replace') {
-        rep('css:composite', el);
+        rep('css:composite', svgEl);
         continue;
       }
       const t = r.timing;
@@ -296,44 +308,55 @@ export function cssToSmil(doc, anims, { spline, rep }) {
       };
       if (!tm.iters) continue;
       if (!tm.dur) {
-        rep('css:zero', el);
+        rep('css:zero', svgEl);
         continue;
       }
       const props = [...new Set<string>(r.kf.flatMap(f => Object.keys(f)))].filter(p => !META.has(p));
       for (const p of props) {
-        const frames = framesOf(r.kf, p, cs);
+        const frames = framesOf(r.kf, p, base);
         if (frames.some(f => !f.e)) {
-          rep('css:easing', el);
+          rep('css:easing', svgEl);
+          continue;
+        }
+        if (rootBlocked(p)) {
+          rep('css:root', svgEl);
           continue;
         }
         if (LAYERS.includes(p)) {
-          if (el.localName === 'tspan' || el.localName === 'textPath') {
-            rep('css:prop:' + p, el);
+          if (svgEl.localName === 'tspan' || svgEl.localName === 'textPath') {
+            rep('css:prop:' + p, svgEl);
             continue;
           }
-          box = box || measureBox(el);
+          box = box || (root ? rootBox(root, cs) : measureBox(svgEl));
           if (!box) {
-            rep('css:transform', el);
+            rep(root ? 'css:root' : 'css:transform', svgEl);
             continue;
           }
           if (!layers.has(p)) layers.set(p, []);
           layers.get(p).push({ frames, tm });
         } else if (SIMPLE[p]) {
-          if (simple(doc, el, SIMPLE[p], frames, tm, spline)) ok = true;
-          else rep('css:prop:' + p, el);
+          if (root && p === 'opacity' && !opacityMoved) {
+            moveOpacity(root, host(), cs);
+            opacityMoved = true;
+          }
+          if (simple(doc, host(), SIMPLE[p], frames, tm, spline)) ok = true;
+          else rep('css:prop:' + p, svgEl);
         } else if (p === 'visibility' || p === 'display') {
-          if (discrete(doc, el, p, frames, tm)) ok = true;
-          else rep('css:prop:' + p, el);
-        } else if ((p === 'cx' || p === 'cy') && (el.localName === 'circle' || el.localName === 'ellipse'))
+          if (discrete(doc, host(), p, frames, tm)) ok = true;
+          else rep('css:prop:' + p, svgEl);
+        } else if ((p === 'cx' || p === 'cy') && (svgEl.localName === 'circle' || svgEl.localName === 'ellipse'))
           shifts.push([p, frames, tm]);
-        else rep('css:prop:' + p, el);
+        else rep('css:prop:' + p, svgEl);
       }
     }
-    if (layers.size && buildLayers(doc, el, layers, box, fs, spline, rep)) ok = true;
+    if (layers.size) {
+      if (root) moveClip(root, host(), cs, box);
+      if (buildLayers(doc, host(), layers, box, fs, spline, rep)) ok = true;
+    }
     // 平移放在最后：建层之后元素自己的 transform 属性就是最内层的静态矩阵，平移叠加在它后面，等同于挪圆心
     for (const [p, frames, tm] of shifts)
-      if (shift(doc, el, p, frames, tm)) ok = true;
-      else rep('css:prop:' + p, el);
+      if (shift(doc, svgEl, p, frames, tm)) ok = true;
+      else rep('css:prop:' + p, svgEl);
     if (ok) done++;
   }
   return done;
