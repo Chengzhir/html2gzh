@@ -4,88 +4,111 @@ import { isAnim, targetOf } from './dom.ts';
 const EVENTS =
   /^(click|dblclick|mousedown|mouseup|mouseover|mouseout|mousemove|mouseenter|mouseleave|touchstart|touchend|touchmove|touchcancel|focusin|focusout|activate|beginEvent|endEvent|repeatEvent|load)$/;
 
+const UNIT_SECONDS: Record<string, number> = { h: 3600, min: 60, s: 1, ms: 0.001 };
+
 /** SMIL 时钟值 → 秒 */
-export function clock(s) {
-  s = (s || '').trim();
-  let m = /^(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/.exec(s);
-  if (m) return +(m[1] || 0) * 3600 + +m[2] * 60 + +m[3];
-  m = /^(\d+(?:\.\d+)?|\.\d+)(h|min|s|ms)?$/.exec(s);
-  if (!m) return null;
-  return +m[1] * { h: 3600, min: 60, s: 1, ms: 0.001 }[m[2] || 's'];
+export function clock(text: string | null | undefined): number | null {
+  text = (text || '').trim();
+  let match = /^(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/.exec(text);
+  if (match) return +(match[1] || 0) * 3600 + +match[2] * 60 + +match[3];
+  match = /^(\d+(?:\.\d+)?|\.\d+)(h|min|s|ms)?$/.exec(text);
+  if (!match) return null;
+  return +match[1] * UNIT_SECONDS[match[2] || 's'];
 }
+
+/** begin/end 列表里的一项；id 为 null 的 event 作用于动画目标自己 */
+export type TimingItem =
+  | { kind: 'other'; raw: string; id?: undefined }
+  | { kind: 'offset'; t: number; id?: undefined; raw?: undefined }
+  | { kind: 'event'; id?: string | null; ev: string; t: number; raw?: string }
+  | { kind: 'sync'; id: string; base: 'begin' | 'end' | 'repeat'; n: number; t: number; raw: string };
+type SyncItem = Extract<TimingItem, { kind: 'sync' }>;
+type EventItem = Extract<TimingItem, { kind: 'event' }>;
+/** 同步基准化成的不带 id 的形式：固定时刻，或某元素上的事件 + 偏移 */
+type ResolvedSync =
+  | { abs: number; ev?: undefined; src?: undefined; t?: undefined }
+  | { abs?: undefined; ev: string; src: Element | null; t: number };
 
 /** begin/end 列表里的一项：offset | event（可带 id）| sync（id.begin/end/repeat(n)）| other */
-function parseItem(raw) {
-  const s = raw.trim();
-  if (/^(indefinite|wallclock\(|accessKey\()/.test(s)) return { kind: 'other', raw: s };
-  const sign = /^[+-]/.test(s) ? s[0] : '';
-  const off = clock(sign ? s.slice(1) : s);
+function parseItem(raw: string): TimingItem {
+  const text = raw.trim();
+  if (/^(indefinite|wallclock\(|accessKey\()/.test(text)) return { kind: 'other', raw: text };
+  const sign = /^[+-]/.test(text) ? text[0] : '';
+  const off = clock(sign ? text.slice(1) : text);
   if (off != null) return { kind: 'offset', t: sign === '-' ? -off : off };
   // id 到第一个未转义的点为止（id 里的点要写成 \.），后面是事件名或 begin/end/repeat(n)，再跟可选偏移
-  const m = /^(?:((?:\\.|[^.\\])+)\.)?([A-Za-z]\w*(?:\(\d+\))?)\s*(?:([+-])\s*(.+))?$/.exec(s);
-  if (!m) return { kind: 'other', raw: s };
-  const id = m[1] ? m[1].replace(/\\(.)/g, '$1') : null;
-  const o = m[4] != null ? clock(m[4]) : 0;
-  if (o == null) return { kind: 'other', raw: s };
-  const t = m[3] === '-' ? -o : o;
-  const rep = /^repeat\((\d+)\)$/.exec(m[2]);
-  if (id && (m[2] === 'begin' || m[2] === 'end' || rep))
-    return { kind: 'sync', id, base: rep ? 'repeat' : m[2], n: rep ? +rep[1] : 0, t, raw: s };
-  if (!EVENTS.test(m[2])) return { kind: 'other', raw: s };
-  return { kind: 'event', id, ev: m[2], t, raw: s };
+  const match = /^(?:((?:\\.|[^.\\])+)\.)?([A-Za-z]\w*(?:\(\d+\))?)\s*(?:([+-])\s*(.+))?$/.exec(text);
+  if (!match) return { kind: 'other', raw: text };
+  const id = match[1] ? match[1].replace(/\\(.)/g, '$1') : null;
+  const offset = match[4] != null ? clock(match[4]) : 0;
+  if (offset == null) return { kind: 'other', raw: text };
+  const t = match[3] === '-' ? -offset : offset;
+  const repeat = /^repeat\((\d+)\)$/.exec(match[2]);
+  if (id && (match[2] === 'begin' || match[2] === 'end' || repeat))
+    return {
+      kind: 'sync',
+      id,
+      base: repeat ? 'repeat' : (match[2] as 'begin' | 'end'),
+      n: repeat ? +repeat[1] : 0,
+      t,
+      raw: text,
+    };
+  if (!EVENTS.test(match[2])) return { kind: 'other', raw: text };
+  return { kind: 'event', id, ev: match[2], t, raw: text };
 }
-export const parseList = v =>
-  (v || '')
+export const parseList = (value: string | null | undefined): TimingItem[] =>
+  (value || '')
     .split(';')
-    .filter(x => x.trim())
+    .filter(part => part.trim())
     .map(parseItem);
 
-const sec = t => {
-  const r = Math.round(t * 1000) / 1000;
-  return (Object.is(r, -0) ? 0 : r) + 's';
+const sec = (time: number): string => {
+  const rounded = Math.round(time * 1000) / 1000;
+  return (Object.is(rounded, -0) ? 0 : rounded) + 's';
 };
-function serialize(it) {
-  if (it.id) return it.raw;
-  if (it.kind === 'offset') return sec(it.t);
-  if (it.kind === 'event') return it.ev + (it.t ? (it.t > 0 ? '+' : '-') + sec(Math.abs(it.t)) : '');
-  return it.raw;
+function serialize(item: TimingItem): string {
+  if (item.id) return item.raw;
+  if (item.kind === 'offset') return sec(item.t);
+  if (item.kind === 'event') return item.ev + (item.t ? (item.t > 0 ? '+' : '-') + sec(Math.abs(item.t)) : '');
+  return item.raw;
 }
 
 /** 一条动画的活动时长（秒）；带 end/min/max、无限或没写 dur 的返回 null */
-export function activeDur(a) {
-  if (a.hasAttribute('end') || a.hasAttribute('min') || a.hasAttribute('max')) return null;
-  const d = clock(a.getAttribute('dur'));
-  const rc = a.getAttribute('repeatCount'),
-    rd = a.getAttribute('repeatDur');
-  if (d == null || rc === 'indefinite' || rd === 'indefinite') return null;
-  let ad = rc != null ? d * +rc : d;
-  if (rd) ad = Math.min(ad, clock(rd));
-  return Number.isFinite(ad) ? ad : null;
+export function activeDur(anim: Element): number | null {
+  if (anim.hasAttribute('end') || anim.hasAttribute('min') || anim.hasAttribute('max')) return null;
+  const dur = clock(anim.getAttribute('dur'));
+  const repeatCount = anim.getAttribute('repeatCount'),
+    repeatDur = anim.getAttribute('repeatDur');
+  if (dur == null || repeatCount === 'indefinite' || repeatDur === 'indefinite') return null;
+  let active = repeatCount != null ? dur * +repeatCount : dur;
+  if (repeatDur) active = Math.min(active, clock(repeatDur));
+  return Number.isFinite(active) ? active : null;
 }
 
-/** 同步基准 it（"a1.end+1s"）化成不带 id 的形式：{ abs: 秒 } 或 { ev, src, t }（某元素上的事件 + 偏移） */
-function resolveSync(it, ids, depth = 0) {
-  const b = ids.get(it.id);
-  if (!isAnim(b) || depth > 8) return null;
+/** 同步基准 item（"a1.end+1s"）化成不带 id 的形式：{ abs: 秒 } 或 { ev, src, t }（某元素上的事件 + 偏移） */
+function resolveSync(item: SyncItem, ids: Map<string, Element>, depth = 0): ResolvedSync | null {
+  const baseAnim = ids.get(item.id);
+  if (!isAnim(baseAnim) || depth > 8) return null;
   // 只认 begin 只有一项的基准动画；多项（接力循环）推不出固定时刻
-  const items = parseList(b.getAttribute('begin') || '0s');
+  const items = parseList(baseAnim.getAttribute('begin') || '0s');
   if (items.length !== 1) return null;
-  const bi = items[0];
-  let base = null;
-  if (bi.kind === 'offset') base = { abs: bi.t };
-  else if (bi.kind === 'event') base = { ev: bi.ev, src: bi.id ? ids.get(bi.id) : targetOf(b, ids), t: bi.t };
-  else if (bi.kind === 'sync') base = resolveSync(bi, ids, depth + 1);
+  const baseItem = items[0];
+  let base: ResolvedSync | null = null;
+  if (baseItem.kind === 'offset') base = { abs: baseItem.t };
+  else if (baseItem.kind === 'event')
+    base = { ev: baseItem.ev, src: baseItem.id ? ids.get(baseItem.id) : targetOf(baseAnim, ids), t: baseItem.t };
+  else if (baseItem.kind === 'sync') base = resolveSync(baseItem, ids, depth + 1);
   if (!base) return null;
-  let add = it.t;
-  if (it.base === 'end') {
-    const d = activeDur(b);
-    if (d == null) return null;
-    add += d;
+  let add = item.t;
+  if (item.base === 'end') {
+    const dur = activeDur(baseAnim);
+    if (dur == null) return null;
+    add += dur;
   }
-  if (it.base === 'repeat') {
-    const d = clock(b.getAttribute('dur'));
-    if (d == null) return null;
-    add += d * it.n;
+  if (item.base === 'repeat') {
+    const dur = clock(baseAnim.getAttribute('dur'));
+    if (dur == null) return null;
+    add += dur * item.n;
   }
   return base.abs != null ? { abs: base.abs + add } : { ev: base.ev, src: base.src, t: base.t + add };
 }
@@ -95,26 +118,29 @@ function resolveSync(it, ids, depth = 0) {
  * 事件源就是动画目标本身的 "id.click" 去掉 id；"a1.end+1s" 能推算成固定时刻或"本元素事件 + 偏移"的换成那个值；
  * 其余（点别的元素触发、接力循环）留原样并报出来——公众号里它们不会触发
  */
-export function resolveTiming(root, ids) {
+export function resolveTiming(
+  root: Document | Element,
+  ids: Map<string, Element>,
+): { fixed: number; broken: SVGAnimationElement[] } {
   let fixed = 0;
-  const broken = [];
+  const broken: SVGAnimationElement[] = [];
   for (const a of root.querySelectorAll('*')) {
     if (!isAnim(a)) continue;
-    const tgt = targetOf(a, ids);
+    const target = targetOf(a, ids);
     let ok = true,
       touched = false;
     for (const attr of ['begin', 'end']) {
       const items = parseList(a.getAttribute(attr));
-      if (!items.some(it => it.id)) continue;
+      if (!items.some(item => item.id)) continue;
       touched = true;
-      const out = items.map(it => {
-        if (!it.id) return it;
-        if (it.kind === 'event' && ids.get(it.id) === tgt) return { ...it, id: null };
-        const x = it.kind === 'sync' ? resolveSync(it, ids) : null;
-        if (x && x.abs != null) return { kind: 'offset', t: x.abs };
-        if (x && x.src === tgt) return { kind: 'event', ev: x.ev, t: x.t };
+      const out = items.map((item): TimingItem => {
+        if (!item.id) return item;
+        if (item.kind === 'event' && ids.get(item.id) === target) return { ...item, id: null };
+        const resolved = item.kind === 'sync' ? resolveSync(item, ids) : null;
+        if (resolved && resolved.abs != null) return { kind: 'offset', t: resolved.abs };
+        if (resolved && resolved.src === target) return { kind: 'event', ev: resolved.ev, t: resolved.t };
         ok = false;
-        return it;
+        return item;
       });
       a.setAttribute(attr, out.map(serialize).join(';'));
     }
@@ -130,17 +156,19 @@ export function resolveTiming(root, ids) {
  * 只写 touchstart/touchend 的动画在电脑版微信里不触发（后台的内容结构检测也会提示）。
  * 补一个 click；restart="whenNotActive" 防止手机上 touchstart 之后紧跟的 click 把刚开始的动画重启
  */
-export function touchToClick(root) {
+export function touchToClick(root: Document | Element): number {
   let n = 0;
   for (const a of root.querySelectorAll('*')) {
     if (!isAnim(a)) continue;
     let hit = false;
     for (const attr of ['begin', 'end']) {
       const items = parseList(a.getAttribute(attr));
-      if (!items.length || items.some(it => it.kind === 'event' && it.ev === 'click' && !it.id)) continue;
-      const touch = items.filter(it => it.kind === 'event' && !it.id && /^touch(start|end)$/.test(it.ev));
+      if (!items.length || items.some(item => item.kind === 'event' && item.ev === 'click' && !item.id)) continue;
+      const touch = items.filter(
+        (item): item is EventItem => item.kind === 'event' && !item.id && /^touch(start|end)$/.test(item.ev),
+      );
       if (!touch.length) continue;
-      a.setAttribute(attr, [...items, ...touch.map(it => ({ ...it, ev: 'click' }))].map(serialize).join(';'));
+      a.setAttribute(attr, [...items, ...touch.map(item => ({ ...item, ev: 'click' }))].map(serialize).join(';'));
       hit = true;
     }
     if (hit) {

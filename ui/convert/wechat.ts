@@ -6,38 +6,38 @@ const GONE = 'button,input,select,textarea,template,marquee,canvas,picture,progr
 /** 声明里有 calc() 或带运算的 min()/max()/clamp() 时整条被删 */
 const MATH = /(?:-webkit-)?calc\(|\b(?:min|max|clamp)\(([^()]|\([^()]*\))*[*/]|\b(?:min|max|clamp)\([^)]*\s[+-]\s/i;
 
-export function wechatClean(html) {
+export function wechatClean(html: string) {
   const doc = document.implementation.createHTMLDocument('');
   const box = doc.body;
   box.innerHTML = html;
-  box.querySelectorAll(GONE).forEach(e => e.remove());
+  box.querySelectorAll(GONE).forEach(el => el.remove());
   for (const el of [...box.getElementsByTagNameNS(SVG_NS, '*')]) {
     if (!box.contains(el)) continue;
     el.removeAttribute('id');
     el.removeAttribute('class');
     el.removeAttribute('xmlns:xlink');
     el.removeAttributeNS('http://www.w3.org/1999/xlink', 'href');
-    const n = el.localName;
-    if ((n === 'animate' || n === 'set') && !WX_ANIM_OK.has(el.getAttribute('attributeName'))) {
+    const tag = el.localName;
+    if ((tag === 'animate' || tag === 'set') && !WX_ANIM_OK.has(el.getAttribute('attributeName'))) {
       el.remove();
       continue;
     }
-    if (n === 'image') {
-      const h = (el.getAttribute('href') || '').trim();
-      if (/^data:/i.test(h)) el.removeAttribute('href');
-      else if (!/^https?:\/\/mmbiz\./i.test(h)) el.remove();
+    if (tag === 'image') {
+      const href = (el.getAttribute('href') || '').trim();
+      if (/^data:/i.test(href)) el.removeAttribute('href');
+      else if (!/^https?:\/\/mmbiz\./i.test(href)) el.remove();
     }
   }
   for (const el of box.querySelectorAll('[style]')) {
     const decls = splitTop(el.getAttribute('style'), ';');
-    const keep = decls.filter(d => !MATH.test(d));
+    const keep = decls.filter(decl => !MATH.test(decl));
     if (keep.length !== decls.length) {
       if (keep.length) el.setAttribute('style', keep.join(';'));
       else el.removeAttribute('style');
     }
   }
   // 粘贴进编辑器、保存后，dir="rtl" 变成 dir="auto"（2026-10-23 在段落上实测）
-  box.querySelectorAll('[dir="rtl" i]').forEach(e => e.setAttribute('dir', 'auto'));
+  box.querySelectorAll('[dir="rtl" i]').forEach(el => el.setAttribute('dir', 'auto'));
   return box.innerHTML;
 }
 
@@ -45,5 +45,5 @@ export function wechatClean(html) {
  * style 里的 filter 存草稿时整条被删，-webkit-filter 能留下。浏览器把两者当成同一属性，经过 CSSOM 会被写回 filter，
  * 所以只在最后的文本上改（预览不用改：渲染效果一样）
  */
-export const webkitFilter = html =>
-  html.replace(/\sstyle="[^"]*"/g, s => s.replace(/(^|[;\s"])filter\s*:/g, '$1-webkit-filter:'));
+export const webkitFilter = (html: string) =>
+  html.replace(/\sstyle="[^"]*"/g, attr => attr.replace(/(^|[;\s"])filter\s*:/g, '$1-webkit-filter:'));

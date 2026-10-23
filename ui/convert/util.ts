@@ -1,55 +1,57 @@
 import { CodedError } from './types.ts';
+import type { BoxRect } from './types.ts';
 
 export const ID = 'data-wxc';
 
-/** 按顶层逗号切分（跳过括号与引号内） */
-export function splitTop(s, sep = ',') {
-  const out = [];
+/** 按顶层的分隔符切分（跳过括号与引号内） */
+export function splitTop(text: string, sep = ',') {
+  const out: string[] = [];
   let depth = 0,
-    q = '',
-    cur = '';
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (q) {
-      cur += c;
-      if (c === '\\') {
-        cur += s[++i] || '';
-      } else if (c === q) q = '';
+    quote = '',
+    current = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      current += ch;
+      if (ch === '\\') {
+        current += text[++i] || '';
+      } else if (ch === quote) quote = '';
       continue;
     }
-    if (c === '"' || c === "'") {
-      q = c;
-      cur += c;
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current += ch;
       continue;
     }
-    if (c === '(' || c === '[') depth++;
-    else if (c === ')' || c === ']') depth--;
-    if (c === sep && depth === 0) {
-      out.push(cur);
-      cur = '';
+    if (ch === '(' || ch === '[') depth++;
+    else if (ch === ')' || ch === ']') depth--;
+    if (ch === sep && depth === 0) {
+      out.push(current);
+      current = '';
       continue;
     }
-    cur += c;
+    current += ch;
   }
-  if (cur.trim()) out.push(cur);
-  return out.map(x => x.trim()).filter(Boolean);
+  if (current.trim()) out.push(current);
+  return out.map(part => part.trim()).filter(Boolean);
 }
 
 /** 去掉首尾空白与一层引号（字体名等） */
-export const unq = s =>
-  String(s || '')
+export const unquote = (text: string | null | undefined) =>
+  String(text || '')
     .trim()
     .replace(/^["']|["']$/g, '');
 
 /** unicode-range → [[lo, hi]]；空值表示全部，写错的段跳过（全写错时为空数组） */
-export function unicodeRanges(s) {
-  if (!String(s || '').trim()) return [[0, 0x10ffff]];
-  const out = [];
-  for (const part of String(s).split(',')) {
-    const m = part.trim().match(/^u\+([0-9a-f?]{1,6})(?:-([0-9a-f]{1,6}))?$/i);
-    if (!m) continue;
-    if (m[1].includes('?')) out.push([parseInt(m[1].replace(/\?/g, '0'), 16), parseInt(m[1].replace(/\?/g, 'f'), 16)]);
-    else out.push([parseInt(m[1], 16), parseInt(m[2] || m[1], 16)]);
+export function unicodeRanges(text: string | null | undefined): [number, number][] {
+  if (!String(text || '').trim()) return [[0, 0x10ffff]];
+  const out: [number, number][] = [];
+  for (const part of String(text).split(',')) {
+    const match = part.trim().match(/^u\+([0-9a-f?]{1,6})(?:-([0-9a-f]{1,6}))?$/i);
+    if (!match) continue;
+    if (match[1].includes('?'))
+      out.push([parseInt(match[1].replace(/\?/g, '0'), 16), parseInt(match[1].replace(/\?/g, 'f'), 16)]);
+    else out.push([parseInt(match[1], 16), parseInt(match[2] || match[1], 16)]);
   }
   return out;
 }
@@ -60,19 +62,26 @@ export function eachAuthorSheet(
   fn: (rules: CSSRuleList) => void,
   unreadable?: (sheet: CSSStyleSheet) => void,
 ) {
-  for (const sh of doc.styleSheets as Iterable<CSSStyleSheet & { ownerNode: Element | null }>) {
-    if (!sh.ownerNode || !sh.ownerNode.hasAttribute('data-wxc-author')) continue;
+  for (const sheet of doc.styleSheets as Iterable<CSSStyleSheet & { ownerNode: Element | null }>) {
+    if (!sheet.ownerNode || !sheet.ownerNode.hasAttribute('data-wxc-author')) continue;
     try {
-      fn(sh.cssRules);
+      fn(sheet.cssRules);
     } catch {
-      if (unreadable) unreadable(sh);
+      if (unreadable) unreadable(sheet);
     }
   }
 }
 
+export interface Declaration {
+  prop: string;
+  value: string;
+  important: boolean;
+  /** 取值时改用元素的计算值（见 parseDecls） */
+  pending: boolean;
+}
 /** 解析声明块文本 → [{prop, value, important}]；保留简写原文（CSSOM 对含 var() 的简写读不出长写值） */
-export function parseDecls(text) {
-  const out = [];
+export function parseDecls(text: string | null | undefined) {
+  const out: Declaration[] = [];
   for (const piece of splitTop(text || '', ';')) {
     const i = piece.indexOf(':');
     if (i <= 0) continue;
@@ -87,52 +96,52 @@ export function parseDecls(text) {
   return out;
 }
 
-export const isEl = (n, name) => n && n.nodeType === 1 && (!name || n.localName === name);
-export const isHtmlEl = (n): n is HTMLElement =>
-  n && n.nodeType === 1 && n.namespaceURI === 'http://www.w3.org/1999/xhtml';
-export const round = n => Math.round(n * 1000) / 1000;
+export const isHtmlEl = (node: Node | null | undefined): node is HTMLElement =>
+  !!node && node.nodeType === 1 && (node as Element).namespaceURI === 'http://www.w3.org/1999/xhtml';
+export const round = (value: number) => Math.round(value * 1000) / 1000;
 
 /** 临时去掉所有变换，量布局位置用 */
 export const NO_TRANSFORM =
   '*{transform:none!important;translate:none!important;rotate:none!important;scale:none!important}';
 // measure 还要停住伪元素与过渡、动画：量的是每个元素的静止布局
-const NO_TF = `*,*::before,*::after{transform:none!important;translate:none!important;rotate:none!important;scale:none!important;transition:none!important;animation:none!important}`;
+const STILL_LAYOUT = `*,*::before,*::after{transform:none!important;translate:none!important;rotate:none!important;scale:none!important;transition:none!important;animation:none!important}`;
 
 /**
  * 量每个带 ID 的元素相对 body 内容区原点的盒子。layout=true 时临时去掉 transform，得到的是布局位置。
  * 只量 HTML 元素与最外层 svg；svg 内部不参与。
  */
-export function measure(doc, layout) {
-  let st;
+export function measure(doc: Document, layout: boolean) {
+  let still: HTMLStyleElement | undefined;
   if (layout) {
-    st = doc.createElement('style');
-    st.textContent = NO_TF;
-    doc.head.appendChild(st);
+    still = doc.createElement('style');
+    still.textContent = STILL_LAYOUT;
+    doc.head.appendChild(still);
   }
-  const b = doc.body.getBoundingClientRect();
-  const cs = doc.defaultView.getComputedStyle(doc.body);
-  const ox = b.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft);
-  const oy = b.top + parseFloat(cs.borderTopWidth) + parseFloat(cs.paddingTop);
-  const out = new Map();
+  const body = doc.body.getBoundingClientRect();
+  const bodyStyle = doc.defaultView.getComputedStyle(doc.body);
+  const originX = body.left + parseFloat(bodyStyle.borderLeftWidth) + parseFloat(bodyStyle.paddingLeft);
+  const originY = body.top + parseFloat(bodyStyle.borderTopWidth) + parseFloat(bodyStyle.paddingTop);
+  const out = new Map<string, BoxRect>();
   for (const el of doc.querySelectorAll(`[${ID}]`)) {
     if (!el.getClientRects().length) continue;
-    const r = el.getBoundingClientRect();
-    out.set(el.getAttribute(ID), { x: r.left - ox, y: r.top - oy, w: r.width, h: r.height });
+    const rect = el.getBoundingClientRect();
+    out.set(el.getAttribute(ID), { x: rect.left - originX, y: rect.top - originY, w: rect.width, h: rect.height });
   }
-  if (st) st.remove();
+  if (still) still.remove();
   return out;
 }
 
-export function diffBoxes(a, b, tol = 0.75) {
-  const bad = [];
-  for (const [id, r] of a) {
-    const s = b.get(id);
-    if (!s) continue;
+/** 两次测量中位置或尺寸差超过 tolerance 的元素 ID（只比两边都有的） */
+export function diffBoxes(a: Map<string, BoxRect>, b: Map<string, BoxRect>, tolerance = 0.75) {
+  const bad: string[] = [];
+  for (const [id, was] of a) {
+    const now = b.get(id);
+    if (!now) continue;
     if (
-      Math.abs(r.x - s.x) > tol ||
-      Math.abs(r.y - s.y) > tol ||
-      Math.abs(r.w - s.w) > tol ||
-      Math.abs(r.h - s.h) > tol
+      Math.abs(was.x - now.x) > tolerance ||
+      Math.abs(was.y - now.y) > tolerance ||
+      Math.abs(was.w - now.w) > tolerance ||
+      Math.abs(was.h - now.h) > tolerance
     )
       bad.push(id);
   }
@@ -144,9 +153,9 @@ export function loadFrame(frame: HTMLIFrameElement, html: string, width: number,
   return new Promise<Document>((resolve, reject) => {
     frame.style.width = width + 'px';
     frame.style.height = height + 'px';
-    const t = setTimeout(() => reject(new CodedError('convert.frameTimeout')), 20000);
+    const timer = setTimeout(() => reject(new CodedError('convert.frameTimeout')), 20000);
     frame.onload = async () => {
-      clearTimeout(t);
+      clearTimeout(timer);
       const doc = frame.contentDocument;
       try {
         await Promise.race([doc.fonts.ready, sleep(4000)]);
@@ -155,11 +164,11 @@ export function loadFrame(frame: HTMLIFrameElement, html: string, width: number,
       }
       await Promise.race([
         Promise.all(
-          [...doc.images].map(im =>
-            im.complete
+          [...doc.images].map(img =>
+            img.complete
               ? 0
-              : new Promise(r => {
-                  im.onload = im.onerror = r;
+              : new Promise(done => {
+                  img.onload = img.onerror = done;
                 }),
           ),
         ),
@@ -170,7 +179,7 @@ export function loadFrame(frame: HTMLIFrameElement, html: string, width: number,
     frame.srcdoc = html;
   });
 }
-export const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+export const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 /** 跨 realm 判断 CSSOM 规则类型 */
-export const ruleType = r => r.constructor && r.constructor.name;
+export const ruleType = (rule: CSSRule): string => rule.constructor && rule.constructor.name;

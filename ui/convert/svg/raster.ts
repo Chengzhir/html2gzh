@@ -3,6 +3,7 @@ import {
   SVG_NS,
   isSvg,
   isAnim,
+  isGraphics,
   hasAnim,
   inResource,
   ownAnims,
@@ -16,6 +17,34 @@ import {
 } from './dom.ts';
 import { inv, fromDom, mul, ID_M, isId, matrixAttr } from './path.ts';
 import { bakeStyleTransform } from './transform.ts';
+import type { Report } from './dom.ts';
+
+/** convertSvgs 的 ctx 里本文件用到的部分 */
+export interface RasterContext {
+  /** 位图 data URI → 正文里用的地址；不可用时为 null */
+  raster?: ((dataUri: string) => Promise<string>) | null;
+  /** 区域与内容相同的位图复用：键见 rasterize */
+  rasterCache: Map<string, RasterHit>;
+  copyText?: boolean;
+}
+/** 画好的位图（user units 里的位置与尺寸）；empty 表示画出来是空的 */
+export interface RasterHit {
+  empty?: boolean;
+  src?: string;
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+}
+interface Region {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** 1 user unit 合多少位图像素 */
+  k: number;
+  parent: SVGElement;
+}
 
 const DPR = 3,
   PHONE = 390,
@@ -64,18 +93,19 @@ const PAINT = ['fill', 'stroke'];
 // 动画改了这些可继承属性时，子孙画成位图就不对了
 const INHERITED_ANIM = /^(fill|stroke|color|font-size|stroke-width|stroke-dasharray|stroke-dashoffset)/;
 
-const usesOwn = (el, cs) => OWN.some(p => URL_REF.test(cs.getPropertyValue(p))) || el.localName === 'textPath';
-const usesPaint = cs => PAINT.some(p => URL_REF.test(cs.getPropertyValue(p)));
-const inheritedAnim = el => {
-  for (let a = el.parentElement; a && isSvg(a); a = a.parentElement)
-    if (ownAnims(a).some(x => INHERITED_ANIM.test(x.getAttribute('attributeName') || ''))) return true;
+const usesOwn = (el: Element, computed: CSSStyleDeclaration) =>
+  OWN.some(prop => URL_REF.test(computed.getPropertyValue(prop))) || el.localName === 'textPath';
+const usesPaint = (computed: CSSStyleDeclaration) => PAINT.some(prop => URL_REF.test(computed.getPropertyValue(prop)));
+const inheritedAnim = (el: Element) => {
+  for (let ancestor = el.parentElement; ancestor && isSvg(ancestor); ancestor = ancestor.parentElement)
+    if (ownAnims(ancestor).some(anim => INHERITED_ANIM.test(anim.getAttribute('attributeName') || ''))) return true;
   return false;
 };
-const usesIds = (el, win) => {
-  for (const d of [el, ...el.querySelectorAll('*')])
-    if (isSvg(d)) {
-      const cs = win.getComputedStyle(d);
-      if (usesOwn(d, cs) || usesPaint(cs)) return true;
+const usesIds = (el: Element, win: Window) => {
+  for (const node of [el, ...el.querySelectorAll('*')])
+    if (isSvg(node)) {
+      const computed = win.getComputedStyle(node);
+      if (usesOwn(node, computed) || usesPaint(computed)) return true;
     }
   return false;
 };
@@ -83,29 +113,29 @@ const usesIds = (el, win) => {
  * 子树用到的滤镜、蒙版、裁切、标记里有动画：画成位图会把动画冻住。
  * 渐变、图案里的动画不算：公众号删 id 之后填充引用不到它们，动画本来就播放不了，画成位图时取 0 秒时的值（frozenClone）
  */
-function refsAnimated(el, win, ids) {
-  for (const d of [el, ...el.querySelectorAll('*')]) {
-    if (!isSvg(d)) continue;
-    const cs = win.getComputedStyle(d);
-    for (const p of OWN) {
-      const m = URL_REF.exec(cs.getPropertyValue(p));
-      const r = m && ids.get(decodeURIComponent(m[1]));
-      if (r && hasAnim(r)) return true;
+function refsAnimated(el: Element, win: Window, ids: Map<string, Element>): boolean {
+  for (const node of [el, ...el.querySelectorAll('*')]) {
+    if (!isSvg(node)) continue;
+    const computed = win.getComputedStyle(node);
+    for (const prop of OWN) {
+      const match = URL_REF.exec(computed.getPropertyValue(prop));
+      const res = match && ids.get(decodeURIComponent(match[1]));
+      if (res && hasAnim(res)) return true;
     }
   }
   return false;
 }
 /** 子树的填充或描边用到的渐变、图案（含经 href 继承的）里有动画 */
 function paintAnimated(el: Element, win: Window, ids: Map<string, Element>): boolean {
-  for (const d of [el, ...el.querySelectorAll('*')]) {
-    if (!isSvg(d)) continue;
-    const cs = win.getComputedStyle(d);
-    for (const p of PAINT) {
-      const m = URL_REF.exec(cs.getPropertyValue(p));
-      let r = m ? ids.get(decodeURIComponent(m[1])) : undefined;
-      for (let i = 0; r && i < 8; i++) {
-        if (hasAnim(r)) return true;
-        r = ids.get(refId(hrefOf(r)) || '');
+  for (const node of [el, ...el.querySelectorAll('*')]) {
+    if (!isSvg(node)) continue;
+    const computed = win.getComputedStyle(node);
+    for (const prop of PAINT) {
+      const match = URL_REF.exec(computed.getPropertyValue(prop));
+      let res = match ? ids.get(decodeURIComponent(match[1])) : undefined;
+      for (let i = 0; res && i < 8; i++) {
+        if (hasAnim(res)) return true;
+        res = ids.get(refId(hrefOf(res)) || '');
       }
     }
   }
@@ -113,22 +143,22 @@ function paintAnimated(el: Element, win: Window, ids: Map<string, Element>): boo
 }
 
 type SvgWindow = Window & typeof globalThis;
-const camel = (s: string) => s.replace(/-(\w)/g, (_, c: string) => c.toUpperCase());
+const camel = (name: string) => name.replace(/-(\w)/g, (_, char: string) => char.toUpperCase());
 /** SVGAnimated* 的当前值写成属性值；枚举、字符串、viewBox 这类没有对应写法的返回 null */
 function animString(prop: { animVal: unknown }, win: SvgWindow): string | null {
   if (prop instanceof win.SVGAnimatedEnumeration) return null;
-  const v = prop.animVal;
-  if (typeof v === 'number') return String(v);
-  if (v instanceof win.SVGTransformList) {
+  const value = prop.animVal;
+  if (typeof value === 'number') return String(value);
+  if (value instanceof win.SVGTransformList) {
     let m = ID_M;
-    for (let i = 0; i < v.numberOfItems; i++) m = mul(m, fromDom(v.getItem(i).matrix));
+    for (let i = 0; i < value.numberOfItems; i++) m = mul(m, fromDom(value.getItem(i).matrix));
     return matrixAttr(m);
   }
-  if (v instanceof win.SVGLength || v instanceof win.SVGAngle) return v.valueAsString;
-  if (v instanceof win.SVGLengthList || v instanceof win.SVGNumberList) {
+  if (value instanceof win.SVGLength || value instanceof win.SVGAngle) return value.valueAsString;
+  if (value instanceof win.SVGLengthList || value instanceof win.SVGNumberList) {
     const out: string[] = [];
-    for (let i = 0; i < v.numberOfItems; i++) {
-      const item = v.getItem(i);
+    for (let i = 0; i < value.numberOfItems; i++) {
+      const item = value.getItem(i);
       out.push(item instanceof win.SVGLength ? item.valueAsString : String(item.value));
     }
     return out.join(' ');
@@ -137,10 +167,10 @@ function animString(prop: { animVal: unknown }, win: SvgWindow): string | null {
 }
 /** 把 el 上属性 name 在当前时刻的值写到副本 copy 上 */
 function freezeValue(el: SVGElement, copy: SVGElement, name: string, win: SvgWindow) {
-  const cs = win.getComputedStyle(el);
+  const computed = win.getComputedStyle(el);
   if (name === 'd') {
-    const m = /^path\("(.*)"\)$/.exec(cs.getPropertyValue('d'));
-    if (m) copy.setAttribute('d', m[1]);
+    const match = /^path\("(.*)"\)$/.exec(computed.getPropertyValue('d'));
+    if (match) copy.setAttribute('d', match[1]);
     return;
   }
   const props = el as unknown as Record<string, unknown>;
@@ -151,15 +181,15 @@ function freezeValue(el: SVGElement, copy: SVGElement, name: string, win: SvgWin
     prop = props[attr];
   }
   if (prop && typeof prop === 'object' && 'animVal' in prop) {
-    const v = animString(prop, win);
-    if (v == null) return;
-    copy.setAttribute(attr, v);
+    const value = animString(prop, win);
+    if (value == null) return;
+    copy.setAttribute(attr, value);
     // x、width、r 这类几何属性在 Chrome 里也是 CSS 属性，副本 style 里的旧值会盖过属性
     copy.style.removeProperty(name);
     return;
   }
-  const v = cs.getPropertyValue(name);
-  if (v) copy.style.setProperty(name, v);
+  const value = computed.getPropertyValue(name);
+  if (value) copy.style.setProperty(name, value);
 }
 /**
  * 资源的副本，动画改变的属性写成当前时刻（文档已暂停在 0 秒）的值。
@@ -180,31 +210,31 @@ function frozenClone(res: Element, win: SvgWindow): Element {
 }
 
 const RIGID = new Set(['transform', 'opacity', 'visibility']);
-const rigidAnim = a =>
+const rigidAnim = (a: Element) =>
   a.localName === 'animateMotion' || a.localName === 'animateTransform' || RIGID.has(a.getAttribute('attributeName'));
 
 /**
  * 自身只有整体动画（transform、位移路径、opacity、visibility）而内容静态、又依赖 id 的元素：
  * 这些动画连同静态的 transform/opacity/visibility 挪到外面套的 g 上，元素本身就成了静态的，可以画成位图
  */
-export function liftRigid(root, win, ids) {
+export function liftRigid(root: Element, win: Window, ids: Map<string, Element>): number {
   let n = 0;
   for (const el of [...root.querySelectorAll('*')]) {
-    if (!isSvg(el) || inResource(el) || el.localName === 'svg' || el.closest('foreignObject')) continue;
+    if (!isGraphics(el) || inResource(el) || el.localName === 'svg' || el.closest('foreignObject')) continue;
     const own = ownAnims(el);
     if (
       !own.length ||
       !own.every(rigidAnim) ||
-      [...el.querySelectorAll('*')].some(d => isAnim(d) && d.parentElement !== el)
+      [...el.querySelectorAll('*')].some(node => isAnim(node) && (node.parentElement as Element) !== el)
     )
       continue;
     if (!usesIds(el, win) || refsAnimated(el, win, ids) || !bakeStyleTransform(el)) continue;
     const g = wrapG(el);
-    for (const k of ['transform', 'opacity', 'visibility']) {
-      const v = el.style.getPropertyValue(k) || el.getAttribute(k);
-      if (v) g.setAttribute(k, v);
-      el.style.removeProperty(k);
-      el.removeAttribute(k);
+    for (const prop of ['transform', 'opacity', 'visibility']) {
+      const value = el.style.getPropertyValue(prop) || el.getAttribute(prop);
+      if (value) g.setAttribute(prop, value);
+      el.style.removeProperty(prop);
+      el.removeAttribute(prop);
     }
     for (const a of own) g.appendChild(a);
     n++;
@@ -220,131 +250,140 @@ interface SubtreeFlags {
   fo: boolean;
   uses?: boolean;
 }
-const SHAPE_KID = k => isSvg(k) && !isAnim(k) && !/^(title|desc|metadata)$/.test(k.localName);
+const SHAPE_KID = (kid: Element) => isSvg(kid) && !isAnim(kid) && !/^(title|desc|metadata)$/.test(kid.localName);
 /** 要画成位图的连续兄弟元素（静态、依赖 id）：[[el, el…], …] */
-export function findUnits(root, win, ids) {
+export function findUnits(root: Element, win: Window, ids: Map<string, Element>): Element[][] {
   // 自下而上算一遍每个元素子树的标志，免得逐层重复遍历（大插画有上千个元素）
-  const info = new Map(),
-    resAnim = new Map();
-  const animRes = r => {
-    if (!resAnim.has(r)) resAnim.set(r, hasAnim(r));
-    return resAnim.get(r);
+  const info = new Map<Element, SubtreeFlags>(),
+    resAnim = new Map<Element, boolean>();
+  const animRes = (res: Element) => {
+    if (!resAnim.has(res)) resAnim.set(res, hasAnim(res));
+    return resAnim.get(res);
   };
-  const visit = el => {
-    const cs = win.getComputedStyle(el);
-    const f: SubtreeFlags = {
-      own: usesOwn(el, cs),
-      paint: usesPaint(cs),
+  const visit = (el: Element): SubtreeFlags => {
+    const computed = win.getComputedStyle(el);
+    const flags: SubtreeFlags = {
+      own: usesOwn(el, computed),
+      paint: usesPaint(computed),
       anim: isAnim(el),
       refAnim: false,
       fo: el.localName === 'foreignObject',
     };
-    f.uses = f.own || f.paint;
-    for (const p of OWN) {
-      const m = URL_REF.exec(cs.getPropertyValue(p));
-      const r = m && ids.get(decodeURIComponent(m[1]));
-      if (r && animRes(r)) f.refAnim = true;
+    flags.uses = flags.own || flags.paint;
+    for (const prop of OWN) {
+      const match = URL_REF.exec(computed.getPropertyValue(prop));
+      const res = match && ids.get(decodeURIComponent(match[1]));
+      if (res && animRes(res)) flags.refAnim = true;
     }
-    for (const k of el.children)
-      if (isSvg(k)) {
-        const g = visit(k);
-        f.anim ||= g.anim;
-        f.uses ||= g.uses;
-        f.refAnim ||= g.refAnim;
-        f.fo ||= g.fo;
+    for (const kid of el.children)
+      if (isSvg(kid)) {
+        const kidFlags = visit(kid);
+        flags.anim ||= kidFlags.anim;
+        flags.uses ||= kidFlags.uses;
+        flags.refAnim ||= kidFlags.refAnim;
+        flags.fo ||= kidFlags.fo;
       }
-    info.set(el, f);
-    return f;
+    info.set(el, flags);
+    return flags;
   };
   visit(root);
-  const runs = [];
-  const walk = parent => {
-    let run = null;
+  const runs: Element[][] = [];
+  const walk = (parent: Element) => {
+    let run: Element[] | null = null;
     for (const el of [...parent.children]) {
-      const f = info.get(el);
-      if (!f || RESOURCE.has(el.localName) || el.localName === 'defs' || isAnim(el) || !el.getClientRects().length) {
+      const flags = info.get(el);
+      if (
+        !flags ||
+        RESOURCE.has(el.localName) ||
+        el.localName === 'defs' ||
+        isAnim(el) ||
+        !el.getClientRects().length
+      ) {
         run = null;
         continue;
       }
-      const stat = !f.anim && !f.fo && !f.refAnim && !inheritedAnim(el);
+      const stat = !flags.anim && !flags.fo && !flags.refAnim && !inheritedAnim(el);
       // 自己有滤镜/蒙版/裁切这类整体效果，或者是叶子元素（含文字）：整个画；否则往下找
       const whole =
         stat &&
-        (f.own || (f.paint && ![...el.children].some(SHAPE_KID)) || (/^(text|image)$/.test(el.localName) && f.uses));
+        (flags.own ||
+          (flags.paint && ![...el.children].some(SHAPE_KID)) ||
+          (/^(text|image)$/.test(el.localName) && flags.uses));
       if (whole) {
         if (!run) runs.push((run = []));
         run.push(el);
         continue;
       }
       run = null;
-      if (el.localName !== 'text' && el.localName !== 'foreignObject' && f.uses) walk(el);
+      if (el.localName !== 'text' && el.localName !== 'foreignObject' && flags.uses) walk(el);
     }
   };
   walk(root);
   return runs;
 }
 
-function region(run, win) {
-  const parent = run[0].parentElement,
+function region(run: Element[], win: Window): Region | null {
+  const parent = run[0].parentElement as Element as SVGGraphicsElement,
     doc = parent.ownerDocument;
   const g = mk(doc, 'g');
   run[0].before(g);
   for (const el of run) g.appendChild(el);
-  let bb = null;
+  let bbox: DOMRect | null = null;
   try {
-    bb = (g as SVGGraphicsElement).getBBox();
+    bbox = (g as SVGGraphicsElement).getBBox();
   } catch {
     /* 没画出来 */
   } finally {
     for (const el of [...g.childNodes]) g.before(el);
     g.remove();
   }
-  const sc = fromDom(parent.getScreenCTM());
-  if (!bb || !sc) return null;
-  const unit = Math.max(Math.hypot(sc[0], sc[1]), Math.hypot(sc[2], sc[3]));
+  const screenCtm = fromDom(parent.getScreenCTM());
+  if (!bbox || !screenCtm) return null;
+  const unit = Math.max(Math.hypot(screenCtm[0], screenCtm[1]), Math.hypot(screenCtm[2], screenCtm[3]));
   // getBBox 不含描边、标记、滤镜：四周放宽，最后按不透明像素裁掉。放宽量只用 user units，两个宽度下区域相同、位图能复用
-  const pad = Math.max(bb.width, bb.height) * 0.5 + 8;
-  let r = { x: bb.x - pad, y: bb.y - pad, w: bb.width + 2 * pad, h: bb.height + 2 * pad };
+  const pad = Math.max(bbox.width, bbox.height) * 0.5 + 8;
+  let rect = { x: bbox.x - pad, y: bbox.y - pad, w: bbox.width + 2 * pad, h: bbox.height + 2 * pad };
   const rootSvg = (() => {
-    let s = parent;
-    while (isSvg(s.parentElement)) s = s.parentElement;
-    return s;
+    let svg: Element = parent;
+    while (isSvg(svg.parentElement)) svg = svg.parentElement;
+    return svg;
   })();
   // 祖先有动画（会把画面外的部分挪进来）时不按视口裁
   let still = true;
-  for (let a = parent; a && isSvg(a); a = a.parentElement) if (ownAnims(a).length) still = false;
+  for (let ancestor: Element = parent; ancestor && isSvg(ancestor); ancestor = ancestor.parentElement)
+    if (ownAnims(ancestor).length) still = false;
   if (still && win.getComputedStyle(rootSvg).overflow !== 'visible') {
-    const vb = rootSvg.getBoundingClientRect(),
-      P = inv(sc);
-    const pts = [
-      [vb.left, vb.top],
-      [vb.right, vb.top],
-      [vb.left, vb.bottom],
-      [vb.right, vb.bottom],
+    const viewRect = rootSvg.getBoundingClientRect(),
+      P = inv(screenCtm);
+    const points = [
+      [viewRect.left, viewRect.top],
+      [viewRect.right, viewRect.top],
+      [viewRect.left, viewRect.bottom],
+      [viewRect.right, viewRect.bottom],
     ].map(([x, y]) => [P[0] * x + P[2] * y + P[4], P[1] * x + P[3] * y + P[5]]);
-    const xs = pts.map(p => p[0]),
-      ys = pts.map(p => p[1]);
-    const x0 = Math.max(r.x, Math.min(...xs)),
-      y0 = Math.max(r.y, Math.min(...ys)),
-      x1 = Math.min(r.x + r.w, Math.max(...xs)),
-      y1 = Math.min(r.y + r.h, Math.max(...ys));
-    r = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    const xs = points.map(point => point[0]),
+      ys = points.map(point => point[1]);
+    const x0 = Math.max(rect.x, Math.min(...xs)),
+      y0 = Math.max(rect.y, Math.min(...ys)),
+      x1 = Math.min(rect.x + rect.w, Math.max(...xs)),
+      y1 = Math.min(rect.y + rect.h, Math.max(...ys));
+    rect = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
   }
-  if (!(r.w > 0 && r.h > 0)) return null;
+  if (!(rect.w > 0 && rect.h > 0)) return null;
   const boost = Math.max(1, PHONE / (doc.documentElement.clientWidth || PHONE));
   let k = unit * DPR * boost;
-  if (r.w * r.h * k * k > MAX_PX) k = Math.sqrt(MAX_PX / (r.w * r.h));
-  return { ...r, k, parent };
+  if (rect.w * rect.h * k * k > MAX_PX) k = Math.sqrt(MAX_PX / (rect.w * rect.h));
+  return { ...rect, k, parent };
 }
-async function dataUri(win, url) {
+async function dataUri(win: SvgWindow, url: string | null): Promise<string | null> {
   if (!url || /^data:/i.test(url)) return url;
   try {
-    const b = await (await win.fetch(url)).blob();
-    return await new Promise((ok, bad) => {
-      const r = new win.FileReader();
-      r.onload = () => ok(r.result);
-      r.onerror = bad;
-      r.readAsDataURL(b);
+    const blob = await (await win.fetch(url)).blob();
+    return await new Promise<string>((ok, bad) => {
+      const reader = new win.FileReader();
+      reader.onload = () => ok(reader.result as string);
+      reader.onerror = bad;
+      reader.readAsDataURL(blob);
     });
   } catch {
     return null;
@@ -355,7 +394,13 @@ async function dataUri(win, url) {
  * 一组连续兄弟元素画成位图，换成同一位置的 foreignObject + 背景图。
  * 在父元素的坐标系里画（祖先的 transform、opacity、裁切照旧作用在它上面），只带可继承的样式与全部资源定义
  */
-async function rasterize(run, ctx, win, ids, rep) {
+async function rasterize(
+  run: Element[],
+  ctx: RasterContext,
+  win: SvgWindow,
+  ids: Map<string, Element>,
+  rep: Report,
+): Promise<boolean> {
   const doc = run[0].ownerDocument,
     R = region(run, win);
   if (!R) {
@@ -373,27 +418,28 @@ async function rasterize(run, ctx, win, ids, rep) {
     preserveAspectRatio: 'none',
   });
   const defs = mk(doc, 'defs');
-  for (const r of doc.querySelectorAll('linearGradient,radialGradient,pattern,filter,mask,clipPath,marker,symbol'))
-    if (isSvg(r)) defs.appendChild(frozenClone(r, win));
+  for (const res of doc.querySelectorAll('linearGradient,radialGradient,pattern,filter,mask,clipPath,marker,symbol'))
+    if (isSvg(res)) defs.appendChild(frozenClone(res, win));
   svg.appendChild(defs);
-  const pcs = win.getComputedStyle(parent),
+  const parentStyle = win.getComputedStyle(parent),
     wrap = mk(doc, 'g');
-  for (const p of INHERIT) {
-    const v = pcs.getPropertyValue(p);
-    if (v) wrap.style.setProperty(p, fixUrls(v));
+  for (const prop of INHERIT) {
+    const value = parentStyle.getPropertyValue(prop);
+    if (value) wrap.style.setProperty(prop, fixUrls(value));
   }
   for (const el of run) wrap.appendChild(el.cloneNode(true));
   svg.appendChild(wrap);
-  for (const n of svg.querySelectorAll('*')) {
-    if (isAnim(n)) {
-      n.remove();
+  for (const node of svg.querySelectorAll('*')) {
+    if (isAnim(node)) {
+      node.remove();
       continue;
     }
-    for (const a of [...n.attributes]) if (/url\(/.test(a.value)) n.setAttribute(a.name, fixUrls(a.value));
+    for (const attr of [...node.attributes])
+      if (/url\(/.test(attr.value)) node.setAttribute(attr.name, fixUrls(attr.value));
   }
-  for (const im of svg.getElementsByTagNameNS(SVG_NS, 'image')) {
-    const u = await dataUri(win, im.getAttribute('href'));
-    if (u) im.setAttribute('href', u);
+  for (const image of svg.getElementsByTagNameNS(SVG_NS, 'image')) {
+    const uri = await dataUri(win, image.getAttribute('href'));
+    if (uri) image.setAttribute('href', uri);
     else rep('raster:image', run[0]);
   }
   const key = `${R.x.toFixed(2)},${R.y.toFixed(2)},${R.w.toFixed(2)},${R.h.toFixed(2)}|${new win.XMLSerializer().serializeToString(wrap)}`;
@@ -406,12 +452,12 @@ async function rasterize(run, ctx, win, ids, rep) {
       const img = new win.Image();
       img.src = url;
       await img.decode();
-      const c = doc.createElement('canvas');
-      c.width = pw;
-      c.height = ph;
-      const x = c.getContext('2d');
-      x.drawImage(img, 0, 0, pw, ph);
-      const px = x.getImageData(0, 0, pw, ph).data;
+      const canvas = doc.createElement('canvas');
+      canvas.width = pw;
+      canvas.height = ph;
+      const context = canvas.getContext('2d');
+      context.drawImage(img, 0, 0, pw, ph);
+      const px = context.getImageData(0, 0, pw, ph).data;
       let x0 = pw,
         y0 = ph,
         x1 = -1,
@@ -419,9 +465,9 @@ async function rasterize(run, ctx, win, ids, rep) {
         opaque = true;
       for (let y = 0; y < ph; y++)
         for (let i = 0; i < pw; i++) {
-          const al = px[(y * pw + i) * 4 + 3];
-          if (!al) continue;
-          if (al < 255) opaque = false;
+          const alpha = px[(y * pw + i) * 4 + 3];
+          if (!alpha) continue;
+          if (alpha < 255) opaque = false;
           if (i < x0) x0 = i;
           if (i > x1) x1 = i;
           if (y < y0) y0 = y;
@@ -438,7 +484,7 @@ async function rasterize(run, ctx, win, ids, rep) {
           out = doc.createElement('canvas');
         out.width = cw;
         out.height = ch;
-        out.getContext('2d').drawImage(c, x0, y0, cw, ch, 0, 0, cw, ch);
+        out.getContext('2d').drawImage(canvas, x0, y0, cw, ch, 0, 0, cw, ch);
         // 每边都画满（整块铺底）用 JPEG，体积小得多
         const full = opaque && x0 === 0 && y0 === 0 && x1 === pw - 1 && y1 === ph - 1;
         const src = await ctx.raster(full ? out.toDataURL('image/jpeg', 0.92) : out.toDataURL('image/png'));
@@ -459,11 +505,11 @@ async function rasterize(run, ctx, win, ids, rep) {
     return false;
   }
   if (run.some(el => paintAnimated(el, win, ids))) rep('paint:frozen', run[0]);
-  const r3 = n => Math.round(n * 1000) / 1000;
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
   const fo = mk(doc, 'foreignObject', { x: r3(hit.x), y: r3(hit.y), width: r3(hit.w), height: r3(hit.h) });
-  const sec = doc.createElementNS('http://www.w3.org/1999/xhtml', 'section');
-  sec.style.cssText = `width:100%;height:100%;margin:0;padding:0;background-image:url("${hit.src}");background-size:100% 100%;background-repeat:no-repeat`;
-  fo.appendChild(sec);
+  const section = doc.createElementNS('http://www.w3.org/1999/xhtml', 'section') as HTMLElement;
+  section.style.cssText = `width:100%;height:100%;margin:0;padding:0;background-image:url("${hit.src}");background-size:100% 100%;background-repeat:no-repeat`;
+  fo.appendChild(section);
   run[0].before(fo);
   const copies = text && ctx.copyText ? textCopies(run, parent, win) : null;
   if (copies) fo.after(...copies.nodes);
@@ -509,29 +555,30 @@ function textCopies(run: Element[], parent: Element, win: SvgWindow) {
     const from = [text, ...text.querySelectorAll('*')],
       to = [copy, ...copy.querySelectorAll('*')];
     from.forEach((el, i) => {
-      const c = to[i] as SVGElement;
-      if (isAnim(c)) {
-        c.remove();
+      const target = to[i] as SVGElement;
+      if (isAnim(target)) {
+        target.remove();
         return;
       }
-      for (const a of ['id', 'class', 'style', 'fill', 'stroke', 'filter', 'mask', 'clip-path', 'data-wxc'])
-        c.removeAttribute(a);
+      for (const attr of ['id', 'class', 'style', 'fill', 'stroke', 'filter', 'mask', 'clip-path', 'data-wxc'])
+        target.removeAttribute(attr);
       // 只写与副本所在位置继承来的值不同的属性：副本的上一层是 parent，tspan 的上一层是副本里对应的元素
-      const cs = win.getComputedStyle(el),
+      const computed = win.getComputedStyle(el),
         up = win.getComputedStyle(i ? el.parentElement : parent);
-      for (const p of TEXT_PROPS) {
-        const v = cs.getPropertyValue(p);
+      for (const prop of TEXT_PROPS) {
+        const value = computed.getPropertyValue(prop);
         // baseline-shift 不继承，与初始值比
-        if (v !== (p === 'baseline-shift' ? '0px' : up.getPropertyValue(p))) c.style.setProperty(p, v);
+        if (value !== (prop === 'baseline-shift' ? '0px' : up.getPropertyValue(prop)))
+          target.style.setProperty(prop, value);
       }
       // 属性与 style 各写一份：路径上方的透明文字用的是 fill-opacity 属性（2026-10-20 实测存得住）
-      for (const [p, v] of [
+      for (const [prop, value] of [
         ['fill', '#000'],
         ['fill-opacity', '0'],
         ['stroke', 'none'],
       ]) {
-        c.setAttribute(p, v);
-        c.style.setProperty(p, v);
+        target.setAttribute(prop, value);
+        target.style.setProperty(prop, value);
       }
     });
     const rel = mul(inv(P), M);
@@ -543,7 +590,13 @@ function textCopies(run: Element[], parent: Element, win: SvgWindow) {
 }
 
 /** 依赖 id 的静态部分逐组画成位图；ctx.raster 不可用时跳过（改由 paint 近似） */
-export async function rasterAll(root, ctx, win, ids, rep) {
+export async function rasterAll(
+  root: Element,
+  ctx: RasterContext,
+  win: SvgWindow,
+  ids: Map<string, Element>,
+  rep: Report,
+): Promise<number> {
   if (!ctx.raster) return 0;
   let n = 0;
   for (const run of findUnits(root, win, ids)) if (await rasterize(run, ctx, win, ids, rep)) n++;

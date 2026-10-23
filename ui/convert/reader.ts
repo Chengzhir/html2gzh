@@ -1,4 +1,5 @@
 import { ID, measure, round } from './util.ts';
+import type { BoxRect } from './types.ts';
 
 /** 微信手机端正文区的默认样式（抓自线上文章页 CSS），预览与校验都在它下面进行 */
 export const READER_CSS = `.rich_media_content{color:rgba(0,0,0,.9);font-size:17px;overflow:hidden;text-align:justify;position:relative;z-index:0;line-height:1.6;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:.544px;hyphens:auto;-webkit-hyphens:auto;text-underline-position:under;text-underline-offset:1.6px;text-decoration-skip-ink:none}
@@ -14,7 +15,7 @@ export const READER_CSS = `.rich_media_content{color:rgba(0,0,0,.9);font-size:17
 export const NEUTRAL = `html,body{margin:0!important;padding:0!important;border:0!important}html{scrollbar-width:none}html::-webkit-scrollbar{display:none}`;
 
 /** 预览/校验用文档：微信正文区默认样式 + 成品片段。图片尺寸还要再跑一遍 readerImages */
-export function previewDoc(fragment, extraCss = '') {
+export function previewDoc(fragment: string, extraCss = '') {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${NEUTRAL}${READER_CSS}${extraCss}</style></head><body><div class="rich_media_content">${fragment}</div></body></html>`;
 }
 
@@ -31,39 +32,40 @@ export function readerImages(doc = document, exact = false) {
   const win = doc.defaultView;
   const content = doc.querySelector('.rich_media_content') as HTMLElement;
   if (!content) return 0;
-  const num = v => parseFloat(v) || 0;
-  const client = (p, c) => {
-    if (!exact) return p.clientWidth;
-    const w = num(c.width);
+  const num = (value: string) => parseFloat(value) || 0;
+  const client = (parent: Element, computed: CSSStyleDeclaration) => {
+    if (!exact) return parent.clientWidth;
+    const w = num(computed.width);
     if (!w) return 0;
-    return c.boxSizing === 'border-box'
-      ? w - num(c.borderLeftWidth) - num(c.borderRightWidth)
-      : w + num(c.paddingLeft) + num(c.paddingRight);
+    return computed.boxSizing === 'border-box'
+      ? w - num(computed.borderLeftWidth) - num(computed.borderRightWidth)
+      : w + num(computed.paddingLeft) + num(computed.paddingRight);
   };
-  const parentW = el => {
+  const parentW = (el: Element) => {
     let outer = 0;
-    for (let p = el.parentNode; p && p.nodeType === 1; p = p.parentNode) {
-      const c = win.getComputedStyle(p);
-      const w = client(p, c) - num(c.paddingLeft) - num(c.paddingRight) - outer;
+    for (let parent = el.parentNode; parent && parent.nodeType === 1; parent = parent.parentNode) {
+      const computed = win.getComputedStyle(parent as Element);
+      const w = client(parent as Element, computed) - num(computed.paddingLeft) - num(computed.paddingRight) - outer;
       if (w > 0) return w;
       outer +=
-        num(c.paddingLeft) +
-        num(c.paddingRight) +
-        num(c.marginLeft) +
-        num(c.marginRight) +
-        num(c.borderLeftWidth) +
-        num(c.borderRightWidth);
+        num(computed.paddingLeft) +
+        num(computed.paddingRight) +
+        num(computed.marginLeft) +
+        num(computed.marginRight) +
+        num(computed.borderLeftWidth) +
+        num(computed.borderRightWidth);
     }
     return 0;
   };
-  const cc = win.getComputedStyle(content);
-  const maxW = content.offsetWidth - num(cc.paddingLeft) - num(cc.paddingRight);
+  const contentStyle = win.getComputedStyle(content);
+  const maxW = content.offsetWidth - num(contentStyle.paddingLeft) - num(contentStyle.paddingRight);
   let n = 0;
   for (const img of content.querySelectorAll('img')) {
     if (!img.naturalWidth) continue;
     const ratio = img.naturalHeight / img.naturalWidth;
-    let w: any = img.style.width || img.getAttribute('width') || img.naturalWidth;
-    if (parseFloat(w) > maxW) w = maxW;
+    // 宽度先是属性原文（字符串）或原图宽度（数字），换算后变成数字
+    let w: string | number = img.style.width || img.getAttribute('width') || img.naturalWidth;
+    if (parseFloat(w as string) > maxW) w = maxW;
     if (w === 'inherit') w = parentW(img) || maxW;
     if (exact && typeof w === 'string' && w.includes('%')) {
       img.style.cssText += `;height: auto !important; aspect-ratio: calc(1/${ratio});`;
@@ -75,9 +77,9 @@ export function readerImages(doc = document, exact = false) {
       w = (parseFloat(w) / 100) * (parentW(img) || maxW);
     }
     if (w === 'auto') w = img.naturalWidth;
-    const m = /^(\d+(?:\.\d+)?)([a-zA-Z%]+)?$/.exec(w);
-    const unit = m && m[2] ? m[2] : 'px';
-    let wn = m ? +m[1] : 0;
+    const match = /^(\d+(?:\.\d+)?)([a-zA-Z%]+)?$/.exec(w as string);
+    const unit = match && match[2] ? match[2] : 'px';
+    let wn = match ? +match[1] : 0;
     img.style.cssText += `;width: ${wn}${unit} !important;`;
     const pw = parentW(img);
     if (wn > pw) wn = pw;
@@ -87,18 +89,21 @@ export function readerImages(doc = document, exact = false) {
   return n;
 }
 
-const edges = c => ({
+const edges = (computed: CSSStyleDeclaration) => ({
   w:
-    parseFloat(c.paddingLeft) +
-    parseFloat(c.paddingRight) +
-    parseFloat(c.borderLeftWidth) +
-    parseFloat(c.borderRightWidth),
+    parseFloat(computed.paddingLeft) +
+    parseFloat(computed.paddingRight) +
+    parseFloat(computed.borderLeftWidth) +
+    parseFloat(computed.borderRightWidth),
   h:
-    parseFloat(c.paddingTop) +
-    parseFloat(c.paddingBottom) +
-    parseFloat(c.borderTopWidth) +
-    parseFloat(c.borderBottomWidth),
+    parseFloat(computed.paddingTop) +
+    parseFloat(computed.paddingBottom) +
+    parseFloat(computed.borderTopWidth) +
+    parseFloat(computed.borderBottomWidth),
 });
+
+/** 图片 data-wxc → 宽、高要不要钉住（主宽度定下，另一个宽度照做） */
+export type ImagePins = Map<string, { w: boolean; h: boolean }>;
 
 /**
  * 转换时先在当前文档里模拟一遍 readerImages，尺寸会被它改掉的图：
@@ -108,12 +113,12 @@ const edges = c => ({
  *   高度是纯 cqw 或纯 px 时任何宽度都准；% 宽配固定 px 边框/内边距时高度不成比例，只在主宽度精确。
  * 处理方式由主宽度决定并记在 pins 里，另一个宽度照做，两边结构一致才能拟合。
  */
-export function pinImages(doc, root, pins) {
+export function pinImages(doc: Document, root: Element, pins: ImagePins) {
   const win = doc.defaultView;
-  const all = [...doc.querySelectorAll('.rich_media_content img')];
-  const imgs = all.filter(i => i.naturalWidth && i.hasAttribute(ID) && root.contains(i));
-  if (imgs.some(i => !pins.has(i.getAttribute(ID)))) {
-    const saved = all.map(i => i.getAttribute('style'));
+  const all = [...doc.querySelectorAll<HTMLImageElement>('.rich_media_content img')];
+  const imgs = all.filter(img => img.naturalWidth && img.hasAttribute(ID) && root.contains(img));
+  if (imgs.some(img => !pins.has(img.getAttribute(ID)))) {
+    const saved = all.map(img => img.getAttribute('style'));
     const before = measure(doc, true);
     readerImages(doc);
     const after = measure(doc, true);
@@ -123,24 +128,27 @@ export function pinImages(doc, root, pins) {
     });
     for (const img of imgs) {
       const id = img.getAttribute(ID),
-        a = before.get(id),
-        b = after.get(id);
+        boxBefore: BoxRect | undefined = before.get(id),
+        boxAfter: BoxRect | undefined = after.get(id);
       if (pins.has(id)) continue;
       // 0.5px 以内是阅读页按 clientWidth（取整）算宽度带来的，不算变形
-      pins.set(id, { w: !!(a && b) && Math.abs(a.w - b.w) > 0.5, h: !!(a && b) && Math.abs(a.h - b.h) > 0.5 });
+      pins.set(id, {
+        w: !!(boxBefore && boxAfter) && Math.abs(boxBefore.w - boxAfter.w) > 0.5,
+        h: !!(boxBefore && boxAfter) && Math.abs(boxBefore.h - boxAfter.h) > 0.5,
+      });
     }
   }
   const now = measure(doc, true);
   let n = 0;
   for (const img of imgs) {
-    const p = pins.get(img.getAttribute(ID)),
-      r = now.get(img.getAttribute(ID));
-    if (!p || !r || !(p.w || p.h)) continue;
-    const c = win.getComputedStyle(img);
-    const e = c.boxSizing === 'content-box' ? edges(c) : { w: 0, h: 0 };
-    if (p.w) img.style.setProperty('width', round(r.w - e.w) + 'px');
-    if (p.h) {
-      const h = round(r.h - e.h) + 'px';
+    const pin = pins.get(img.getAttribute(ID)),
+      box = now.get(img.getAttribute(ID));
+    if (!pin || !box || !(pin.w || pin.h)) continue;
+    const computed = win.getComputedStyle(img);
+    const edge = computed.boxSizing === 'content-box' ? edges(computed) : { w: 0, h: 0 };
+    if (pin.w) img.style.setProperty('width', round(box.w - edge.w) + 'px');
+    if (pin.h) {
+      const h = round(box.h - edge.h) + 'px';
       img.style.setProperty('min-height', h);
       img.style.setProperty('max-height', h);
     }

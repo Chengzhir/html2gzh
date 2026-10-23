@@ -15,6 +15,8 @@ import {
   danglingRefs,
 } from './structure.ts';
 import { liftRigid, rasterAll } from './raster.ts';
+import type { RasterContext } from './raster.ts';
+import type { CssAnims } from './css.ts';
 import { fixRefs } from './paint.ts';
 import { msg } from '../types.ts';
 import type { FindingLevel, FindingPart, Msg, Param } from '../types.ts';
@@ -28,9 +30,19 @@ export interface SvgFinding {
   els: Element[];
 }
 
+/** prepareSvgs 的结果：id 表与 SVG 上的 CSS 动画 */
+export interface SvgState {
+  ids: Map<string, Element>;
+  anims: CssAnims;
+}
+/** convertSvgs 的 ctx：位图化用的部分见 RasterContext */
+export interface SvgContext extends RasterContext {
+  spline?: boolean;
+}
+
 /** 样式表删掉之前调用：建 id 表，读下 SVG 上的 CSS 动画 */
-export function prepareSvgs(doc) {
-  const ids = new Map();
+export function prepareSvgs(doc: Document): SvgState | null {
+  const ids = new Map<string, Element>();
   for (const el of doc.querySelectorAll('[id]')) if (!ids.has(el.id)) ids.set(el.id, el);
   if (!doc.getElementsByTagNameNS(SVG_NS, 'svg').length) return null;
   return { ids, anims: captureCss(doc, ids) };
@@ -51,50 +63,54 @@ interface SvgStat {
   filter?: number;
   images?: number;
 }
-const freeze = doc => {
-  for (const s of doc.getElementsByTagNameNS(SVG_NS, 'svg')) {
-    s.pauseAnimations();
-    s.setCurrentTime(0);
+const freeze = (doc: Document) => {
+  for (const svg of doc.getElementsByTagNameNS(SVG_NS, 'svg') as HTMLCollectionOf<SVGSVGElement>) {
+    svg.pauseAnimations();
+    svg.setCurrentTime(0);
   }
 };
 
 /**
- * 层叠已内联、样式表已删掉之后调用。ctx: { raster(dataUri) → 地址, rasterCache: Map, spline }。
+ * 层叠已内联、样式表已删掉之后调用。ctx: { raster(dataUri) → 地址, rasterCache: Map, spline, copyText }。
  * 返回 { stat, findings: SvgFinding[] }
  */
-export async function convertSvgs(doc: Document, st, ctx): Promise<{ stat?: SvgStat; findings: SvgFinding[] }> {
+export async function convertSvgs(
+  doc: Document,
+  st: SvgState | null,
+  ctx: SvgContext,
+): Promise<{ stat?: SvgStat; findings: SvgFinding[] }> {
   if (!st) return { findings: [] };
   const win = doc.defaultView,
-    t = tally(),
-    rep = t.add;
+    counts = tally(),
+    rep = counts.add;
   const stat: SvgStat = {};
   freeze(doc);
   normalizeHref(doc);
   stat.retarget = retarget(doc, st.ids);
-  const u = expandUse(doc, st.ids, st.anims);
-  stat.use = u.n;
-  if (u.bad) rep('use:bad', null, u.bad);
+  const used = expandUse(doc, st.ids, st.anims);
+  stat.use = used.n;
+  if (used.bad) rep('use:bad', null, used.bad);
   stat.mpath = inlineMpath(doc, st.ids);
   stat.links = linksToG(doc);
-  const tm = resolveTiming(doc, st.ids);
-  stat.timing = tm.fixed;
-  for (const a of tm.broken) rep('timing', a);
+  const timing = resolveTiming(doc, st.ids);
+  stat.timing = timing.fixed;
+  for (const anim of timing.broken) rep('timing', anim);
   stat.css = cssToSmil(doc, st.anims, { spline: !!ctx.spline, rep });
   stat.whitelist = fixWhitelist(doc, st.ids, rep);
   stat.touch = touchToClick(doc);
   freeze(doc);
-  for (const root of [...doc.getElementsByTagNameNS(SVG_NS, 'svg')].filter(s => !isSvg(s.parentElement))) {
+  for (const root of [...doc.getElementsByTagNameNS(SVG_NS, 'svg')].filter(svg => !isSvg(svg.parentElement))) {
     liftRigid(root, win, st.ids);
     stat.raster = (stat.raster || 0) + (await rasterAll(root, ctx, win, st.ids, rep));
   }
   freeze(doc);
-  const fr = fixRefs(doc.documentElement, st.ids, win, rep);
-  stat.clip = fr.clip;
-  stat.filter = fr.filter;
+  const refs = fixRefs(doc.documentElement, st.ids, win, rep);
+  stat.clip = refs.clip;
+  stat.filter = refs.filter;
   stat.images = imagesToFo(doc, rep);
   danglingRefs(doc, rep);
   cleanup(doc);
-  return { stat, findings: findings(stat, t) };
+  return { stat, findings: findings(stat, counts) };
 }
 
 /** 对 SVG 做了的改写，按这个顺序列出；文案 finding.svg.done.<键> */
@@ -117,11 +133,11 @@ const CSS_WHY = new Set(['root', 'paused', 'composite', 'zero', 'easing', 'trans
 /** 有动画的图形上保留不了的效果（文案 svgRef.<键>） */
 const REF_WHAT = new Set(['clip', 'filter', 'mask', 'marker', 'textPath', 'other']);
 /** 汇总成检查结果 */
-function findings(s: SvgStat, t: ReturnType<typeof tally>): SvgFinding[] {
+function findings(stat: SvgStat, counts: ReturnType<typeof tally>): SvgFinding[] {
   const out: SvgFinding[] = [],
-    roots = (keys: string[]) => [...new Set(keys.flatMap(k => t.roots(k)))];
-  const keys = [...t.m.keys()],
-    sum = (ks: string[]) => ks.reduce((n, k) => n + t.n(k), 0);
+    roots = (keys: string[]) => [...new Set(keys.flatMap(k => counts.roots(k)))];
+  const keys = [...counts.m.keys()],
+    sum = (subset: string[]) => subset.reduce((n, k) => n + counts.n(k), 0);
   const add = (
     level: FindingLevel,
     code: string,
@@ -129,7 +145,7 @@ function findings(s: SvgStat, t: ReturnType<typeof tally>): SvgFinding[] {
     els: Element[] = [],
     parts: FindingPart[] = [],
   ) => out.push({ level, code: 'svg.' + code, params, parts, els });
-  const done = DONE.filter(k => s[k]).map(k => msg('finding.svg.done.' + k, { n: s[k] }));
+  const done = DONE.filter(k => stat[k]).map(k => msg('finding.svg.done.' + k, { n: stat[k] }));
   if (done.length) add('fixed', 'done', { n: done.length }, [], [{ items: done }]);
   const timing = keys.filter(k => k === 'timing');
   if (timing.length) add('warn', 'timing', { n: sum(timing) }, roots(timing));
@@ -137,18 +153,19 @@ function findings(s: SvgStat, t: ReturnType<typeof tally>): SvgFinding[] {
   if (css.length) {
     const why = new Map<string, Msg>();
     for (const k of css) {
-      const r = k.slice(4);
-      if (r.startsWith('prop:')) why.set(k, msg('svgWhy.prop', { name: r.slice(5) }));
-      else why.set(r, CSS_WHY.has(r) ? msg('svgWhy.' + r) : msg('common.raw', { msg: k }));
+      const reason = k.slice(4);
+      if (reason.startsWith('prop:')) why.set(k, msg('svgWhy.prop', { name: reason.slice(5) }));
+      else why.set(reason, CSS_WHY.has(reason) ? msg('svgWhy.' + reason) : msg('common.raw', { msg: k }));
     }
     add('warn', 'css', { n: sum(css) }, roots(css), [{ items: [...why.values()] }]);
   }
-  if (t.n('css:overlap')) add('info', 'overlap', { n: t.n('css:overlap') }, t.roots('css:overlap'));
+  if (counts.n('css:overlap')) add('info', 'overlap', { n: counts.n('css:overlap') }, counts.roots('css:overlap'));
   const anim = keys.filter(k => k.startsWith('anim:'));
   if (anim.length) add('warn', 'anim', { n: sum(anim), attrs: [...new Set(anim.map(k => k.slice(5)))] }, roots(anim));
   const paint = keys.filter(k => k === 'paint:avg' || k === 'paint:lost');
   if (paint.length) add('warn', 'paint', { n: sum(paint) }, roots(paint));
-  if (t.n('paint:frozen')) add('warn', 'paintFrozen', { n: t.n('paint:frozen') }, t.roots('paint:frozen'));
+  if (counts.n('paint:frozen'))
+    add('warn', 'paintFrozen', { n: counts.n('paint:frozen') }, counts.roots('paint:frozen'));
   const ref = keys.filter(k => k.startsWith('ref:'));
   if (ref.length) {
     const what = [...new Set(ref)].map(k =>
@@ -156,10 +173,11 @@ function findings(s: SvgStat, t: ReturnType<typeof tally>): SvgFinding[] {
     );
     add('warn', 'ref', { n: sum(ref), what }, roots(ref));
   }
-  if (t.n('clip:approx')) add('info', 'clipApprox', { n: t.n('clip:approx') }, t.roots('clip:approx'));
-  const rf = keys.filter(k => k === 'raster:fail' || k === 'raster:image' || k === 'image:size' || k === 'use:bad');
-  if (rf.length) add('warn', 'fail', { n: sum(rf) }, roots(rf));
-  if (t.n('raster:text')) add('info', 'rasterText', { n: t.n('raster:text') }, t.roots('raster:text'));
-  if (t.n('raster:textCopy')) add('info', 'rasterTextCopy', { n: t.n('raster:textCopy') }, t.roots('raster:textCopy'));
+  if (counts.n('clip:approx')) add('info', 'clipApprox', { n: counts.n('clip:approx') }, counts.roots('clip:approx'));
+  const failed = keys.filter(k => k === 'raster:fail' || k === 'raster:image' || k === 'image:size' || k === 'use:bad');
+  if (failed.length) add('warn', 'fail', { n: sum(failed) }, roots(failed));
+  if (counts.n('raster:text')) add('info', 'rasterText', { n: counts.n('raster:text') }, counts.roots('raster:text'));
+  if (counts.n('raster:textCopy'))
+    add('info', 'rasterTextCopy', { n: counts.n('raster:textCopy') }, counts.roots('raster:textCopy'));
   return out;
 }

@@ -2,7 +2,6 @@
 // 被 e2e.mjs --svg 调用；也可单独跑：node test/align.mjs <文章路径> [设备像素比…]
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { findChrome } from '../lib/chrome.ts';
 import { previewDoc, readerImages } from '../ui/convert/reader.ts';
@@ -118,7 +117,7 @@ export async function alignUnits(browser, original, preview, width, dpr, origin)
             }
             return [best, bv];
           };
-          // 先在 0 附近找。不按墨迹重心粗估：截图框里露进来的邻近色块（如旋转的印章底色）比字的墨迹重得多，会把重心带偏。
+          // 先在 0 附近找。不按墨迹重心粗估：截图框里露进来的邻近色块（如旋转的色块）比字的墨迹重得多，会把重心带偏。
           // 附近找到的峰与两边墨迹的归一化相关不到 0.5，说明整段挪远了，再全程找
           const norm = p => Math.sqrt(p.reduce((t, v) => t + v * v, 0));
           let [best, bv] = peak(-6, 6);
@@ -147,7 +146,7 @@ export async function alignUnits(browser, original, preview, width, dpr, origin)
   }));
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) {
   const ARTICLE = path.resolve(process.argv[2]);
   const DPRS = process.argv.slice(3).map(Number).filter(Boolean);
   const IMG = 48980,

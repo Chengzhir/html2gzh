@@ -2,9 +2,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 
-export const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+export const ROOT = path.dirname(import.meta.dirname);
 /** 页面的构建结果（npm run build 生成） */
 export const UI_DIR = path.join(ROOT, 'ui', 'dist');
 const argv = process.argv.slice(2);

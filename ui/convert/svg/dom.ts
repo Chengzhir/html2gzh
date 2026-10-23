@@ -32,75 +32,84 @@ export const RESOURCE = new Set([
 ]);
 const NON_RENDER = new Set([...RESOURCE, 'defs']);
 
-export const isSvg = n => n && n.nodeType === 1 && n.namespaceURI === SVG_NS;
-export const isAnim = n => isSvg(n) && ANIM.has(n.localName);
-export const hrefOf = el => el.getAttribute('href') ?? el.getAttributeNS(XLINK_NS, 'href');
-export const refId = s => {
-  const m = /^\s*#(.+?)\s*$/.exec(s || '');
-  return m ? decodeURIComponent(m[1]) : null;
+export const isSvg = (node: Node | null | undefined): node is SVGElement =>
+  node && node.nodeType === 1 && (node as Element).namespaceURI === SVG_NS;
+export const isAnim = (node: Node | null | undefined): node is SVGAnimationElement =>
+  isSvg(node) && ANIM.has(node.localName);
+/** 能取变换矩阵的图形元素（图形、容器、文字）；按方法判断，iframe 里的元素 instanceof 不认外层的类 */
+export const isGraphics = (node: Node | null | undefined): node is SVGGraphicsElement =>
+  isSvg(node) && typeof (node as SVGGraphicsElement).getCTM === 'function';
+export const hrefOf = (el: Element): string | null => el.getAttribute('href') ?? el.getAttributeNS(XLINK_NS, 'href');
+export const refId = (text: string | null | undefined): string | null => {
+  const match = /^\s*#(.+?)\s*$/.exec(text || '');
+  return match ? decodeURIComponent(match[1]) : null;
 };
 /** 同一文档的 url(#id) 引用：计算样式里会被补成 url("about:srcdoc#id") 之类的绝对地址 */
 export const URL_REF = /url\(\s*["']?(?:[^"')#]*)#([^"')]+)["']?\s*\)/;
-export const fixUrls = s => s.replace(/url\(\s*["']?[^"')#]*#([^"')]+)["']?\s*\)/g, 'url(#$1)');
+export const fixUrls = (text: string): string => text.replace(/url\(\s*["']?[^"')#]*#([^"')]+)["']?\s*\)/g, 'url(#$1)');
 
 /** 动画作用的元素：href 指向的元素，否则父元素 */
-export function targetOf(a, ids) {
-  const h = refId(hrefOf(a));
-  return h ? ids.get(h) || null : a.parentElement;
+export function targetOf(anim: Element, ids: Map<string, Element>): Element | null {
+  const href = refId(hrefOf(anim));
+  return href ? ids.get(href) || null : anim.parentElement;
 }
 /** 在不画出来的容器里（defs、symbol、渐变……） */
-export function inResource(el) {
-  for (let a = el.parentElement; a && isSvg(a); a = a.parentElement) if (NON_RENDER.has(a.localName)) return true;
+export function inResource(el: Element): boolean {
+  for (let ancestor = el.parentElement; ancestor && isSvg(ancestor); ancestor = ancestor.parentElement)
+    if (NON_RENDER.has(ancestor.localName)) return true;
   return false;
 }
-export const outerSvg = el => {
-  let r = null;
-  for (let a = el; a && isSvg(a); a = a.parentElement) if (a.localName === 'svg') r = a;
-  return r;
+export const outerSvg = (el: Element): Element | null => {
+  let outer: Element | null = null;
+  for (let ancestor: Element = el; ancestor && isSvg(ancestor); ancestor = ancestor.parentElement)
+    if (ancestor.localName === 'svg') outer = ancestor;
+  return outer;
 };
-export const svgKids = el => [...el.children].filter(isSvg);
-export const ownAnims = el => svgKids(el).filter(k => ANIM.has(k.localName));
-export const hasAnim = el => [...el.getElementsByTagNameNS(SVG_NS, '*')].some(n => ANIM.has(n.localName));
+export const svgKids = (el: Element): SVGElement[] => [...el.children].filter(isSvg);
+export const ownAnims = (el: Element): SVGElement[] => svgKids(el).filter(kid => ANIM.has(kid.localName));
+export const hasAnim = (el: Element): boolean =>
+  [...el.getElementsByTagNameNS(SVG_NS, '*')].some(node => ANIM.has(node.localName));
 
 /**
  * x/y 的 <animate>/<set>（元素换成没有 x/y 的 g 或 foreignObject 外层时用）→ 相对原位置平移的 animateTransform；
  * base 是静态的 x/y。by 本来就是增量；additive="sum" 的保持增量
  */
-export function xyToTranslate(a, base) {
-  const p = a.getAttribute('attributeName'),
-    sum = a.getAttribute('additive') === 'sum';
-  const at = mk(a.ownerDocument, 'animateTransform', {
+export function xyToTranslate(anim: Element, base: number): Element {
+  const attrName = anim.getAttribute('attributeName'),
+    sum = anim.getAttribute('additive') === 'sum';
+  const animTransform = mk(anim.ownerDocument, 'animateTransform', {
     attributeName: 'transform',
     type: 'translate',
     additive: 'sum',
   });
-  for (const k of a.getAttributeNames())
-    if (!/^(attributeName|attributeType|values|from|to|by|additive)$/.test(k)) at.setAttribute(k, a.getAttribute(k));
-  for (const k of ['values', 'from', 'to', 'by']) {
-    if (!a.hasAttribute(k)) continue;
-    at.setAttribute(
-      k,
-      a
-        .getAttribute(k)
+  for (const name of anim.getAttributeNames())
+    if (!/^(attributeName|attributeType|values|from|to|by|additive)$/.test(name))
+      animTransform.setAttribute(name, anim.getAttribute(name));
+  for (const name of ['values', 'from', 'to', 'by']) {
+    if (!anim.hasAttribute(name)) continue;
+    animTransform.setAttribute(
+      name,
+      anim
+        .getAttribute(name)
         .split(';')
-        .filter(s => s.trim())
-        .map(s => {
-          const d = parseFloat(s) - (k === 'by' || sum ? 0 : base);
-          return p === 'x' ? `${d} 0` : `0 ${d}`;
+        .filter(value => value.trim())
+        .map(value => {
+          const delta = parseFloat(value) - (name === 'by' || sum ? 0 : base);
+          return attrName === 'x' ? `${delta} 0` : `0 ${delta}`;
         })
         .join(';'),
     );
   }
-  if (a.localName === 'set') {
-    at.setAttribute('values', at.getAttribute('to'));
-    at.removeAttribute('to');
+  if (anim.localName === 'set') {
+    animTransform.setAttribute('values', animTransform.getAttribute('to'));
+    animTransform.removeAttribute('to');
   }
-  return at;
+  return animTransform;
 }
 
 export function mk(doc: Document, tag: string, attrs: Record<string, unknown> = {}) {
   const e = doc.createElementNS(SVG_NS, tag);
-  for (const [k, v] of Object.entries(attrs)) if (v != null) e.setAttribute(k, String(v));
+  for (const [name, value] of Object.entries(attrs)) if (value != null) e.setAttribute(name, String(value));
   return e;
 }
 /** 用一个 <g> 把元素包起来，返回这个 g */
@@ -113,18 +122,19 @@ export function wrapG(el: Element, attrs?: Record<string, unknown>) {
 
 /** 汇总要报给用户的情况：同类合并计数，记下所在的最外层 svg */
 export function tally() {
-  const m = new Map<string, { n: number; roots: Set<Element> }>();
+  const counts = new Map<string, { n: number; roots: Set<Element> }>();
   const add = (key: string, el: Element | null, n = 1) => {
-    let t = m.get(key);
-    if (!t) m.set(key, (t = { n: 0, roots: new Set() }));
-    t.n += n;
-    const r = el && outerSvg(el);
-    if (r) t.roots.add(r);
+    let entry = counts.get(key);
+    if (!entry) counts.set(key, (entry = { n: 0, roots: new Set() }));
+    entry.n += n;
+    const root = el && outerSvg(el);
+    if (root) entry.roots.add(root);
   };
   return {
-    m,
+    m: counts,
     add,
-    n: k => (m.get(k) || { n: 0 }).n,
-    roots: (k: string): Element[] => [...((m.get(k) || ({} as { roots?: Set<Element> })).roots || [])],
+    n: (key: string) => (counts.get(key) || { n: 0 }).n,
+    roots: (key: string): Element[] => [...((counts.get(key) || ({} as { roots?: Set<Element> })).roots || [])],
   };
 }
+export type Report = ReturnType<typeof tally>['add'];

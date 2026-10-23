@@ -1,7 +1,7 @@
 // CSS 关键帧（每段各自的 easing）→ SMIL 的 keyTimes/values（+ keySplines）。
 // steps() 用相同的 keyTimes 做跳变；超出 [0,1] 的贝塞尔（回弹）和不用 spline 的场合按 16 点线性采样
 
-const NAMED = {
+const NAMED: Record<string, number[]> = {
   ease: [0.25, 0.1, 0.25, 1],
   'ease-in': [0.42, 0, 1, 1],
   'ease-out': [0, 0, 0.58, 1],
@@ -9,39 +9,70 @@ const NAMED = {
 };
 const SAMPLES = 16;
 
+export interface LinearEasing {
+  kind: 'linear';
+}
+export interface CubicEasing {
+  kind: 'cubic';
+  /** cubic-bezier 的 x1 y1 x2 y2 */
+  p: number[];
+}
+/** steps() 的跳变位置（去掉 jump- 前缀） */
+export type StepPosition = 'start' | 'end' | 'none' | 'both';
+export interface StepsEasing {
+  kind: 'steps';
+  n: number;
+  pos: StepPosition;
+}
+export type Easing = LinearEasing | CubicEasing | StepsEasing;
+
+/** 一帧：off 从 0 到 1，e 是从这一帧到下一帧的 easing */
+export interface Keyframe<V> {
+  off: number;
+  v: V;
+  e: Easing;
+}
+/** compile 的结果；splines 为 null 表示不写 keySplines */
+export interface CompiledSeries<V> {
+  times: number[];
+  values: V[];
+  splines: string[] | null;
+}
+
 /** easing 字符串 → { kind: 'linear' } | { kind: 'cubic', p } | { kind: 'steps', n, pos }；不认识返回 null */
-export function parseEasing(s) {
-  s = (s || 'linear').trim();
-  if (s === 'linear') return { kind: 'linear' };
-  if (NAMED[s]) return { kind: 'cubic', p: NAMED[s] };
-  let m = /^cubic-bezier\(\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)$/.exec(s);
-  if (m) {
-    const p = m.slice(1).map(Number);
+export function parseEasing(text: string | null | undefined): Easing | null {
+  text = (text || 'linear').trim();
+  if (text === 'linear') return { kind: 'linear' };
+  if (NAMED[text]) return { kind: 'cubic', p: NAMED[text] };
+  let match = /^cubic-bezier\(\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)$/.exec(text);
+  if (match) {
+    const p = match.slice(1).map(Number);
     return p.some(Number.isNaN) ? null : p[0] === p[1] && p[2] === p[3] ? { kind: 'linear' } : { kind: 'cubic', p };
   }
-  if (s === 'step-start') return { kind: 'steps', n: 1, pos: 'start' };
-  if (s === 'step-end') return { kind: 'steps', n: 1, pos: 'end' };
-  m = /^steps\(\s*(\d+)\s*(?:,\s*(jump-start|jump-end|jump-none|jump-both|start|end)\s*)?\)$/.exec(s);
-  if (m) {
-    const pos = (m[2] || 'end').replace('jump-', '');
-    const n = +m[1];
+  if (text === 'step-start') return { kind: 'steps', n: 1, pos: 'start' };
+  if (text === 'step-end') return { kind: 'steps', n: 1, pos: 'end' };
+  match = /^steps\(\s*(\d+)\s*(?:,\s*(jump-start|jump-end|jump-none|jump-both|start|end)\s*)?\)$/.exec(text);
+  if (match) {
+    const pos = (match[2] || 'end').replace('jump-', '') as StepPosition;
+    const n = +match[1];
     return n < 1 || (pos === 'none' && n < 2) ? null : { kind: 'steps', n, pos };
   }
   return null;
 }
 /** 倒着播放时这一段的 easing：e'(q) = 1 − e(1 − q) */
-export function reverseEasing(e) {
-  if (e.kind === 'cubic') {
-    const [a, b, c, d] = e.p;
-    return { kind: 'cubic', p: [1 - c, 1 - d, 1 - a, 1 - b] };
+export function reverseEasing(easing: Easing): Easing {
+  if (easing.kind === 'cubic') {
+    const [x1, y1, x2, y2] = easing.p;
+    return { kind: 'cubic', p: [1 - x2, 1 - y2, 1 - x1, 1 - y1] };
   }
-  if (e.kind === 'steps') return { ...e, pos: e.pos === 'start' ? 'end' : e.pos === 'end' ? 'start' : e.pos };
-  return e;
+  if (easing.kind === 'steps')
+    return { ...easing, pos: easing.pos === 'start' ? 'end' : easing.pos === 'end' ? 'start' : easing.pos };
+  return easing;
 }
 
-function bezierY(p, x) {
+function bezierY(p: number[], x: number): number {
   const [x1, y1, x2, y2] = p;
-  const bx = t => 3 * (1 - t) * (1 - t) * t * x1 + 3 * (1 - t) * t * t * x2 + t * t * t;
+  const bx = (t: number) => 3 * (1 - t) * (1 - t) * t * x1 + 3 * (1 - t) * t * t * x2 + t * t * t;
   let lo = 0,
     hi = 1;
   for (let i = 0; i < 40; i++) {
@@ -53,99 +84,117 @@ function bezierY(p, x) {
   return 3 * (1 - t) * (1 - t) * t * y1 + 3 * (1 - t) * t * t * y2 + t * t * t;
 }
 /** steps 在区间 [k/n, (k+1)/n) 上的输出进度 */
-function stepLevel(e, k) {
-  if (e.pos === 'start') return (k + 1) / e.n;
-  if (e.pos === 'end') return k / e.n;
-  if (e.pos === 'both') return (k + 1) / (e.n + 1);
-  return k / (e.n - 1);
+function stepLevel(easing: StepsEasing, k: number): number {
+  if (easing.pos === 'start') return (k + 1) / easing.n;
+  if (easing.pos === 'end') return k / easing.n;
+  if (easing.pos === 'both') return (k + 1) / (easing.n + 1);
+  return k / (easing.n - 1);
 }
 
 /**
- * kf: [{ off, v, e }]（off 从 0 到 1，e 是从这一帧到下一帧的 easing），lerp(a, b, p) 给出插值后的值。
+ * keyframes: [{ off, v, e }]（off 从 0 到 1，e 是从这一帧到下一帧的 easing），lerp(a, b, p) 给出插值后的值。
  * spline=true 时三次贝塞尔写成 keySplines，否则采样。返回 { times, values, splines|null }
  */
-export function compile(kf, lerp, spline) {
-  const times = [kf[0].off],
-    values = [kf[0].v],
-    splines = [];
-  const push = (t, v, sp = '0 0 1 1') => {
-    times.push(t);
-    values.push(v);
-    splines.push(sp);
+export function compile<V>(
+  keyframes: Keyframe<V>[],
+  lerp: (a: V, b: V, p: number) => V,
+  spline: boolean,
+): CompiledSeries<V> {
+  const times = [keyframes[0].off],
+    values = [keyframes[0].v],
+    splines: string[] = [];
+  const push = (time: number, value: V, splineText = '0 0 1 1') => {
+    times.push(time);
+    values.push(value);
+    splines.push(splineText);
   };
-  for (let i = 0; i + 1 < kf.length; i++) {
-    const a = kf[i],
-      b = kf[i + 1],
+  for (let i = 0; i + 1 < keyframes.length; i++) {
+    const a = keyframes[i],
+      b = keyframes[i + 1],
       span = b.off - a.off,
-      e = a.e;
+      easing = a.e;
     if (span <= 0) {
       push(b.off, b.v);
       continue;
     }
-    if (e.kind === 'linear') push(b.off, b.v);
-    else if (e.kind === 'cubic' && spline && e.p.every(x => x >= 0 && x <= 1))
-      push(b.off, b.v, e.p.map(x => Math.round(x * 1e4) / 1e4).join(' '));
-    else if (e.kind === 'cubic')
+    if (easing.kind === 'linear') push(b.off, b.v);
+    else if (easing.kind === 'cubic' && spline && easing.p.every(x => x >= 0 && x <= 1))
+      push(b.off, b.v, easing.p.map(x => Math.round(x * 1e4) / 1e4).join(' '));
+    else if (easing.kind === 'cubic')
       for (let j = 1; j <= SAMPLES; j++) {
-        const f = j / SAMPLES;
-        push(a.off + span * f, j === SAMPLES ? b.v : lerp(a.v, b.v, bezierY(e.p, f)));
+        const fraction = j / SAMPLES;
+        push(a.off + span * fraction, j === SAMPLES ? b.v : lerp(a.v, b.v, bezierY(easing.p, fraction)));
       }
     else {
       // 每个台阶：在台阶起点跳到该级，保持到下一个台阶起点
-      for (let k = 0; k < e.n; k++) {
-        const t = a.off + (span * k) / e.n,
-          lv = stepLevel(e, k);
-        if (k || lv) push(t, lerp(a.v, b.v, lv));
-        push(a.off + (span * (k + 1)) / e.n, lerp(a.v, b.v, lv));
+      for (let k = 0; k < easing.n; k++) {
+        const time = a.off + (span * k) / easing.n,
+          level = stepLevel(easing, k);
+        if (k || level) push(time, lerp(a.v, b.v, level));
+        push(a.off + (span * (k + 1)) / easing.n, lerp(a.v, b.v, level));
       }
       push(b.off, b.v);
     }
   }
-  return { times, values, splines: spline && splines.some(s => s !== '0 0 1 1') ? splines : null };
+  return { times, values, splines: spline && splines.some(text => text !== '0 0 1 1') ? splines : null };
 }
 
 /** 离散属性（visibility）：两帧之间取 CSS 的插值规则——有一端可见，中间就可见 */
-export function compileDiscrete(kf, interior) {
-  const times = [],
-    values = [];
-  for (let i = 0; i + 1 < kf.length; i++) {
-    times.push(kf[i].off);
-    values.push(interior(kf[i].v, kf[i + 1].v));
+export function compileDiscrete<V>(
+  keyframes: Keyframe<V>[],
+  interior: (from: V, to: V) => V,
+): CompiledSeries<V> & { splines: null } {
+  const times: number[] = [],
+    values: V[] = [];
+  for (let i = 0; i + 1 < keyframes.length; i++) {
+    times.push(keyframes[i].off);
+    values.push(interior(keyframes[i].v, keyframes[i + 1].v));
   }
   times.push(1);
-  values.push(kf[kf.length - 1].v);
+  values.push(keyframes[keyframes.length - 1].v);
   return { times, values, splines: null };
 }
 
-const r4 = n => {
-  const r = Math.round(n * 10000) / 10000;
-  return Object.is(r, -0) ? 0 : r;
+const r4 = (value: number): number => {
+  const rounded = Math.round(value * 10000) / 10000;
+  return Object.is(rounded, -0) ? 0 : rounded;
 };
+/** 路径值：skel 是数字换成 # 的骨架，nums 是依次的数字 */
+export interface PathValue {
+  skel: string;
+  nums: number[];
+}
+/** 一种值的解析、插值与序列化；parse 读不出返回 null */
+export interface ValueKind<V> {
+  parse: (raw: unknown) => V | null;
+  lerp: (a: V, b: V, p: number) => V;
+  str: (value: V) => string | number;
+}
 /** 值的种类：数字、颜色、路径（结构相同才插值） */
-export const KINDS = {
+export const KINDS: { number: ValueKind<number>; color: ValueKind<number[]>; path: ValueKind<PathValue> } = {
   number: {
-    parse: s => {
-      const m = /^(-?[\d.]+(?:e-?\d+)?)(px)?$/.exec(String(s).trim());
-      return m ? +m[1] : null;
+    parse: raw => {
+      const match = /^(-?[\d.]+(?:e-?\d+)?)(px)?$/.exec(String(raw).trim());
+      return match ? +match[1] : null;
     },
     lerp: (a, b, p) => a + (b - a) * p,
     str: r4,
   },
   color: {
-    parse: s => {
-      const m = /^rgba?\(\s*([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\s*\)$/.exec(String(s).trim());
-      return m ? [+m[1], +m[2], +m[3], m[4] == null ? 1 : +m[4]] : null;
+    parse: raw => {
+      const match = /^rgba?\(\s*([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\s*\)$/.exec(String(raw).trim());
+      return match ? [+match[1], +match[2], +match[3], match[4] == null ? 1 : +match[4]] : null;
     },
     lerp: (a, b, p) => a.map((x, i) => x + (b[i] - x) * p),
-    str: c =>
-      c[3] >= 1
-        ? `rgb(${c.slice(0, 3).map(Math.round).join(',')})`
-        : `rgba(${c.slice(0, 3).map(Math.round).join(',')},${r4(c[3])})`,
+    str: rgba =>
+      rgba[3] >= 1
+        ? `rgb(${rgba.slice(0, 3).map(Math.round).join(',')})`
+        : `rgba(${rgba.slice(0, 3).map(Math.round).join(',')},${r4(rgba[3])})`,
   },
   path: {
-    parse: s => {
-      const m = /^path\(\s*["'](.*)["']\s*\)$/.exec(String(s).trim());
-      const d = m ? m[1] : String(s);
+    parse: raw => {
+      const match = /^path\(\s*["'](.*)["']\s*\)$/.exec(String(raw).trim());
+      const d = match ? match[1] : String(raw);
       return {
         skel: d.replace(/-?[\d.]+(?:e-?\d+)?/g, '#'),
         nums: (d.match(/-?[\d.]+(?:e-?\d+)?/g) || []).map(Number),
@@ -153,9 +202,9 @@ export const KINDS = {
     },
     lerp: (a, b, p) =>
       a.skel === b.skel ? { skel: a.skel, nums: a.nums.map((x, i) => x + (b.nums[i] - x) * p) } : p < 0.5 ? a : b,
-    str: v => {
+    str: value => {
       let i = 0;
-      return v.skel.replace(/#/g, () => r4(v.nums[i++]));
+      return value.skel.replace(/#/g, () => String(r4(value.nums[i++])));
     },
   },
 };

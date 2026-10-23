@@ -6,31 +6,31 @@ import { stamp } from './config.ts';
 import { CodedError } from '../ui/convert/types.ts';
 
 export const article = { file: '', rev: 0 };
-function findHtml(p) {
-  const st = fs.statSync(p);
-  if (st.isFile()) return /\.html?$/i.test(p) ? p : null;
-  const names = fs.readdirSync(p).filter(n => /\.html?$/i.test(n));
-  const pick = names.find(n => /^index\.html?$/i.test(n)) || (names.length === 1 ? names[0] : null);
-  return pick ? path.join(p, pick) : null;
+function findHtml(target: string): string | null {
+  const stats = fs.statSync(target);
+  if (stats.isFile()) return /\.html?$/i.test(target) ? target : null;
+  const names = fs.readdirSync(target).filter(name => /\.html?$/i.test(name));
+  const pick = names.find(name => /^index\.html?$/i.test(name)) || (names.length === 1 ? names[0] : null);
+  return pick ? path.join(target, pick) : null;
 }
-function cleanPath(s) {
-  s = String(s || '')
+function cleanPath(input: unknown) {
+  let text = String(input || '')
     .trim()
     .replace(/^["']|["']$/g, '');
-  if (/^file:\/\//i.test(s)) s = fileURLToPath(s);
-  return s;
+  if (/^file:\/\//i.test(text)) text = fileURLToPath(text);
+  return text;
 }
 /** 打开文件或文件夹（文件夹里取 index.html，或唯一的 HTML 文件）；打不开时抛出 CodedError（文案 api.*） */
-export function openArticle(input) {
-  const p = path.resolve(cleanPath(input));
-  if (!fs.existsSync(p)) throw new CodedError('api.notFound', { path: p });
-  const f = findHtml(p);
-  if (!f && !fs.statSync(p).isDirectory()) throw new CodedError('api.notHtml', { path: p });
-  if (!f)
-    throw fs.readdirSync(p).some(n => /\.html?$/i.test(n))
+export function openArticle(input: unknown) {
+  const target = path.resolve(cleanPath(input));
+  if (!fs.existsSync(target)) throw new CodedError('api.notFound', { path: target });
+  const file = findHtml(target);
+  if (!file && !fs.statSync(target).isDirectory()) throw new CodedError('api.notHtml', { path: target });
+  if (!file)
+    throw fs.readdirSync(target).some(name => /\.html?$/i.test(name))
       ? new CodedError('api.manyHtml')
-      : new CodedError('api.noHtml', { path: p });
-  article.file = f;
+      : new CodedError('api.noHtml', { path: target });
+  article.file = file;
   article.rev++;
-  console.log(`${stamp()}  打开  ${f}`);
+  console.log(`${stamp()}  打开  ${file}`);
 }

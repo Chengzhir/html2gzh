@@ -18,7 +18,7 @@ export const imgServer = http.createServer(wrap(imgRoute));
 /** 取图口绑到 port；成功 resolve，失败 reject（EADDRINUSE 等） */
 export function listenImg(port: number) {
   return new Promise<void>((resolve, reject) => {
-    const fail = e => {
+    const fail = (e: Error) => {
       imgServer.off('listening', ok);
       reject(e);
     };

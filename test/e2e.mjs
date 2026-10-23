@@ -3,7 +3,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import sharp from 'sharp';
 import { findChrome } from '../lib/chrome.ts';
@@ -16,7 +15,7 @@ import { startServer } from './serve.mjs';
 import { pixelDiff as diffIn } from './pixeldiff.mjs';
 import { assetIdsIn } from '../ui/convert/assetid.ts';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
+const HERE = import.meta.dirname;
 const args = process.argv.slice(2);
 const SVG_MODE = args.includes('--svg');
 const ARTICLE = path.resolve(args.find(a => !a.startsWith('--')) || path.join(HERE, 'fixture'));

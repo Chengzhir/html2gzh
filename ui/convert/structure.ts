@@ -87,83 +87,85 @@ const VOID = new Set([
 const JUNK = 'script,style,link,meta,title,base,noscript,template,slot';
 const BLOCKISH = /^(block|flex|grid|table|list-item|flow-root)/;
 
-function rename(doc, el, tag) {
+function rename(doc: Document, el: Element, tag: string): HTMLElement {
   const win = doc.defaultView;
   const before = win.getComputedStyle(el);
-  const vals = FREEZE.map(k => before.getPropertyValue(k));
+  const values = FREEZE.map(prop => before.getPropertyValue(prop));
   // 浏览器默认样式里只有链接自带颜色；其他标签此刻的颜色若和父级不同，只可能来自套上的微信正文样式，不能冻结
   const keepColor = el.localName === 'a';
-  const n = doc.createElement(tag);
-  for (const a of el.attributes) n.setAttribute(a.name, a.value);
-  while (el.firstChild) n.appendChild(el.firstChild);
-  el.replaceWith(n);
-  const after = win.getComputedStyle(n);
-  FREEZE.forEach((k, i) => {
-    if (after.getPropertyValue(k) === vals[i]) return;
-    if (k === 'display' && vals[i] === 'list-item') return;
-    if (k === 'color' && !keepColor) return;
-    n.style.setProperty(k, vals[i]);
+  const replacement = doc.createElement(tag);
+  for (const attr of el.attributes) replacement.setAttribute(attr.name, attr.value);
+  while (el.firstChild) replacement.appendChild(el.firstChild);
+  el.replaceWith(replacement);
+  const after = win.getComputedStyle(replacement);
+  FREEZE.forEach((prop, i) => {
+    if (after.getPropertyValue(prop) === values[i]) return;
+    if (prop === 'display' && values[i] === 'list-item') return;
+    if (prop === 'color' && !keepColor) return;
+    replacement.style.setProperty(prop, values[i]);
   });
-  return n;
+  return replacement;
 }
 
 export function cleanStructure(doc: Document, root: Element, findings: FindingSink) {
   const win = doc.defaultView;
-  const cs = el => win.getComputedStyle(el);
-  root.querySelectorAll(JUNK).forEach(e => e.remove());
-  root.querySelectorAll('picture').forEach(p => {
-    const im = p.querySelector('img');
-    if (im) p.replaceWith(im);
-    else p.remove();
+  const computed = (el: Element) => win.getComputedStyle(el);
+  root.querySelectorAll(JUNK).forEach(el => el.remove());
+  root.querySelectorAll('picture').forEach(picture => {
+    const image = picture.querySelector('img');
+    if (image) picture.replaceWith(image);
+    else picture.remove();
   });
-  root.querySelectorAll('source,track').forEach(e => e.remove());
+  root.querySelectorAll('source,track').forEach(el => el.remove());
   const lost = root.querySelectorAll('form,input,button,select,textarea,iframe,video,audio,canvas,object,embed');
   if (lost.length) findings.warn('interactive', { n: lost.length }, { els: [...lost] });
 
   // 链接：只有 mp.weixin.qq.com 能留；页内锚点会让草稿存不下去，站外链接保存后变纯文字
   let anchors = 0,
     outside = 0;
-  const outEls = [];
-  for (const a of [...root.querySelectorAll('a')]) {
-    const href = (a.getAttribute('href') || '').trim();
+  const outsideLinks: HTMLAnchorElement[] = [];
+  for (const link of [...root.querySelectorAll('a')]) {
+    const href = (link.getAttribute('href') || '').trim();
     if (/^https?:\/\/mp\.weixin\.qq\.com\//i.test(href)) continue;
     if (/^https?:/i.test(href)) {
       outside++;
-      outEls.push(a);
+      outsideLinks.push(link);
     } else if (href) anchors++;
-    rename(doc, a, 'span').removeAttribute('href');
+    rename(doc, link, 'span').removeAttribute('href');
   }
   if (anchors) findings.fixed('anchors', { n: anchors });
-  if (outside) findings.warn('outside', { n: outside }, { els: outEls });
+  if (outside) findings.warn('outside', { n: outside }, { els: outsideLinks });
 
-  let n = 0;
+  let renamed = 0;
   for (const el of [...root.querySelectorAll('ul,ol')]) {
-    const li = [...el.children].filter(k => k.localName === 'li');
-    const plain = li.every(k => cs(k).display !== 'list-item' || cs(k).listStyleType === 'none');
+    const items = [...el.children].filter(child => child.localName === 'li');
+    const plain = items.every(
+      item => computed(item).display !== 'list-item' || computed(item).listStyleType === 'none',
+    );
     if (!plain) continue;
-    li.forEach(k => {
-      rename(doc, k, 'section');
-      n++;
+    items.forEach(item => {
+      rename(doc, item, 'section');
+      renamed++;
     });
     rename(doc, el, 'section');
-    n++;
+    renamed++;
   }
   for (const el of [...root.querySelectorAll('*')]) {
     if (!isHtmlEl(el) || el === root) continue;
-    const t = el.localName;
-    if (TO_SECTION.has(t)) {
+    const tag = el.localName;
+    if (TO_SECTION.has(tag)) {
       rename(doc, el, 'section');
-      n++;
-    } else if (MARKS.has(t) && el.hasAttribute('style')) {
+      renamed++;
+    } else if (MARKS.has(tag) && el.hasAttribute('style')) {
       rename(doc, el, 'span');
-      n++;
+      renamed++;
     }
   }
-  if (n) findings.fixed('containers', { n });
+  if (renamed) findings.fixed('containers', { n: renamed });
 }
 
-const isTextContext = (win, el) => {
-  for (const c of el.childNodes) if (c.nodeType === 3 && c.data.trim()) return true;
+const isTextContext = (win: Window, el: Element) => {
+  for (const child of el.childNodes) if (child.nodeType === 3 && (child as Text).data.trim()) return true;
   return (
     /^(p|h[1-6]|span|li|blockquote|td|th|pre|figcaption|b|strong|i|em|u|s|label|sub|sup|small|code|mark)$/.test(
       el.localName,
@@ -181,34 +183,35 @@ export function keepShapes(doc: Document, root: Element, findings: FindingSink) 
     // foreignObject 里的 HTML 由 SVG 自己排版，不按段落规则改
     if (!isHtmlEl(el) || VOID.has(el.localName) || el === root || el.closest('svg')) continue;
     if (el.children.length || el.textContent.replace(/\u00a0/g, ' ').trim()) continue;
-    const r = el.getBoundingClientRect();
-    const c = win.getComputedStyle(el);
-    if (c.display === 'none') continue;
-    if (r.width < 0.1 && r.height < 0.1) {
+    const rect = el.getBoundingClientRect();
+    const computed = win.getComputedStyle(el);
+    if (computed.display === 'none') continue;
+    if (rect.width < 0.1 && rect.height < 0.1) {
       if (el.hasAttribute('data-wxc-pseudo')) {
         el.remove();
         dropped++;
       }
       continue;
     }
-    const P = el.parentElement;
-    if (P && isTextContext(win, P)) {
-      const s = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      for (const a of el.attributes) s.setAttribute(a.name, a.value);
-      s.setAttribute('aria-hidden', 'true');
-      el.replaceWith(s);
-      if (c.display === 'inline') s.style.setProperty('display', 'inline-block');
-      if (!s.style.width || s.style.width === 'auto') s.style.setProperty('width', r.width.toFixed(2) + 'px');
-      if (!s.style.height || s.style.height === 'auto') s.style.setProperty('height', r.height.toFixed(2) + 'px');
-      s.style.setProperty('overflow', s.style.overflow || 'hidden');
+    const parent = el.parentElement;
+    if (parent && isTextContext(win, parent)) {
+      const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      for (const attr of el.attributes) svg.setAttribute(attr.name, attr.value);
+      svg.setAttribute('aria-hidden', 'true');
+      el.replaceWith(svg);
+      if (computed.display === 'inline') svg.style.setProperty('display', 'inline-block');
+      if (!svg.style.width || svg.style.width === 'auto') svg.style.setProperty('width', rect.width.toFixed(2) + 'px');
+      if (!svg.style.height || svg.style.height === 'auto')
+        svg.style.setProperty('height', rect.height.toFixed(2) + 'px');
+      svg.style.setProperty('overflow', svg.style.overflow || 'hidden');
     } else {
-      const sec = el.localName === 'section' ? el : rename(doc, el, 'section');
-      if (!BLOCKISH.test(win.getComputedStyle(sec).display) && !sec.style.display)
-        sec.style.setProperty('display', c.display === 'inline' ? 'inline-block' : c.display);
-      const s = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      s.setAttribute('viewBox', '0 0 1 1');
-      s.setAttribute('style', 'float:left;width:0;height:0;overflow:hidden;display:block');
-      sec.appendChild(s);
+      const section = el.localName === 'section' ? el : rename(doc, el, 'section');
+      if (!BLOCKISH.test(win.getComputedStyle(section).display) && !section.style.display)
+        section.style.setProperty('display', computed.display === 'inline' ? 'inline-block' : computed.display);
+      const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 1 1');
+      svg.setAttribute('style', 'float:left;width:0;height:0;overflow:hidden;display:block');
+      section.appendChild(svg);
     }
     shapes++;
   }
@@ -217,42 +220,46 @@ export function keepShapes(doc: Document, root: Element, findings: FindingSink) 
 }
 
 /** 标签之间的换行缩进在手机端会被渲染成额外高度；pre 类空白保留 */
-export function squashWhitespace(doc, root) {
+export function squashWhitespace(doc: Document, root: Element) {
   const win = doc.defaultView;
   const walker = doc.createTreeWalker(root, 4 | 128);
-  const nodes = [];
-  while (walker.nextNode()) nodes.push(walker.currentNode);
-  const isBlock = n =>
-    n && n.nodeType === 1 && (BLOCKISH.test(win.getComputedStyle(n).display) || n.hasAttribute('data-wxc-float'));
-  const isBox = n =>
-    n === root || BLOCKISH.test(win.getComputedStyle(n).display) || /flex|grid/.test(win.getComputedStyle(n).display);
+  const nodes: CharacterData[] = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode as CharacterData);
+  const isBlock = (node: Node) =>
+    node &&
+    node.nodeType === 1 &&
+    (BLOCKISH.test(win.getComputedStyle(node as Element).display) || (node as Element).hasAttribute('data-wxc-float'));
+  const isBox = (el: Element) =>
+    el === root ||
+    BLOCKISH.test(win.getComputedStyle(el).display) ||
+    /flex|grid/.test(win.getComputedStyle(el).display);
   /** 这一侧在行内流里挨着的是块边界吗：没有兄弟就往上找，直到碰到块容器 */
-  const edge = (t, dir) => {
-    let n = t;
+  const edge = (start: CharacterData, dir: 'previousSibling' | 'nextSibling') => {
+    let current: CharacterData | Element = start;
     for (;;) {
-      const sib = n[dir];
-      if (sib) return isBlock(sib);
-      n = n.parentElement;
-      if (!n || isBox(n)) return true;
+      const sibling = current[dir];
+      if (sibling) return isBlock(sibling);
+      current = current.parentElement;
+      if (!current || isBox(current)) return true;
     }
   };
   let saved = 0;
-  for (const t of nodes) {
-    if (t.nodeType === 8) {
-      saved += t.data.length + 7;
-      t.remove();
+  for (const node of nodes) {
+    if (node.nodeType === 8) {
+      saved += node.data.length + 7;
+      node.remove();
       continue;
     }
-    const P = t.parentElement;
-    if (!P || /^pre|^break-spaces/.test(win.getComputedStyle(P).whiteSpace)) continue;
-    const before = t.data.length;
-    let s = t.data.replace(/[ \t\n\r\f]+/g, ' ');
-    const flexParent = /flex|grid/.test(win.getComputedStyle(P).display);
-    if (flexParent || edge(t, 'previousSibling')) s = s.replace(/^ /, '');
-    if (flexParent || edge(t, 'nextSibling')) s = s.replace(/ $/, '');
-    if (!s) t.remove();
-    else if (s !== t.data) t.data = s;
-    saved += before - s.length;
+    const parent = node.parentElement;
+    if (!parent || /^pre|^break-spaces/.test(win.getComputedStyle(parent).whiteSpace)) continue;
+    const before = node.data.length;
+    let text = node.data.replace(/[ \t\n\r\f]+/g, ' ');
+    const flexParent = /flex|grid/.test(win.getComputedStyle(parent).display);
+    if (flexParent || edge(node, 'previousSibling')) text = text.replace(/^ /, '');
+    if (flexParent || edge(node, 'nextSibling')) text = text.replace(/ $/, '');
+    if (!text) node.remove();
+    else if (text !== node.data) node.data = text;
+    saved += before - text.length;
   }
   return saved;
 }
@@ -262,35 +269,36 @@ export function squashWhitespace(doc, root) {
  * 改在文字层面禁止断行：空格换成不换行空格，字与字之间插 U+2060（WORD JOINER，前后都不许断行）。
  */
 const WJ = '\u2060';
-export function keepNoWrap(doc, root) {
+export function keepNoWrap(doc: Document, root: Element) {
   const win = doc.defaultView;
-  const nowrap = el => /^nowrap$/.test(win.getComputedStyle(el).whiteSpace);
-  let n = 0;
+  const nowrap = (el: Element) => /^nowrap$/.test(win.getComputedStyle(el).whiteSpace);
+  let count = 0;
   for (const el of [...root.querySelectorAll('*')]) {
     if (!isHtmlEl(el) || !nowrap(el) || (el.parentElement && el.parentElement !== root && nowrap(el.parentElement)))
       continue;
     const walker = doc.createTreeWalker(el, 4);
-    const texts = [];
+    const texts: Text[] = [];
     // SVG 文字按字定位（x 列表一个值对应一个字），插连接符会错位
     while (walker.nextNode())
-      if (walker.currentNode.data && isHtmlEl(walker.currentNode.parentElement)) texts.push(walker.currentNode);
-    texts.forEach((t, i) => {
-      const chars = [...t.data.replace(/ /g, '\u00a0')];
-      t.data = chars.join(WJ) + (i < texts.length - 1 ? WJ : '');
+      if ((walker.currentNode as Text).data && isHtmlEl(walker.currentNode.parentElement))
+        texts.push(walker.currentNode as Text);
+    texts.forEach((text, i) => {
+      const chars = [...text.data.replace(/ /g, '\u00a0')];
+      text.data = chars.join(WJ) + (i < texts.length - 1 ? WJ : '');
     });
-    if (texts.length) n++;
+    if (texts.length) count++;
   }
-  return n;
+  return count;
 }
 
-export function cleanAttributes(root) {
+export function cleanAttributes(root: Element) {
   for (const el of root.querySelectorAll('*')) {
-    for (const a of [...el.attributes]) {
-      const k = a.name;
-      if (k === ID || k.startsWith('data-wxc')) continue;
+    for (const attr of [...el.attributes]) {
+      const name = attr.name;
+      if (name === ID || name.startsWith('data-wxc')) continue;
       if (
-        /^on/i.test(k) ||
-        /^data-v-/.test(k) ||
+        /^on/i.test(name) ||
+        /^data-v-/.test(name) ||
         [
           'class',
           'loading',
@@ -301,9 +309,9 @@ export function cleanAttributes(root) {
           'tabindex',
           'draggable',
           'fetchpriority',
-        ].includes(k)
+        ].includes(name)
       )
-        el.removeAttribute(k);
+        el.removeAttribute(name);
     }
   }
 }

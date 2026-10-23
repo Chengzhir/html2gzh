@@ -86,7 +86,7 @@ export function serveAsset(req: IncomingMessage, res: ServerResponse, id: string
     if (a.fetches.length > 12) a.fetches.shift();
     a.lastUA = String(req.headers['user-agent'] || '');
     // 取图口对外网开放，请求头里的控制字符（终端转义序列等）不原样打进日志
-    const safe = s => String(s).replace(/[\x00-\x1f\x7f]/g, '');
+    const safe = (text: string) => text.replace(/[\x00-\x1f\x7f]/g, '');
     console.log(
       `${stamp()}  取图  ${a.name}  经 ${safe(req.headers.host || '?')}  ← ${req.socket.remoteAddress}  ${safe(a.lastUA).slice(0, 50)}`,
     );

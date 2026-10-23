@@ -1,69 +1,104 @@
 // CSS 动画 → SMIL：公众号没有样式表，@keyframes 无处安放；SVG 里的动画改写成 <animate>/<animateTransform>
 import { SVG_NS, isSvg, inResource, mk, wrapG, hrefOf, refId, ownAnims } from './dom.ts';
+import type { Report } from './dom.ts';
 import { parseEasing, reverseEasing, compile, compileDiscrete, KINDS } from './easing.ts';
+import type { Easing, Keyframe, CompiledSeries, ValueKind } from './easing.ts';
 import { parseFns, parseProp, align, fnMatrix, computedMatrix, measureBox, bakeStyleTransform } from './transform.ts';
+import type { TransformBox } from './transform.ts';
 import { mul, isId, matrixAttr, geometryReader } from './path.ts';
+import type { Matrix } from './path.ts';
 import { displayToVisibility } from './whitelist.ts';
 import { wrapRoot, rootDecorated, rootTransformed, rootBox, moveClip, moveOpacity } from './root.ts';
+import type { RootBox } from './root.ts';
 
-const r4 = n => {
-  const r = Math.round(n * 10000) / 10000;
-  return Object.is(r, -0) ? 0 : r;
+/** captureCss 读到的一条 CSS 动画 */
+export interface CssAnimRecord {
+  name: string;
+  timing: EffectTiming;
+  kf: ComputedKeyframe[];
+  paused: boolean;
+  composite: CompositeOperation;
+}
+/** 元素 → 它上面的 CSS 动画（同名只记一次） */
+export type CssAnims = Map<SVGElement, CssAnimRecord[]>;
+/** 关键帧里某个属性的原始值；e 为 null 表示 easing 认不出 */
+interface RawFrame {
+  off: number;
+  raw: string;
+  e: Easing | null;
+}
+interface Timing {
+  dur: number;
+  delay: number;
+  iters: number;
+  dir: PlaybackDirection;
+  fill: FillMode;
+}
+interface LayerAnim {
+  frames: RawFrame[];
+  tm: Timing;
+}
+type GetPropertyValue = Pick<CSSStyleDeclaration, 'getPropertyValue'>;
+
+const r4 = (n: number) => {
+  const rounded = Math.round(n * 10000) / 10000;
+  return Object.is(rounded, -0) ? 0 : rounded;
 };
-const sec = t => r4(t) + 's';
-const LIN = { kind: 'linear' };
+const sec = (seconds: number) => r4(seconds) + 's';
+const LIN: Easing = { kind: 'linear' };
 
 /** 读下页面里 SVG 元素上正在跑的 CSS 动画（样式表删掉之前调用）。被 <use> 引用、自身不画出来的内容临时复制一份到页面里再读 */
-export function captureCss(doc, ids) {
+export function captureCss(doc: Document, ids: Map<string, Element>): CssAnims {
   const win = doc.defaultView,
-    out = new Map();
-  const take = map => {
-    for (const a of doc.getAnimations()) {
-      if (!(a instanceof win.CSSAnimation) || a.effect.pseudoElement) continue;
-      const src = map(a.effect.target);
+    out: CssAnims = new Map();
+  const take = (resolve: (target: Element | null) => Element | null | undefined) => {
+    for (const animation of doc.getAnimations()) {
+      if (!(animation instanceof win.CSSAnimation) || (animation.effect as KeyframeEffect).pseudoElement) continue;
+      const effect = animation.effect as KeyframeEffect;
+      const src = resolve(effect.target);
       if (!src || !isSvg(src)) continue;
       let list = out.get(src);
       if (!list) out.set(src, (list = []));
-      if (list.some(r => r.name === a.animationName)) continue;
+      if (list.some(record => record.name === animation.animationName)) continue;
       list.push({
-        name: a.animationName,
-        timing: a.effect.getTiming(),
-        kf: a.effect.getKeyframes(),
-        paused: a.playState === 'paused',
-        composite: a.effect.composite,
+        name: animation.animationName,
+        timing: effect.getTiming(),
+        kf: effect.getKeyframes(),
+        paused: animation.playState === 'paused',
+        composite: effect.composite,
       });
     }
   };
-  take(t => t);
+  take(target => target);
   // use 影子树里的动画 getAnimations 拿不到：把没画出来的被引用元素复制进一个看不见的 svg，让动画在那里跑起来再读
   const box = mk(doc, 'svg', { width: 0, height: 0, style: 'position:absolute;visibility:hidden' });
-  const back = new Map(),
-    seen = new Set();
-  for (const u of doc.getElementsByTagNameNS(SVG_NS, 'use')) {
-    const t = ids.get(refId(hrefOf(u)) || '');
-    if (!isSvg(t) || seen.has(t) || t.getClientRects().length) continue;
-    seen.add(t);
-    const c = t.cloneNode(true),
-      sn = [t, ...t.querySelectorAll('*')],
-      cn = [c, ...c.querySelectorAll('*')];
-    sn.forEach((s, i) => back.set(cn[i], s));
-    let host = c;
-    if (t.localName === 'symbol') {
-      host = mk(doc, 'g', { id: t.id || null });
-      while (c.firstChild) host.appendChild(c.firstChild);
-      back.set(host, t);
+  const back = new Map<Element, Element>(),
+    seen = new Set<Element>();
+  for (const useEl of doc.getElementsByTagNameNS(SVG_NS, 'use')) {
+    const referenced = ids.get(refId(hrefOf(useEl)) || '');
+    if (!isSvg(referenced) || seen.has(referenced) || referenced.getClientRects().length) continue;
+    seen.add(referenced);
+    const clone = referenced.cloneNode(true) as SVGElement,
+      sourceNodes = [referenced, ...referenced.querySelectorAll('*')],
+      cloneNodes = [clone, ...clone.querySelectorAll('*')];
+    sourceNodes.forEach((source, i) => back.set(cloneNodes[i], source));
+    let host: Element = clone;
+    if (referenced.localName === 'symbol') {
+      host = mk(doc, 'g', { id: referenced.id || null });
+      while (clone.firstChild) host.appendChild(clone.firstChild);
+      back.set(host, referenced);
     }
     box.appendChild(host);
   }
   if (box.firstChild) {
     doc.body.appendChild(box);
-    take(t => back.get(t));
+    take(target => back.get(target));
     box.remove();
   }
   return out;
 }
 
-const SIMPLE = {
+const SIMPLE: Record<string, [attr: string, kind: keyof typeof KINDS]> = {
   opacity: ['opacity', 'number'],
   fill: ['fill', 'color'],
   strokeWidth: ['stroke-width', 'number'],
@@ -75,53 +110,61 @@ const SIMPLE = {
   height: ['height', 'number'],
   d: ['d', 'path'],
 };
-const GEOM = new Set(['r', 'x', 'y', 'width', 'height', 'd']);
+const GEOM = new Set<string>(['r', 'x', 'y', 'width', 'height', 'd']);
 const LAYERS = ['translate', 'rotate', 'scale', 'transform'];
-const META = new Set(['offset', 'computedOffset', 'easing', 'composite']);
+const META = new Set<string>(['offset', 'computedOffset', 'easing', 'composite']);
 
 /** 反向播放：帧倒序，每段 easing 取反 */
-const rev = fs =>
-  fs.map((f, j, a) => {
-    const k = a.length - 1 - j;
-    return { off: 1 - a[k].off, v: a[k].v, e: k ? reverseEasing(a[k - 1].e) : LIN };
+const rev = <V>(frames: Keyframe<V>[]): Keyframe<V>[] =>
+  frames.map((_frame, j, all) => {
+    const k = all.length - 1 - j;
+    return { off: 1 - all[k].off, v: all[k].v, e: k ? reverseEasing(all[k - 1].e) : LIN };
   });
-const join = (a, b) => [
-  ...a.slice(0, -1).map(f => ({ ...f, off: f.off / 2 })),
-  ...b.map(f => ({ ...f, off: 0.5 + f.off / 2 })),
+const join = <V>(a: Keyframe<V>[], b: Keyframe<V>[]): Keyframe<V>[] => [
+  ...a.slice(0, -1).map(frame => ({ ...frame, off: frame.off / 2 })),
+  ...b.map(frame => ({ ...frame, off: 0.5 + frame.off / 2 })),
 ];
 /** animation-direction 化进关键帧；alternate 把一来一回拼成一个周期（时长 ×2、次数 ÷2） */
-function directed(frames, dir) {
+function directed<V>(frames: Keyframe<V>[], dir: PlaybackDirection): { kf: Keyframe<V>[]; k: number } {
   if (dir === 'reverse') return { kf: rev(frames), k: 1 };
   if (dir === 'alternate') return { kf: join(frames, rev(frames)), k: 2 };
   if (dir === 'alternate-reverse') return { kf: join(rev(frames), frames), k: 2 };
   return { kf: frames, k: 1 };
 }
-function smilTiming(tm, k) {
-  const a: Record<string, string | number> = { dur: sec(tm.dur * k) };
-  if (tm.delay) a.begin = sec(tm.delay);
-  if (tm.iters === Infinity) a.repeatCount = 'indefinite';
-  else if (tm.iters / k !== 1) a.repeatCount = r4(tm.iters / k);
-  if (tm.fill === 'forwards' || tm.fill === 'both') a.fill = 'freeze';
-  return a;
+function smilTiming(tm: Timing, k: number) {
+  const attrs: Record<string, string | number> = { dur: sec(tm.dur * k) };
+  if (tm.delay) attrs.begin = sec(tm.delay);
+  if (tm.iters === Infinity) attrs.repeatCount = 'indefinite';
+  else if (tm.iters / k !== 1) attrs.repeatCount = r4(tm.iters / k);
+  if (tm.fill === 'forwards' || tm.fill === 'both') attrs.fill = 'freeze';
+  return attrs;
 }
-const leadIn = tm => tm.delay > 0 && (tm.fill === 'backwards' || tm.fill === 'both');
-const series = (c, str) => ({
-  values: c.values.map(str).join(';'),
-  keyTimes: c.times.map(r4).join(';'),
-  calcMode: c.splines ? 'spline' : null,
-  keySplines: c.splines ? c.splines.join(';') : null,
+const leadIn = (tm: Timing) => tm.delay > 0 && (tm.fill === 'backwards' || tm.fill === 'both');
+const series = <V>(compiled: CompiledSeries<V>, str: (value: V) => string | number) => ({
+  values: compiled.values.map(str).join(';'),
+  keyTimes: compiled.times.map(r4).join(';'),
+  calcMode: compiled.splines ? 'spline' : null,
+  keySplines: compiled.splines ? compiled.splines.join(';') : null,
 });
 
-function simple(doc, el, [attr, kind], frames, tm, spline) {
-  const K = KINDS[kind];
-  const parsed = frames.map(f => ({ off: f.off, v: K.parse(f.raw), e: f.e }));
-  if (parsed.some(f => f.v == null)) return false;
+function simple(
+  doc: Document,
+  el: SVGElement,
+  [attr, kind]: [attr: string, kind: keyof typeof KINDS],
+  frames: RawFrame[],
+  tm: Timing,
+  spline: boolean,
+) {
+  // 三种值各自的 parse/lerp/str 互相配套，这里按同一个未知值类型统一处理
+  const K = KINDS[kind] as unknown as ValueKind<unknown>;
+  const parsed: Keyframe<unknown>[] = frames.map(frame => ({ off: frame.off, v: K.parse(frame.raw), e: frame.e }));
+  if (parsed.some(frame => frame.v == null)) return false;
   const { kf, k } = directed(parsed, tm.dir);
   // 几何属性写在 style 里时 SMIL 压不过它：挪到属性上
   if (GEOM.has(attr) && el.style.getPropertyValue(attr)) {
-    const v = geometryReader(el)(attr);
+    const value = geometryReader(el)(attr);
     el.style.removeProperty(attr);
-    if (v != null) el.setAttribute(attr, String(v));
+    if (value != null) el.setAttribute(attr, String(value));
   }
   if (leadIn(tm))
     el.appendChild(mk(doc, 'set', { attributeName: attr, to: K.str(kf[0].v), begin: '0s', dur: sec(tm.delay) }));
@@ -130,38 +173,45 @@ function simple(doc, el, [attr, kind], frames, tm, spline) {
   );
   return true;
 }
-function discrete(doc, el, p, frames, tm) {
+function discrete(doc: Document, el: SVGElement, p: string, frames: RawFrame[], tm: Timing) {
   if (p === 'display' && !displayToVisibility(el)) return false;
-  const vis = v => (p === 'display' ? (v === 'none' ? 'hidden' : 'visible') : v === 'visible' ? 'visible' : 'hidden');
+  const vis = (value: string) =>
+    p === 'display' ? (value === 'none' ? 'hidden' : 'visible') : value === 'visible' ? 'visible' : 'hidden';
   const { kf, k } = directed(
-    frames.map(f => ({ off: f.off, v: vis(String(f.raw).trim()), e: f.e })),
+    frames.map(frame => ({ off: frame.off, v: vis(String(frame.raw).trim()), e: frame.e })),
     tm.dir,
   );
-  const c = compileDiscrete(kf, (a, b) => (a === 'visible' || b === 'visible' ? 'visible' : 'hidden'));
+  const compiled = compileDiscrete(kf, (a: string, b: string) =>
+    a === 'visible' || b === 'visible' ? 'visible' : 'hidden',
+  );
   if (leadIn(tm))
     el.appendChild(mk(doc, 'set', { attributeName: 'visibility', to: kf[0].v, begin: '0s', dur: sec(tm.delay) }));
   el.appendChild(
     mk(doc, 'animate', {
       attributeName: 'visibility',
       calcMode: 'discrete',
-      values: c.values.join(';'),
-      keyTimes: c.times.map(r4).join(';'),
+      values: compiled.values.join(';'),
+      keyTimes: compiled.times.map(r4).join(';'),
       ...smilTiming(tm, k),
     }),
   );
   return true;
 }
 /** 圆心 cx/cy 不在白名单里：换成相对原位置的平移 */
-function shift(doc, el, p, frames, tm) {
+function shift(doc: Document, el: SVGCircleElement | SVGEllipseElement, p: string, frames: RawFrame[], tm: Timing) {
   if (!bakeStyleTransform(el)) return false;
   const base = geometryReader(el)(p) || 0;
-  const parsed = frames.map(f => ({ off: f.off, v: KINDS.number.parse(f.raw), e: f.e }));
-  if (parsed.some(f => f.v == null)) return false;
+  const parsed: Keyframe<number | null>[] = frames.map(frame => ({
+    off: frame.off,
+    v: KINDS.number.parse(frame.raw),
+    e: frame.e,
+  }));
+  if (parsed.some(frame => frame.v == null)) return false;
   const { kf, k } = directed(
-    parsed.map(f => ({ ...f, v: f.v - base })),
+    parsed.map(frame => ({ ...frame, v: frame.v - base })),
     tm.dir,
   );
-  const str = v => (p === 'cx' ? `${r4(v)} 0` : `0 ${r4(v)}`);
+  const str = (value: number) => (p === 'cx' ? `${r4(value)} 0` : `0 ${r4(value)}`);
   const T = { attributeName: 'transform', type: 'translate', additive: 'sum' };
   if (leadIn(tm))
     el.appendChild(mk(doc, 'animateTransform', { ...T, values: str(kf[0].v), begin: '0s', dur: sec(tm.delay) }));
@@ -171,56 +221,71 @@ function shift(doc, el, p, frames, tm) {
   return true;
 }
 /** 一层的静态矩阵（不含原点） */
-function staticM(cs, lay, box, fs) {
-  if (lay === 'transform') return computedMatrix(cs.transform);
-  const p = parseProp(lay, cs.getPropertyValue(lay), box, fs);
-  return p && fnMatrix(p);
+function staticM(computed: CSSStyleDeclaration, layer: string, box: TransformBox, fontSize: number): Matrix | null {
+  if (layer === 'transform') return computedMatrix(computed.transform);
+  const fns = parseProp(layer, computed.getPropertyValue(layer), box, fontSize);
+  return fns && fnMatrix(fns);
 }
 /**
  * 变换动画挪到外面套的 <g> 上：style 里的 transform 会压过 animateTransform，而且 CSS 的
  * 原点(translate→rotate→scale→transform)原点⁻¹ 正好对应一层层嵌套的 g。每层 g 的 transform 属性是静态值，
  * 动画用 replace 盖住它，所以动画没在跑的时候显示静态值，和 CSS 一致
  */
-function buildLayers(doc, el, layers, box, fs, spline, rep) {
-  if (ownAnims(el).some(a => a.localName === 'animateTransform' || a.localName === 'animateMotion')) {
+function buildLayers(
+  doc: Document,
+  el: SVGElement,
+  layers: Map<string, LayerAnim[]>,
+  box: TransformBox,
+  fontSize: number,
+  spline: boolean,
+  rep: Report,
+) {
+  if (ownAnims(el).some(anim => anim.localName === 'animateTransform' || anim.localName === 'animateMotion')) {
     rep('css:mixed', el);
     return false;
   }
-  const cs = el.ownerDocument.defaultView.getComputedStyle(el);
+  const computed = el.ownerDocument.defaultView.getComputedStyle(el);
   const spec: { m: number[]; nodes?: Element[] }[] = [{ m: [1, 0, 0, 1, box.ox, box.oy] }];
-  for (const lay of LAYERS) {
-    const base = staticM(cs, lay, box, fs);
+  for (const layer of LAYERS) {
+    const base = staticM(computed, layer, box, fontSize);
     if (!base) {
       rep('css:transform', el);
       return false;
     }
-    const anims = layers.get(lay);
+    const anims = layers.get(layer);
     if (!anims) {
       if (!isId(base)) spec.push({ m: base });
       continue;
     }
-    const nodes = [];
+    const nodes: Element[] = [];
     for (const { frames, tm } of anims) {
-      const lists = frames.map(f => (lay === 'transform' ? parseFns(f.raw, box, fs) : parseProp(lay, f.raw, box, fs)));
-      const al = !lists.includes(null) && align(lists);
-      if (!al) {
+      const lists = frames.map(frame =>
+        layer === 'transform' ? parseFns(frame.raw, box, fontSize) : parseProp(layer, frame.raw, box, fontSize),
+      );
+      const aligned = !lists.includes(null) && align(lists);
+      if (!aligned) {
         rep('css:transform', el);
         return false;
       }
-      const types = al.types.length ? al.types : ['translate'];
-      const args = al.types.length ? al.args : al.args.map(() => [[0, 0]]);
+      const types: string[] = aligned.types.length ? aligned.types : ['translate'];
+      const args: number[][][] = aligned.types.length ? aligned.args : aligned.args.map(() => [[0, 0]]);
       const { kf, k } = directed(
-        frames.map((f, i) => ({ off: f.off, v: args[i], e: f.e })),
+        frames.map((frame, i) => ({ off: frame.off, v: args[i], e: frame.e })),
         tm.dir,
       );
-      types.forEach((t, j) => {
-        const str = v => v[j].map(r4).join(' ');
-        const lerp = (a, b, p) => a.map((x, q) => (q === j ? x.map((n, w) => n + (b[q][w] - n) * p) : x));
-        const T = { attributeName: 'transform', type: t, additive: j ? 'sum' : 'replace' };
+      types.forEach((type, j) => {
+        const str = (value: number[][]) => value[j].map(r4).join(' ');
+        const lerp = (a: number[][], b: number[][], progress: number) =>
+          a.map((fnArgs, q) => (q === j ? fnArgs.map((n, w) => n + (b[q][w] - n) * progress) : fnArgs));
+        const attrs = { attributeName: 'transform', type, additive: j ? 'sum' : 'replace' };
         if (leadIn(tm))
-          nodes.push(mk(doc, 'animateTransform', { ...T, values: str(kf[0].v), begin: '0s', dur: sec(tm.delay) }));
+          nodes.push(mk(doc, 'animateTransform', { ...attrs, values: str(kf[0].v), begin: '0s', dur: sec(tm.delay) }));
         nodes.push(
-          mk(doc, 'animateTransform', { ...T, ...series(compile(kf, lerp, true), str), ...smilTiming(tm, k) }),
+          mk(doc, 'animateTransform', {
+            ...attrs,
+            ...series(compile(kf, lerp, true), str),
+            ...smilTiming(tm, k),
+          }),
         );
       });
       if (anims.length > 1) rep('css:overlap', el);
@@ -229,92 +294,96 @@ function buildLayers(doc, el, layers, box, fs, spline, rep) {
   }
   spec.push({ m: [1, 0, 0, 1, -box.ox, -box.oy] });
   // 相邻的静态层乘成一个
-  const merged = [];
-  for (const s of spec) {
+  const merged: typeof spec = [];
+  for (const layerSpec of spec) {
     const last = merged[merged.length - 1];
-    if (!s.nodes && last && !last.nodes) last.m = mul(last.m, s.m);
-    else merged.push({ ...s });
+    if (!layerSpec.nodes && last && !last.nodes) last.m = mul(last.m, layerSpec.m);
+    else merged.push({ ...layerSpec });
   }
-  for (const k of [...LAYERS, 'transform-origin', 'transform-box']) el.style.removeProperty(k);
+  for (const prop of [...LAYERS, 'transform-origin', 'transform-box']) el.style.removeProperty(prop);
   el.removeAttribute('transform');
   const inner = merged[merged.length - 1];
   if (!inner.nodes) {
     merged.pop();
     if (!isId(inner.m)) el.setAttribute('transform', matrixAttr(inner.m));
   }
-  let cur = el;
+  let cur: Element = el;
   for (let i = merged.length - 1; i >= 0; i--) {
-    const s = merged[i];
-    if (!s.nodes && isId(s.m)) continue;
-    cur = wrapG(cur, { transform: isId(s.m) ? null : matrixAttr(s.m) });
-    for (const n of s.nodes || []) cur.appendChild(n);
+    const layerSpec = merged[i];
+    if (!layerSpec.nodes && isId(layerSpec.m)) continue;
+    cur = wrapG(cur, { transform: isId(layerSpec.m) ? null : matrixAttr(layerSpec.m) });
+    for (const node of layerSpec.nodes || []) cur.appendChild(node);
   }
   return true;
 }
 
 /** 某个属性的各帧 { off, raw, e }；首尾缺帧时补上元素的静态值 */
-function framesOf(kfs, p, cs) {
-  const out = kfs.filter(f => p in f).map(f => ({ off: f.computedOffset, raw: f[p], e: parseEasing(f.easing) }));
-  const still = () => cs.getPropertyValue(p.replace(/[A-Z]/g, c => '-' + c.toLowerCase()));
+function framesOf(keyframes: ComputedKeyframe[], p: string, computed: GetPropertyValue): RawFrame[] {
+  const out: RawFrame[] = keyframes
+    .filter(keyframe => p in keyframe)
+    .map(keyframe => ({ off: keyframe.computedOffset, raw: keyframe[p] as string, e: parseEasing(keyframe.easing) }));
+  const still = () => computed.getPropertyValue(p.replace(/[A-Z]/g, char => '-' + char.toLowerCase()));
   if (!out.length || out[0].off > 0) out.unshift({ off: 0, raw: still(), e: out.length ? out[0].e : LIN });
   if (out[out.length - 1].off < 1) out.push({ off: 1, raw: still(), e: LIN });
   return out;
 }
 
 /** 把 captureCss 读到的动画写成 SMIL；写不了的按原因记进 rep */
-export function cssToSmil(doc, anims, { spline, rep }) {
+export function cssToSmil(doc: Document, anims: CssAnims, { spline, rep }: { spline: boolean; rep: Report }): number {
   const win = doc.defaultView;
   let done = 0;
   for (const [svgEl, recs] of anims) {
     if (!svgEl.isConnected || inResource(svgEl)) continue;
-    const cs = win.getComputedStyle(svgEl),
-      fs = parseFloat(cs.fontSize) || 16;
+    const computed = win.getComputedStyle(svgEl),
+      fontSize = parseFloat(computed.fontSize) || 16;
     // 最外层 svg 上的动画写到包住它全部内容的 g 上（见 root.ts）；g 在第一次用到时才建
-    const root = isSvg(svgEl.parentElement) ? null : svgEl;
-    const rootOpacity = root && cs.opacity;
-    let target = root ? null : svgEl,
+    const root = isSvg(svgEl.parentElement) ? null : (svgEl as SVGSVGElement);
+    const rootOpacity = root && computed.opacity;
+    let target: SVGElement | null = root ? null : svgEl,
       opacityMoved = false;
     const host = () => (target ||= wrapRoot(root));
     const rootBlocked = (p: string) =>
       root &&
       (GEOM.has(p) ||
         p === 'display' ||
-        ((LAYERS.includes(p) || p === 'opacity' || p === 'visibility') && rootDecorated(cs)) ||
-        (LAYERS.includes(p) && rootTransformed(cs)));
-    let box = null,
+        ((LAYERS.includes(p) || p === 'opacity' || p === 'visibility') && rootDecorated(computed)) ||
+        (LAYERS.includes(p) && rootTransformed(computed)));
+    let box: TransformBox | RootBox | null = null,
       ok = false;
-    const layers = new Map(),
-      shifts = [];
+    const layers = new Map<string, LayerAnim[]>(),
+      shifts: [p: string, frames: RawFrame[], tm: Timing][] = [];
     // 最外层 svg 的静态透明度在写第一条透明度动画时挪到 g 上；之后各帧补的静态值仍取挪动前的
-    const base = root
-      ? { getPropertyValue: (q: string) => (q === 'opacity' ? rootOpacity : cs.getPropertyValue(q)) }
-      : cs;
-    for (const r of recs) {
-      if (r.paused) {
+    const base: GetPropertyValue = root
+      ? { getPropertyValue: (q: string) => (q === 'opacity' ? rootOpacity : computed.getPropertyValue(q)) }
+      : computed;
+    for (const record of recs) {
+      if (record.paused) {
         rep('css:paused', svgEl);
         continue;
       }
-      if (r.composite && r.composite !== 'replace') {
+      if (record.composite && record.composite !== 'replace') {
         rep('css:composite', svgEl);
         continue;
       }
-      const t = r.timing;
-      const tm = {
-        dur: (+t.duration || 0) / 1000,
-        delay: (t.delay || 0) / 1000,
-        iters: t.iterations == null ? Infinity : t.iterations,
-        dir: t.direction,
-        fill: t.fill,
+      const timing = record.timing;
+      const tm: Timing = {
+        dur: (+timing.duration || 0) / 1000,
+        delay: (timing.delay || 0) / 1000,
+        iters: timing.iterations == null ? Infinity : timing.iterations,
+        dir: timing.direction,
+        fill: timing.fill,
       };
       if (!tm.iters) continue;
       if (!tm.dur) {
         rep('css:zero', svgEl);
         continue;
       }
-      const props = [...new Set<string>(r.kf.flatMap(f => Object.keys(f)))].filter(p => !META.has(p));
+      const props = [...new Set<string>(record.kf.flatMap(keyframe => Object.keys(keyframe)))].filter(
+        p => !META.has(p),
+      );
       for (const p of props) {
-        const frames = framesOf(r.kf, p, base);
-        if (frames.some(f => !f.e)) {
+        const frames = framesOf(record.kf, p, base);
+        if (frames.some(frame => !frame.e)) {
           rep('css:easing', svgEl);
           continue;
         }
@@ -327,7 +396,7 @@ export function cssToSmil(doc, anims, { spline, rep }) {
             rep('css:prop:' + p, svgEl);
             continue;
           }
-          box = box || (root ? rootBox(root, cs) : measureBox(svgEl));
+          box = box || (root ? rootBox(root, computed) : measureBox(svgEl as SVGGraphicsElement));
           if (!box) {
             rep(root ? 'css:root' : 'css:transform', svgEl);
             continue;
@@ -336,7 +405,7 @@ export function cssToSmil(doc, anims, { spline, rep }) {
           layers.get(p).push({ frames, tm });
         } else if (SIMPLE[p]) {
           if (root && p === 'opacity' && !opacityMoved) {
-            moveOpacity(root, host(), cs);
+            moveOpacity(root, host() as SVGGElement, computed);
             opacityMoved = true;
           }
           if (simple(doc, host(), SIMPLE[p], frames, tm, spline)) ok = true;
@@ -350,12 +419,12 @@ export function cssToSmil(doc, anims, { spline, rep }) {
       }
     }
     if (layers.size) {
-      if (root) moveClip(root, host(), cs, box);
-      if (buildLayers(doc, host(), layers, box, fs, spline, rep)) ok = true;
+      if (root) moveClip(root, host() as SVGGElement, computed, box as RootBox);
+      if (buildLayers(doc, host(), layers, box, fontSize, spline, rep)) ok = true;
     }
     // 平移放在最后：建层之后元素自己的 transform 属性就是最内层的静态矩阵，平移叠加在它后面，等同于挪圆心
     for (const [p, frames, tm] of shifts)
-      if (shift(doc, svgEl, p, frames, tm)) ok = true;
+      if (shift(doc, svgEl as SVGCircleElement | SVGEllipseElement, p, frames, tm)) ok = true;
       else rep('css:prop:' + p, svgEl);
     if (ok) done++;
   }

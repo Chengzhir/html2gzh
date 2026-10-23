@@ -1,9 +1,8 @@
 // 测试与排查脚本共用：起一个本工具的服务（不开浏览器），等两个端口都能用了再返回
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'server.ts');
+const SERVER = path.join(import.meta.dirname, '..', 'server.ts');
 
 /** → { proc, log(): 服务的输出, stop() } */
 export async function startServer({ article, img, ui, settings }) {

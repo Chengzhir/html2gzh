@@ -12,27 +12,29 @@ export function wrapRoot(root: SVGSVGElement): SVGGElement {
 }
 
 /** 写在 g 上的动画，效果与写在 svg 上不同的情况：svg 自身的背景、边框、阴影、滤镜等会随 svg 一起变透明或移动，g 带不动它们 */
-export function rootDecorated(cs: CSSStyleDeclaration): boolean {
-  const none = (v: string) => !v || v === 'none';
+export function rootDecorated(computed: CSSStyleDeclaration): boolean {
+  const none = (value: string) => !value || value === 'none';
   return (
-    !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(cs.backgroundColor) ||
-    !none(cs.backgroundImage) ||
-    ['top', 'right', 'bottom', 'left'].some(side => parseFloat(cs.getPropertyValue(`border-${side}-width`)) > 0) ||
-    !none(cs.boxShadow) ||
-    (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0) ||
-    !none(cs.filter) ||
-    !none(cs.getPropertyValue('backdrop-filter')) ||
-    !none(cs.clipPath) ||
-    !none(cs.getPropertyValue('mask-image')) ||
-    cs.mixBlendMode !== 'normal'
+    !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(computed.backgroundColor) ||
+    !none(computed.backgroundImage) ||
+    ['top', 'right', 'bottom', 'left'].some(
+      side => parseFloat(computed.getPropertyValue(`border-${side}-width`)) > 0,
+    ) ||
+    !none(computed.boxShadow) ||
+    (computed.outlineStyle !== 'none' && parseFloat(computed.outlineWidth) > 0) ||
+    !none(computed.filter) ||
+    !none(computed.getPropertyValue('backdrop-filter')) ||
+    !none(computed.clipPath) ||
+    !none(computed.getPropertyValue('mask-image')) ||
+    computed.mixBlendMode !== 'normal'
   );
 }
 
 /** svg 自身有静态变换：CSS 动画在播放时会取代它，挪到 g 上的动画却会叠加在它上面 */
-export const rootTransformed = (cs: CSSStyleDeclaration) =>
-  ['transform', 'translate', 'rotate', 'scale'].some(p => {
-    const v = cs.getPropertyValue(p);
-    return v && v !== 'none';
+export const rootTransformed = (computed: CSSStyleDeclaration) =>
+  ['transform', 'translate', 'rotate', 'scale'].some(prop => {
+    const value = computed.getPropertyValue(prop);
+    return value && value !== 'none';
   });
 
 export interface RootBox {
@@ -52,13 +54,13 @@ export interface RootBox {
  * 最外层 svg 的 CSS 盒子换算到 user units。getCTM 给出 user units 到 content box 的映射，不含 svg 自身的 CSS 变换。
  * viewBox 横纵缩放不同（preserveAspectRatio="none"）时，旋转换算不成 user units 里的旋转，返回 null
  */
-export function rootBox(root: SVGSVGElement, cs: CSSStyleDeclaration): RootBox | null {
+export function rootBox(root: SVGSVGElement, computed: CSSStyleDeclaration): RootBox | null {
   const ctm = fromDom(root.getCTM());
   if (!ctm || ctm[1] || ctm[2] || !(ctm[0] > 0) || Math.abs(ctm[0] - ctm[3]) > 1e-6 * ctm[0]) return null;
-  const px = (p: string) => parseFloat(cs.getPropertyValue(p)) || 0;
+  const px = (prop: string) => parseFloat(computed.getPropertyValue(prop)) || 0;
   const left = px('border-left-width') + px('padding-left'),
     top = px('border-top-width') + px('padding-top');
-  const [ox, oy] = cs.transformOrigin.split(' ').map(parseFloat);
+  const [ox, oy] = computed.transformOrigin.split(' ').map(parseFloat);
   const P = inv(ctm),
     k = ctm[0];
   return {
@@ -75,34 +77,34 @@ export function rootBox(root: SVGSVGElement, cs: CSSStyleDeclaration): RootBox |
  * 变换动画挪到 g 上之后，svg 自己按 content box 的裁切留在原处、不随内容移动。
  * 原来会裁切的：g 里再套一层与 content box 重合的嵌套 svg 来裁切（它随 g 移动），svg 本身改为不裁切
  */
-export function moveClip(root: SVGSVGElement, target: SVGGElement, cs: CSSStyleDeclaration, box: RootBox) {
-  if (cs.overflowX === 'visible' && cs.overflowY === 'visible') return;
-  const px = (p: string) => parseFloat(cs.getPropertyValue(p)) || 0;
+export function moveClip(root: SVGSVGElement, target: SVGGElement, computed: CSSStyleDeclaration, box: RootBox) {
+  if (computed.overflowX === 'visible' && computed.overflowY === 'visible') return;
+  const px = (prop: string) => parseFloat(computed.getPropertyValue(prop)) || 0;
   const w = root.clientWidth - px('padding-left') - px('padding-right'),
     h = root.clientHeight - px('padding-top') - px('padding-bottom');
   const P = inv(box.ctm);
   // 没有 viewBox 时 user units 就是 CSS px，屏宽变了 svg 的尺寸也变：用百分比跟着 svg 走
   const plain = root.viewBox.baseVal == null || !root.viewBox.baseVal.width;
   const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
-  const r = plain
+  const rect = plain
     ? { x: '0', y: '0', width: '100%', height: '100%' }
     : { x: r4(P[4]), y: r4(P[5]), width: r4(w * P[0]), height: r4(h * P[3]) };
   const clip = mk(root.ownerDocument, 'svg', {
-    ...r,
-    viewBox: plain ? null : `${r.x} ${r.y} ${r.width} ${r.height}`,
+    ...rect,
+    viewBox: plain ? null : `${rect.x} ${rect.y} ${rect.width} ${rect.height}`,
     preserveAspectRatio: plain ? null : 'none',
     overflow: 'hidden',
   });
   // 已经写在 g 上的动画（透明度等）留在 g 上
-  for (const n of [...target.childNodes]) if (!isAnim(n)) clip.appendChild(n);
+  for (const node of [...target.childNodes]) if (!isAnim(node)) clip.appendChild(node);
   target.prepend(clip);
   root.style.setProperty('overflow', 'visible');
 }
 
 /** svg 自身的静态透明度挪到 g 上：透明度动画播放时取代它，不与它相乘 */
-export function moveOpacity(root: SVGSVGElement, target: SVGGElement, cs: CSSStyleDeclaration) {
-  const o = parseFloat(cs.opacity);
+export function moveOpacity(root: SVGSVGElement, target: SVGGElement, computed: CSSStyleDeclaration) {
+  const opacity = parseFloat(computed.opacity);
   root.style.removeProperty('opacity');
   root.removeAttribute('opacity');
-  if (o < 1) target.setAttribute('opacity', String(o));
+  if (opacity < 1) target.setAttribute('opacity', String(opacity));
 }
