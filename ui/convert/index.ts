@@ -165,7 +165,7 @@ export async function convert(
   const fonts = fontRows(A.plan, ctx, outlineStat && outlineStat.verdicts);
   const { html: mergedRaw, stat } = mergeWidths(previewA, previewB);
   const findings = A.findings;
-  if (outlineStat) outlineFindings(findings, outlineStat, A.plan, ctx);
+  outlineFindings(findings, outlineStat, A.plan, fonts, ctx);
   // 用网页字体、又没转为路径的字：公众号正文加载不了网页字体，手机上换成别的字体
   const webLeft = new Map<string, number>();
   for (const row of fonts)
@@ -330,36 +330,37 @@ function sizeAtRef(sizes: Sizes, pseudoSrc: Map<string, string>) {
   };
 }
 
-function outlineFindings(findings: FindingSink, outlineStat: OutlineStat, plan: FontPlan, ctx: ConvertContext) {
-  if (outlineStat.kept)
+function outlineFindings(
+  findings: FindingSink,
+  outlineStat: OutlineStat | null,
+  plan: FontPlan,
+  fonts: FontRow[],
+  ctx: ConvertContext,
+) {
+  if (outlineStat?.kept)
     findings.fixed(
       'svgPath',
       { n: outlineStat.kept, chars: outlineStat.chars, kb: Math.round(outlineStat.bytes / 1024) },
       { parts: [msg(ctx.o.svgCopy ? 'finding.svgPath.copy' : 'finding.svgPath.noCopy')] },
     );
   if (ctx.notes.server) return findings.warn('svgPathServer', { reason: ctx.notes.server });
-  // 按原因合并计数（几种内部原因说法相同，whyCode 归成一种）；没有可见字的段不算问题
-  const why = new Map<string, number>(),
-    left: string[] = [];
-  outlineStat.verdicts.forEach((verdict, i) => {
-    if (verdict.keep || verdict.why === 'empty') return;
-    const code = whyCode(verdict.why);
-    why.set(code, (why.get(code) || 0) + 1);
-    left.push(plan.units[i].id);
-  });
+  // 与字体表同一组数：勾选的行中没转的字，按原因合计（含选段时就排除的字）
+  const why = new Map<string, number>();
+  for (const row of fonts)
+    for (const [code, n] of Object.entries(row.why)) if (n > 0) why.set(code, (why.get(code) || 0) + n);
   if (!why.size) return;
+  const failed = (outlineStat?.verdicts ?? []).flatMap((verdict, i) => (verdict.keep ? [] : [plan.units[i].id]));
+  const left = [...new Set([...plan.skipIds, ...failed])];
   const miss = missMsgs(ctx.notes.miss).slice(0, 3);
   const item = (code: string, n: number) =>
     code === 'font' && miss.length
       ? msg('finding.svgPathLeft.itemFonts', { n, why: msg('why.' + code), fonts: { list: miss, sep: 'common.semi' } })
       : msg('finding.svgPathLeft.item', { n, why: msg('why.' + code) });
+  const reasons = [...why].sort((a, b) => b[1] - a[1]);
   findings.warn(
     'svgPathLeft',
-    { n: left.length },
-    {
-      parts: [{ items: [...why].map(([code, n]) => item(code, n)) }],
-      els: left,
-    },
+    { n: reasons.reduce((sum, [, n]) => sum + n, 0) },
+    { parts: [{ items: reasons.map(([code, n]) => item(code, n)) }], els: left },
   );
 }
 

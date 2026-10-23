@@ -1,4 +1,4 @@
-import { ID, isHtmlEl, measure, diffBoxes, splitTop, unquote, NO_TRANSFORM, viewOf } from './util.ts';
+import { ID, idOf, isHtmlEl, measure, diffBoxes, splitTop, unquote, NO_TRANSFORM, viewOf } from './util.ts';
 import { GLYPH_BATCH as BATCH, SNAP_BOX, SNAP_INHERITED, SNAP_INLINE, SNAP_TAGS } from './glyphapi.ts';
 import { faceKey } from './fonts.ts';
 import { annotateContainerWidths } from './responsive.ts';
@@ -351,6 +351,8 @@ export interface FontPlan {
   units: UnitDesc[];
   /** 行键 → 原因代码 → 字数 */
   skip: Map<string, Map<string, number>>;
+  /** skip 中的字所在的元素 */
+  skipIds: string[];
 }
 export function planFonts(
   doc: Document,
@@ -410,7 +412,7 @@ export function planFonts(
   }
   const isPicked = (row: FontPlanRow) => picked.has(row.key);
   const list: FontPlanRow[] = [...rows.values()].map(({ last, ...row }) => row);
-  if (!list.some(isPicked)) return { rows: list, units: [], skip: new Map() };
+  if (!list.some(isPicked)) return { rows: list, units: [], skip: new Map(), skipIds: [] };
 
   // 每个文字节点的去向：{ unit } 或原因代码。先定的为准：行内块里的字先于外层这一段定下
   const status = new Map<Text, string | { unit: number }>();
@@ -505,15 +507,18 @@ export function planFonts(
   };
   visit(root);
 
-  const skip = new Map<string, Map<string, number>>();
+  const skip = new Map<string, Map<string, number>>(),
+    skipIds = new Set<string>();
   for (const [t, row] of rowOf) {
     const state = status.get(t) || 'other';
     if (!isPicked(row) || typeof state !== 'string') continue;
     const reasons = skip.getOrInsertComputed(row.key, () => new Map()),
       why = whyCode(state);
     reasons.set(why, (reasons.get(why) || 0) + charsIn(t));
+    const holder = t.parentElement?.closest(`[${ID}]`);
+    if (holder) skipIds.add(idOf(holder));
   }
-  return { rows: list, units, skip };
+  return { rows: list, units, skip, skipIds: [...skipIds] };
 }
 /** 按描述在本次转换的 DOM 里找到单元；文字对不上或在这个宽度下不再合格就返回原因 */
 function locate(

@@ -99,6 +99,7 @@ try {
     return s.result
       ? {
           findings: s.result.findings,
+          fonts: s.result.fonts,
           report: s.result.report,
           stats: s.result.stats,
           payload: s.result.payload,
@@ -366,6 +367,24 @@ try {
       'SVG 模式下有大字转成轮廓',
       o ? `${o.kept}/${o.units} 段，${o.chars} 字，约 ${Math.round(o.bytes / 1024)} KB` : '无统计',
     );
+    // 检查结果与字体表说的是同一组数：勾选的行中没转的字数、各原因的字数
+    if (!r.findings.some(f => f.code === 'svgPathServer')) {
+      const table = {};
+      for (const row of r.fonts)
+        for (const [code, n] of Object.entries(row.why)) if (n > 0) table[code] = (table[code] || 0) + n;
+      const total = Object.values(table).reduce((a, b) => a + b, 0);
+      const left = r.findings.find(f => f.code === 'svgPathLeft');
+      const listed = left ? left.parts.flatMap(p => p.items ?? []).map(m => [m.params.why.key, m.params.n]) : [];
+      const same =
+        (left ? left.params.n : 0) === total &&
+        listed.length === Object.keys(table).length &&
+        listed.every(([key, n]) => table[key.replace(/^why\./, '')] === n);
+      check(
+        same,
+        '检查结果中没转为路径的字数与原因和字体表一致',
+        `表 ${JSON.stringify(table)}；检查结果 ${left ? left.params.n : 0} 字 ${JSON.stringify(listed)}`,
+      );
+    }
     // 复制层：每个轮廓的透明文字连起来要等于它替换掉的原文
     const lost = await page.evaluate(html => {
       const d = document.createElement('div');

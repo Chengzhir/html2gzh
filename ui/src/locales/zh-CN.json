@@ -410,10 +410,10 @@
     },
     "svgPathLeft": {
       "title": "SVG 路径",
-      "text": "{n} 段勾选的字未能转为 SVG 路径",
+      "text": "勾选的行中有 {n} 个字未能转为 SVG 路径",
       "detail": "这些字保留为文字，手机上没有原网页所用的字体时显示为备用字体。原因：",
-      "item": "{n} 段：{why}",
-      "itemFonts": "{n} 段：{why}（{fonts}）"
+      "item": "{n} 字：{why}",
+      "itemFonts": "{n} 字：{why}（{fonts}）"
     },
     "hiddenText": {
       "title": "隐藏文字",
