@@ -60,6 +60,11 @@ body{margin:8px;font:15px/1.6 sans-serif;color:#222}
 <circle id="k" data-click cx="120" cy="30" r="14" fill="#2a2"><animate id="k1" attributeName="r" to="22" begin="k.click" dur="0.3s" fill="freeze"/><animate attributeName="fill" to="#dc2626" begin="k1.end" dur="0.4s" fill="freeze"/></circle>
 <rect id="btn" x="160" y="6" width="30" height="24" fill="#999"/><circle cx="175" cy="48" r="6" fill="#e90"><animate attributeName="r" to="10" begin="btn.click" dur="0.3s" fill="freeze"/></circle></svg></section>
 
+<section class="case"><p>a.end 的边界：只写 repeatDur（2.5 秒结束）；dur="0s"（一直不结束）；repeatCount="0"（当作没写，0.6 秒结束）</p>
+<svg viewBox="0 0 200 60"><rect x="10" y="10" width="50" height="40" fill="#2a2"><animate id="b1" attributeName="opacity" values="1;0.6" dur="1s" repeatDur="2.5s"/><set attributeName="fill" to="#dc2626" begin="b1.end"/></rect>
+<rect x="75" y="10" width="50" height="40" fill="#2a2"><animate id="b2" attributeName="opacity" values="1;0.6" dur="0s"/><set attributeName="fill" to="#dc2626" begin="b2.end"/></rect>
+<rect x="140" y="10" width="50" height="40" fill="#2a2"><animate id="b3" attributeName="opacity" values="1;0.6" dur="0.6s" repeatCount="0"/><set attributeName="fill" to="#dc2626" begin="b3.end"/></rect></svg></section>
+
 <section class="case"><p>依赖 id 的静态效果：线性/径向渐变、投影滤镜、圆形裁切图片、渐变文字</p>
 <svg viewBox="0 0 200 60"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#dc2626"/><stop offset="1" stop-color="#2f6db3"/></linearGradient>
 <radialGradient id="rg"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#2a2"/></radialGradient>

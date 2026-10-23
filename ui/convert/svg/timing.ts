@@ -16,18 +16,19 @@ export function clock(text: string | null | undefined): number | null {
   return +match[1] * UNIT_SECONDS[match[2] || 's'];
 }
 
-/** begin/end 列表里的一项；id 为 null 的 event 作用于动画目标自己 */
+/** begin/end 列表里的一项；不带 id 的 event 作用于动画目标自己。带 id 的项序列化时原样写回 raw */
 export type TimingItem =
   | { kind: 'other'; raw: string; id?: undefined }
   | { kind: 'offset'; t: number; id?: undefined; raw?: undefined }
-  | { kind: 'event'; id?: string | null; ev: string; t: number; raw?: string }
+  | { kind: 'event'; id?: null; ev: string; t: number; raw?: string }
+  | { kind: 'event'; id: string; ev: string; t: number; raw: string }
   | { kind: 'sync'; id: string; base: 'begin' | 'end' | 'repeat'; n: number; t: number; raw: string };
 type SyncItem = Extract<TimingItem, { kind: 'sync' }>;
-type EventItem = Extract<TimingItem, { kind: 'event' }>;
+type OwnEventItem = Extract<TimingItem, { kind: 'event'; id?: null }>;
 /** 同步基准化成的不带 id 的形式：固定时刻，或某元素上的事件 + 偏移 */
 type ResolvedSync =
   | { abs: number; ev?: undefined; src?: undefined; t?: undefined }
-  | { abs?: undefined; ev: string; src: Element | null; t: number };
+  | { abs?: undefined; ev: string; src: Element; t: number };
 
 /** begin/end 列表里的一项：offset | event（可带 id）| sync（id.begin/end/repeat(n)）| other */
 function parseItem(raw: string): TimingItem {
@@ -73,15 +74,28 @@ function serialize(item: TimingItem): string {
   return item.raw;
 }
 
-/** 一条动画的活动时长（秒）；带 end/min/max、无限或没写 dur 的返回 null */
+/** dur：没写、写错或不为正的是 null（Chrome 里这样的动画一直不结束，也不重复） */
+const simpleDur = (anim: Element): number | null => {
+  const seconds = clock(anim.getAttribute('dur'));
+  return seconds != null && seconds > 0 ? seconds : null;
+};
+/** repeatCount / repeatDur：indefinite 是 Infinity；写错或不为正的 Chrome 当作没写，是 null */
+function repeatLimit(text: string | null, parse: (text: string) => number | null): number | null {
+  if (text == null) return null;
+  if (text.trim() === 'indefinite') return Infinity;
+  const value = parse(text);
+  return value != null && value > 0 ? value : null;
+}
+
+/** 一条动画的活动时长（秒）：repeatCount × dur 与 repeatDur 都写时取较短的。带 end/min/max 或不结束的返回 null */
 export function activeDur(anim: Element): number | null {
   if (anim.hasAttribute('end') || anim.hasAttribute('min') || anim.hasAttribute('max')) return null;
-  const dur = clock(anim.getAttribute('dur'));
-  const repeatCount = anim.getAttribute('repeatCount'),
-    repeatDur = anim.getAttribute('repeatDur');
-  if (dur == null || repeatCount === 'indefinite' || repeatDur === 'indefinite') return null;
-  let active = repeatCount != null ? dur * +repeatCount : dur;
-  if (repeatDur) active = Math.min(active, clock(repeatDur));
+  const dur = simpleDur(anim);
+  if (dur == null) return null;
+  const count = repeatLimit(anim.getAttribute('repeatCount'), Number),
+    limit = repeatLimit(anim.getAttribute('repeatDur'), clock);
+  if (count == null && limit == null) return dur;
+  const active = Math.min(count == null ? Infinity : dur * count, limit ?? Infinity);
   return Number.isFinite(active) ? active : null;
 }
 
@@ -95,19 +109,23 @@ function resolveSync(item: SyncItem, ids: Map<string, Element>, depth = 0): Reso
   const baseItem = items[0];
   let base: ResolvedSync | null = null;
   if (baseItem.kind === 'offset') base = { abs: baseItem.t };
-  else if (baseItem.kind === 'event')
-    base = { ev: baseItem.ev, src: baseItem.id ? ids.get(baseItem.id) : targetOf(baseAnim, ids), t: baseItem.t };
-  else if (baseItem.kind === 'sync') base = resolveSync(baseItem, ids, depth + 1);
+  else if (baseItem.kind === 'event') {
+    // 事件源不存在：基准动画永远不开始
+    const src = baseItem.id ? ids.get(baseItem.id) : targetOf(baseAnim, ids);
+    if (src) base = { ev: baseItem.ev, src, t: baseItem.t };
+  } else if (baseItem.kind === 'sync') base = resolveSync(baseItem, ids, depth + 1);
   if (!base) return null;
   let add = item.t;
   if (item.base === 'end') {
-    const dur = activeDur(baseAnim);
-    if (dur == null) return null;
-    add += dur;
+    const active = activeDur(baseAnim);
+    if (active == null) return null;
+    add += active;
   }
   if (item.base === 'repeat') {
-    const dur = clock(baseAnim.getAttribute('dur'));
-    if (dur == null) return null;
+    // 第 n 次重复开始时触发：n 为 0、或动画在第 n 次重复开始时已经结束的，永远不触发
+    const dur = simpleDur(baseAnim),
+      active = activeDur(baseAnim);
+    if (dur == null || item.n < 1 || (active != null && dur * item.n >= active)) return null;
     add += dur * item.n;
   }
   return base.abs != null ? { abs: base.abs + add } : { ev: base.ev, src: base.src, t: base.t + add };
@@ -165,7 +183,7 @@ export function touchToClick(root: Document | Element): number {
       const items = parseList(a.getAttribute(attr));
       if (!items.length || items.some(item => item.kind === 'event' && item.ev === 'click' && !item.id)) continue;
       const touch = items.filter(
-        (item): item is EventItem => item.kind === 'event' && !item.id && /^touch(start|end)$/.test(item.ev),
+        (item): item is OwnEventItem => item.kind === 'event' && !item.id && /^touch(start|end)$/.test(item.ev),
       );
       if (!touch.length) continue;
       a.setAttribute(attr, [...items, ...touch.map(item => ({ ...item, ev: 'click' }))].map(serialize).join(';'));
