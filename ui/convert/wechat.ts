@@ -36,6 +36,8 @@ export function wechatClean(html) {
       else el.removeAttribute('style');
     }
   }
+  // 粘贴进编辑器、保存后，dir="rtl" 变成 dir="auto"（2026-10-23 在段落上实测）
+  box.querySelectorAll('[dir="rtl" i]').forEach(e => e.setAttribute('dir', 'auto'));
   return box.innerHTML;
 }
 

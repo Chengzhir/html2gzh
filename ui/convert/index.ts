@@ -142,6 +142,8 @@ export async function convert(
   const { html: marked, n: ignored } = markIgnoreWidth(mergedRaw, [...overIds]);
   const merged = wechatClean(marked);
   if (ignored) F.fixed('overflow', { n: overIds.size }, { els: [...overIds] });
+  const startEnd = alignStartEnd(merged);
+  if (startEnd.n) F.info('alignStartEnd', { n: startEnd.n }, { els: startEnd.els });
 
   // 主宽度排最后：循环结束时 verifyFrame 停在所选宽度上（复制时的纯文本取自它）
   const widths = [...new Set([...CHECK_WIDTHS.filter(w => w !== width), width])];
@@ -320,10 +322,6 @@ function outlineFindings(F: FindingSink, s, ctx) {
   );
 }
 
-/** text-align 的 start、end 按书写方向换成 left、right（内容结构检测把 start/end 判为非标准值）；其余值不变 */
-const physicalAlign = (v: string, dir: string) =>
-  v === 'start' ? (dir === 'rtl' ? 'right' : 'left') : v === 'end' ? (dir === 'rtl' ? 'left' : 'right') : v;
-
 /** 与内容结构检测同一判据：盒子左右任一侧超出正文区 1px 以上、且不是左右对称居中 */
 function overflowing(doc) {
   const box = doc.querySelector('.rich_media_content').getBoundingClientRect();
@@ -335,6 +333,35 @@ function overflowing(doc) {
     if ((r.left < box.left - 1 || r.right > box.right + 1) && !centered) out.push(el.getAttribute(ID));
   }
   return out;
+}
+
+// 内容结构检测的分段（其开源引擎 engine/paragraph.ts，默认选项）：含有这些子元素的元素往下拆，其余子元素各算一段
+const PARA_BLOCK = /^(P|DIV|SECTION|LI|H[1-6]|TABLE|WX-VIEW)$/;
+const PARA_SKIP = /^(STYLE|SCRIPT|META|LINK|TITLE|HEAD|NOSCRIPT|TEMPLATE)$/;
+function paragraphs(el: Element, out: Element[] = []) {
+  for (const c of el.children) {
+    if (PARA_SKIP.test(c.tagName)) continue;
+    if (c.tagName !== 'BLOCKQUOTE' && [...c.children].some(k => PARA_BLOCK.test(k.tagName))) paragraphs(c, out);
+    else out.push(c);
+  }
+  return out;
+}
+/** 内容结构检测判为"文本对齐属性使用了 start 或 end"的段落里，内联 text-align 为 start/end 的元素 */
+function alignStartEnd(html: string) {
+  const box = document.implementation.createHTMLDocument('').body;
+  box.innerHTML = html;
+  const els: string[] = [];
+  let n = 0;
+  for (const p of paragraphs(box)) {
+    if (/^(\s|<br[^>]*>)*$/i.test(p.innerHTML)) continue;
+    const hit = [p, ...p.querySelectorAll('[style]')].filter(e =>
+      /(^|;)\s*text-align\s*:\s*(start|end)\s*(;|$)/i.test(e.getAttribute('style') || ''),
+    );
+    if (!hit.length) continue;
+    n++;
+    for (const e of hit) if (e.hasAttribute(ID)) els.push(e.getAttribute(ID));
+  }
+  return { n, els };
 }
 
 /** 读屏专用的隐藏文字（1px 裁切）：公众号自带标题栏，这种写法留着会被判"内容溢出容器" */
@@ -474,8 +501,6 @@ async function convertAt(html, width, frame, ctx) {
   });
   const forcedOf = c => Object.fromEntries(FORCED.map(k => [k, c.getPropertyValue(k)]));
   const want = new Map();
-  // 横排元素的对齐换成左右（内容结构检测不认 start/end），按各自的书写方向换：从右到左的元素 start 是右
-  const aligned = new Map<string, string>();
   const selfColor = new Map();
   for (const el of doc.body.querySelectorAll(SELF_COLORED)) if (isHtmlEl(el)) selfColor.set(el, cs(el).color);
   const plans = [],
@@ -484,12 +509,7 @@ async function convertAt(html, width, frame, ctx) {
     const b = matched.get(el);
     const inline = el.getAttribute('style');
     const id = el.getAttribute(ID);
-    if (id) {
-      const c = cs(el);
-      want.set(id, forcedOf(c));
-      const ta = physicalAlign(c.textAlign, c.direction);
-      if (c.writingMode === 'horizontal-tb' && (ta === 'left' || ta === 'right')) aligned.set(id, ta);
-    }
+    if (id) want.set(id, forcedOf(cs(el)));
     if (b || inline) plans.push([el, toStyle(cascadeOrder(b ? b.self : [], inline), cs(el), envFor(el), tmp)]);
     if (
       !b ||
@@ -507,6 +527,10 @@ async function convertAt(html, width, frame, ctx) {
       pseudos.push({ el, slot, text, style, forced: forcedOf(pc) });
     }
   }
+  // 编辑器把 dir="rtl" 改成 dir="auto"（按首个有方向的字判断）：dir 属性与 bdo、bdi 标签带来的书写方向写成内联样式
+  const bidi = [...doc.body.querySelectorAll('[dir],bdo,bdi')]
+    .filter(isHtmlEl)
+    .map(el => [el, cs(el).direction, cs(el).unicodeBidi] as const);
 
   // 样式表删掉之前：读下 SVG 里的 CSS 动画（要改写成 SMIL），数一下 HTML 元素上的 CSS 动画（公众号里不会动）
   const svgState = prepareSvgs(doc);
@@ -527,8 +551,10 @@ async function convertAt(html, width, frame, ctx) {
         ['font-family', 'font-size', 'font-weight', 'font-style', 'line-height'].forEach(k => declared.add(k));
     }
   }
-  // 取声明值而不是计算值：line-height:1.7 的计算值是 px，会让字号不同的子孙行高全错
+  // 取声明值而不是计算值：line-height:1.7 的计算值是 px，会让字号不同的子孙行高全错。
+  // 书写方向取计算值：它可能来自 html、body 上的 dir 属性，样式表里没有声明
   const bodyCs = cs(doc.body);
+  if (bodyCs.direction !== 'ltr') declared.add('direction');
   const rootTmp = doc.createElement('span');
   for (const el of [doc.documentElement, doc.body]) {
     const b = matched.get(el);
@@ -538,7 +564,7 @@ async function convertAt(html, width, frame, ctx) {
   }
   const rootDecl = INHERITED.filter(k => declared.has(k)).map(k => [
     k,
-    (k !== 'font-size' && rootTmp.style.getPropertyValue(k)) || bodyCs.getPropertyValue(k),
+    (k !== 'font-size' && k !== 'direction' && rootTmp.style.getPropertyValue(k)) || bodyCs.getPropertyValue(k),
   ]);
   // 页面底色：宽屏上版心两侧露出来的那一块
   const pageBg = [doc.body, doc.documentElement]
@@ -560,6 +586,14 @@ async function convertAt(html, width, frame, ctx) {
   for (const [el, style] of plans) {
     if (style) el.setAttribute('style', style);
     else el.removeAttribute('style');
+  }
+  let bidiFixed = 0;
+  for (const [el, dir, ub] of bidi) {
+    const s = el.style,
+      n0 = s.length;
+    if (!s.direction) s.setProperty('direction', dir);
+    if (!s.unicodeBidi && ub !== 'normal') s.setProperty('unicode-bidi', ub);
+    if (s.length > n0) bidiFixed++;
   }
   doc.body.querySelectorAll('[class]').forEach(e => e.removeAttribute('class'));
   let pn = 0;
@@ -592,7 +626,7 @@ async function convertAt(html, width, frame, ctx) {
   root.setAttribute('data-ignore-width', '');
   while (doc.body.firstChild) root.appendChild(doc.body.firstChild);
   doc.body.appendChild(root);
-  for (const [k, v] of rootDecl) root.style.setProperty(k, k === 'text-align' ? physicalAlign(v, bodyCs.direction) : v);
+  for (const [k, v] of rootDecl) root.style.setProperty(k, v);
   // 阅读页正文区还给这几项设了值（字距 0.544px、自动断词等），原稿没声明的元素会继承过去，换行全变；根容器写回原稿的值
   for (const k of [
     'letter-spacing',
@@ -605,11 +639,6 @@ async function convertAt(html, width, frame, ctx) {
   }
   if (pageBg) root.style.setProperty('background-color', pageBg);
   root.style.setProperty('container-type', 'inline-size');
-  // 换成左右之后，继承下去的值对书写方向相反的子孙就错了（从右到左的段落继承到 left）：照原稿逐个补回。按文档顺序，父元素先补好
-  for (const [id, ta] of aligned) {
-    const el = root.querySelector<HTMLElement>(`[${ID}="${id}"]`);
-    if (el && physicalAlign(cs(el).textAlign, cs(el).direction) !== ta) el.style.setProperty('text-align', ta);
-  }
   const capped = keepMaxWidth(doc, root);
 
   const S1 = measure(doc, true),
@@ -686,6 +715,7 @@ async function convertAt(html, width, frame, ctx) {
   const preview = root.outerHTML;
 
   if (pn) F.fixed('pseudo', { n: pn });
+  if (bidiFixed) F.fixed('bidi', { n: bidiFixed });
   if (capped) F.fixed('maxWidth', { n: capped });
   if (colorFixed) F.fixed('linkColor', { n: colorFixed });
   if (pinned)

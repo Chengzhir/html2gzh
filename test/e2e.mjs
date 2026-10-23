@@ -205,10 +205,56 @@ try {
       return window.VerifyArticleStructure.verifyArticleStructure(box);
     }, html);
     await pg.close();
-    const found = Object.entries(res.inValidInfo).flatMap(([k, g]) =>
+    const { 'text-align': ta, ...rest } = res.inValidInfo;
+    const found = Object.entries(rest).flatMap(([k, g]) =>
       g.items.map(it => `[${k}] 第 ${it.paragraphIndex} 段 ${it.rules || ''} ${(it.outerHTML || '').slice(0, 80)}`),
     );
-    check(res.isValid, '编辑器的内容结构检测不报问题', found.slice(0, 3).join(' | '));
+    check(!found.length, '编辑器的内容结构检测除文字对齐外不报问题', found.slice(0, 3).join(' | '));
+    // start/end 对齐会被列出（可忽略）：段数要与检查结果里的说明一致
+    const said = r.findings.find(f => f.code === 'alignStartEnd');
+    check(
+      (ta ? ta.items.length : 0) === (said ? said.params.n : 0),
+      '内容结构检测列出的对齐方式为 start/end 的段落数与检查结果一致',
+      `检测 ${ta ? ta.items.length : 0} 段，检查结果 ${said ? said.params.n : 0} 段`,
+    );
+  }
+  // 测试稿里标了书写方向与对齐方式的段落：存草稿后 dir="rtl" 变成 auto，书写方向靠内联样式保住；start/end 原样保留
+  {
+    const pg = await browser.newPage();
+    await pg.setViewport({ width: 335, height: 800 });
+    await pg.setContent(prev, { waitUntil: 'load' });
+    const marks = await pg.evaluate(() => {
+      const out = [];
+      for (const e of document.querySelectorAll('[data-expect-dir]')) {
+        const range = document.createRange();
+        range.selectNodeContents(e);
+        const t = range.getBoundingClientRect(),
+          b = e.getBoundingClientRect(),
+          c = getComputedStyle(e);
+        const right = b.right - parseFloat(c.borderRightWidth) - parseFloat(c.paddingRight);
+        const flush = e.dataset.expectDir === 'rtl' ? Math.abs(t.right - right) < 1.5 : true;
+        out.push({
+          kind: 'dir',
+          ok: c.direction === e.dataset.expectDir && flush,
+          got: `${e.getAttribute('dir')} ${c.direction} 文字右缘距 ${(right - t.right).toFixed(1)}px`,
+        });
+      }
+      for (const e of document.querySelectorAll('[data-expect-align]')) {
+        const v = (e.getAttribute('style').match(/(?:^|;)\s*text-align:\s*([^;]+)/) || [])[1];
+        out.push({ kind: 'align', ok: v === e.dataset.expectAlign, got: v, id: e.getAttribute('data-wxc') });
+      }
+      return out;
+    });
+    await pg.close();
+    const said = r.findings.find(f => f.code === 'alignStartEnd');
+    for (const m of marks.filter(m => m.kind === 'dir'))
+      check(m.ok, '存草稿后（dir="auto"）从右到左的段落仍按原书写方向排列', m.got);
+    for (const m of marks.filter(m => m.kind === 'align'))
+      check(
+        m.ok && !!said && said.ids.includes(m.id),
+        '样式表里的 text-align: end 原样保留，并列入检查结果',
+        `${m.got}${said && said.ids.includes(m.id) ? '' : '，未列入'}`,
+      );
   }
   // 文字颜色：逐元素比原稿与"套了微信正文样式"的成品（只比有直接文字的元素）
   const colorsOf = async html => {

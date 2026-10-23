@@ -210,7 +210,6 @@ export function convertUnits(prop, v, env) {
         return round((n * cb) / 100) + 'px';
       });
   }
-  if (prop === 'text-align' || prop === 'text-align-last') v = v.replace(/^start$/i, 'left').replace(/^end$/i, 'right');
   return v;
 }
 

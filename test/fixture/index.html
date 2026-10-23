@@ -52,6 +52,9 @@ img{display:block;width:100%}
 .emo{font-family:"Segoe UI Emoji",sans-serif}
 .caps{font-family:Calibri,sans-serif;font-variant:small-caps}
 .caps span{text-transform:uppercase}
+/* 对齐：dir="rtl" 的段落以西文开头（编辑器改成 dir="auto" 后会变成从左到右，靠左）；样式表里写的 end 原样保留 */
+.side{margin:0 0 4cqw;font-size:4cqw;background:#eef3f8}
+.side.end{text-align:end}
 /* 阅读页脚本给图片写 height:auto!important + 原图宽高比（作用在 border-box 上）：下面三种都会变形，要钉住原尺寸 */
 .framed{width:200px;border:2px solid #333;border-right:0;padding-right:20px;box-sizing:border-box;background:#fff}
 .stretch{width:30%;height:40px;object-fit:cover}
@@ -87,6 +90,8 @@ img{display:block;width:100%}
   <p class="caps" data-expect="svg">Small Caps <span>and upper</span></p>
   <!-- 一个字素带 18 个组合用字素连接符（U+034F，零宽、不叠高）：快照里的逐字下标要跨过这一长串 -->
   <p class="zal" data-expect="svg">Za&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;lgo</p>
+  <p class="side" dir="rtl" data-expect-dir="rtl">Hello 从右到左的段落</p>
+  <p class="side end" data-expect-align="end">末端对齐</p>
   <img class="framed" src="pic.png" alt="带边框和右内边距的图">
   <img class="stretch" src="pic.png" alt="拉伸裁切的图">
   <img class="logo" src="pic.png" alt="按高度定尺寸的图">
