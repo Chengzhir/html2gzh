@@ -266,6 +266,7 @@ export function squashWhitespace(doc: Document, root: Element) {
  * 改在文字层面禁止断行：空格换成不换行空格，字与字之间插 U+2060（WORD JOINER，前后都不许断行）。
  */
 const WJ = '\u2060';
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 export function keepNoWrap(doc: Document, root: Element) {
   const win = viewOf(doc);
   const nowrap = (el: Element) => /^nowrap$/.test(win.getComputedStyle(el).whiteSpace);
@@ -279,8 +280,9 @@ export function keepNoWrap(doc: Document, root: Element) {
     while (walker.nextNode())
       if ((walker.currentNode as Text).data && isHtmlEl(walker.currentNode.parentElement))
         texts.push(walker.currentNode as Text);
+    // 连接符插在字素簇之间：插进 emoji 序列、组合附加符里会把一个字拆开
     texts.forEach((text, i) => {
-      const chars = [...text.data.replace(/ /g, '\u00a0')];
+      const chars = [...graphemes.segment(text.data.replace(/ /g, '\u00a0'))].map(part => part.segment);
       text.data = chars.join(WJ) + (i < texts.length - 1 ? WJ : '');
     });
     if (texts.length) count++;
