@@ -29,33 +29,48 @@ const dimAll = computed(() => state.notices.all.shown && state.notices.all.kind 
 const dimReader = computed(() => state.notices.reader.shown && state.notices.reader.kind === 'busy');
 const emptyMsg = computed(() => (state.notices.all.shown ? state.notices.all : null));
 
-// 两栏同步滚动。阅读页的正文在标题和作者行下面（高 header）：开头一屏（高 screen）内阅读页滚得快些，
-// 追平 header，之后两边差一个固定的 header
-function readerHeader() {
-  const doc = paneB.value.contentDocument,
-    content = doc?.getElementById('js_content');
-  return content ? content.getBoundingClientRect().top + doc.defaultView.scrollY : 0;
+// 原网页顶上留出与阅读页标题区等高的空白，两栏同步滚动就是一比一。用定位的 html 的上外边距（边框宽度会被取整）：
+// 相对页面定位的元素一起下移，vh 不变；NEUTRAL 用 !important 清掉了 html 的外边距，这里也要 !important
+let originalTop = 0;
+let spacer: HTMLStyleElement | null = null;
+const contentTop = (doc: Document) => {
+  const body = doc.body.getBoundingClientRect(),
+    style = doc.defaultView.getComputedStyle(doc.body);
+  return body.top + doc.defaultView.scrollY + parseFloat(style.borderTopWidth) + parseFloat(style.paddingTop);
+};
+async function alignPanes() {
+  const original = paneA.value.contentDocument,
+    reader = paneB.value.contentDocument;
+  const content = reader?.getElementById('js_content');
+  if (!original?.body || !content) return;
+  await reader.fonts.ready;
+  const header = content.getBoundingClientRect().top + reader.defaultView.scrollY;
+  if (!spacer || spacer.ownerDocument !== original) {
+    originalTop = contentTop(original);
+    spacer = original.createElement('style');
+    original.head.appendChild(spacer);
+  }
+  spacer.textContent = `html{position:relative!important;margin-top:${Math.max(0, header - originalTop)}px!important}`;
 }
-const toReader = (y: number, header: number, screen: number) => (y >= screen ? y + header : y * (1 + header / screen));
-const toOriginal = (y: number, header: number, screen: number) =>
-  y >= screen + header ? y - header : y / (1 + header / screen);
 let syncing = false;
 function onLoad(which: 'A' | 'B') {
   const frame = which === 'A' ? paneA.value : paneB.value,
     other = which === 'A' ? paneB.value : paneA.value;
   // 深色的在隐藏 iframe 里已经照阅读页脚本改过图片尺寸
   if (which === 'B' && !frame.dataset.dark) readerImages(frame.contentDocument);
-  frame.contentWindow.addEventListener('scroll', () => {
-    if (syncing || !other.contentWindow) return;
-    syncing = true;
-    const header = readerHeader(),
-      screen = Math.max(1, paneA.value.clientHeight),
-      y = frame.contentWindow.scrollY;
-    other.contentWindow.scrollTo(0, which === 'A' ? toReader(y, header, screen) : toOriginal(y, header, screen));
-    requestAnimationFrame(() => {
-      syncing = false;
-    });
-  });
+  alignPanes();
+  frame.contentWindow.addEventListener(
+    'scroll',
+    () => {
+      if (syncing || !other.contentWindow) return;
+      syncing = true;
+      other.contentWindow.scrollTo(0, frame.contentWindow.scrollY);
+      requestAnimationFrame(() => {
+        syncing = false;
+      });
+    },
+    { passive: true },
+  );
 }
 </script>
 

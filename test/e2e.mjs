@@ -840,25 +840,32 @@ try {
       '左栏原网页预览与右栏正文可见区同宽、同高、上沿对齐',
       `宽/上沿/高 左 ${panesBox.a.map(v => v.toFixed(1)).join('/')}，右 ${panesBox.b.map(v => v.toFixed(1)).join('/')}`,
     );
-    // 同步滚动：原稿滚 200px，阅读页按"开头一屏内追平标题区高度"的规则跟着滚
-    const sync = await page.evaluate(async () => {
+    // 原网页顶上留出与标题区等高的空白：同一元素在两栏的高度相同，滚动前后都一样（同步滚动是一比一）
+    const sameHeight = await page.evaluate(async () => {
       const a = document.getElementById('paneA'),
         b = document.getElementById('paneB');
-      const T = b.contentDocument.getElementById('js_content').getBoundingClientRect().top + b.contentWindow.scrollY,
-        H = a.clientHeight;
+      await new Promise(r => setTimeout(r, 300));
+      const at = () => {
+        for (const el of a.contentDocument.querySelectorAll('[data-wxc]')) {
+          const twin = b.contentDocument.querySelector(`[data-wxc="${el.getAttribute('data-wxc')}"]`);
+          const ra = el.getBoundingClientRect();
+          if (!twin || !ra.height) continue;
+          const top = ra.top + a.getBoundingClientRect().top,
+            twinTop = twin.getBoundingClientRect().top + b.getBoundingClientRect().top;
+          return [el.getAttribute('data-wxc'), top - twinTop];
+        }
+        return ['', NaN];
+      };
+      const [id, before] = at();
       a.contentWindow.scrollTo(0, 200);
       await new Promise(r => setTimeout(r, 300));
-      const maxB = b.contentDocument.documentElement.scrollHeight - b.contentWindow.innerHeight;
-      const want = Math.min(
-        maxB,
-        a.contentWindow.scrollY >= H ? a.contentWindow.scrollY + T : a.contentWindow.scrollY * (1 + T / H),
-      );
-      return { a: a.contentWindow.scrollY, b: b.contentWindow.scrollY, want };
+      const [, after] = at();
+      return { id, before, after, scrolled: [a.contentWindow.scrollY, b.contentWindow.scrollY] };
     });
     check(
-      Math.abs(sync.b - sync.want) <= 1,
-      '两栏同步滚动',
-      `原稿 ${sync.a}px → 阅读页 ${sync.b}px（应为 ${sync.want.toFixed(1)}）`,
+      Math.abs(sameHeight.before) <= 1 && Math.abs(sameHeight.after) <= 1,
+      '两栏中同一元素高度相同，同步滚动后仍相同',
+      `${sameHeight.id} 高度差 ${sameHeight.before.toFixed(1)} → ${sameHeight.after.toFixed(1)}px，滚动 ${sameHeight.scrolled.join('/')}`,
     );
     check(errors.length === errs0, '切换深色、同步滚动时页面无脚本错误', errors.slice(errs0, errs0 + 3).join(' | '));
   }
