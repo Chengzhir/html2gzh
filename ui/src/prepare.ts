@@ -42,7 +42,7 @@ export interface PrepIO {
 }
 /**
  * missing 只放 <img> 的图（粘贴后变错误卡片、草稿存不了）；样式表、CSS 与 svg <image> 引用的文件缺了只影响效果。
- * names：图片 id → 文章文件夹里的相对路径，提示图片过大、下载超时时用
+ * names：图片 id → 网页文件夹里的相对路径，提示图片过大、下载超时时用
  */
 export interface PrepReport {
   missing: string[];
