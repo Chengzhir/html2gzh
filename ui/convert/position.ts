@@ -212,11 +212,12 @@ function flexify(doc: Document, parent: HTMLElement): boolean {
   const kids = [...parent.children] as (HTMLElement | SVGElement)[];
   if (kids.some(kid => /^inline/.test(win.getComputedStyle(kid).display) && !kid.hasAttribute('data-wxc-float')))
     return false;
-  const next = parent.nextElementSibling;
-  // 浮动子项稍后统一用 translate 摆回，不参与这里的校验
-  const snap = () =>
-    [parent, next, ...kids].filter(Boolean).map(e => (e.hasAttribute('data-wxc-float') ? null : layoutRect(doc, e)));
+  const floating = (e: Element) => e.hasAttribute('data-wxc-float');
+  // 浮动的元素稍后统一用 translate 摆回，不参与这里的校验；父级例外：下面要按它的内容框排，它自己浮动也要量
+  const watched = [parent, ...[parent.nextElementSibling, ...kids].filter(e => e != null).filter(e => !floating(e))];
+  const snap = () => watched.map(e => layoutRect(doc, e));
   const before = snap();
+  const rectOf = new Map(watched.map((e, i) => [e, before[i]]));
   const saved = [parent, ...kids].map(e => e.getAttribute('style'));
   const parentStyle = win.getComputedStyle(parent);
   const parentRect = before[0];
@@ -229,20 +230,21 @@ function flexify(doc: Document, parent: HTMLElement): boolean {
     return [parseFloat(computed.marginTop), parseFloat(computed.marginBottom)];
   });
   const collapse = (a: number, b: number) => Math.max(a, b, 0) + Math.min(a, b, 0);
-  const floatH = kids.map(kid => (kid.hasAttribute('data-wxc-float') ? layoutRect(doc, kid).height : 0));
+  const floatH = kids.map(kid => (floating(kid) ? layoutRect(doc, kid).height : 0));
   parent.style.setProperty('display', 'flex');
   parent.style.setProperty('flex-direction', 'column');
   parent.style.setProperty('align-items', 'stretch');
   let last: HTMLElement | SVGElement | null = null,
     prev = -1;
-  kids.forEach((kid, i) => {
-    const rect = before[i + (next ? 2 : 1)];
-    if (kid.hasAttribute('data-wxc-float')) {
+  for (const [i, kid] of kids.entries()) {
+    // 没量的就是浮动项
+    const rect = rectOf.get(kid);
+    if (!rect) {
       // flex 里浮动不生效，它就是个普通弹性项：下外边距必须正好抵消自身高度才不占位，多抵消一点都会把后面的项往上拉。
       // 多写 1/128px，截断到 1/64px 后正好等于高度
       kid.style.setProperty('margin-top', '0px');
       kid.style.setProperty('margin-bottom', -round(floatH[i] + 1 / 128) + 'px');
-      return;
+      continue;
     }
     const gap = rect.top - cursor,
       own = prev < 0 ? margins[i][0] : collapse(margins[prev][1], margins[i][0]);
@@ -252,7 +254,7 @@ function flexify(doc: Document, parent: HTMLElement): boolean {
     cursor = rect.bottom;
     last = kid;
     prev = i;
-  });
+  }
   if (last) {
     const gap = bottom - cursor,
       own = margins[prev][1];
@@ -261,11 +263,10 @@ function flexify(doc: Document, parent: HTMLElement): boolean {
   const after = snap();
   const ok = after.every(
     (rect, i) =>
-      !rect ||
-      (Math.abs(rect.top - before[i].top) < 0.75 &&
-        Math.abs(rect.left - before[i].left) < 0.75 &&
-        Math.abs(rect.width - before[i].width) < 0.75 &&
-        Math.abs(rect.height - before[i].height) < 0.75),
+      Math.abs(rect.top - before[i].top) < 0.75 &&
+      Math.abs(rect.left - before[i].left) < 0.75 &&
+      Math.abs(rect.width - before[i].width) < 0.75 &&
+      Math.abs(rect.height - before[i].height) < 0.75,
   );
   if (!ok)
     [parent, ...kids].forEach((e, i) =>

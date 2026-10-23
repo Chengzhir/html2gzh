@@ -17,6 +17,10 @@ ul.plain li{display:flex;gap:8px}
 ul.plain i{width:10px;height:10px;background:#333;flex:none;margin-top:8px}
 .over{position:relative;z-index:1;height:40px;background:#9cf}
 .under{margin-top:-15px;height:40px;background:#fc9}
+.holder{position:relative;height:64px}
+.holder>div{position:absolute;right:8px;top:6px;width:45%;background:#ddd}
+.holder p{margin:0;height:24px}
+.holder .up{position:relative;z-index:2;background:#9cf}
 p.lead{font-size:1.2rem}
 p.lead::after{content:" →"}
 .dot{position:relative}
@@ -69,6 +73,7 @@ img{display:block;width:100%}
   <ul class="plain"><li><i></i>列表一</li><li><i></i>列表二</li></ul>
   <div class="over">在上面（z-index:1）</div>
   <div class="under">被压住</div>
+  <div class="holder"><div><p class="up">绝对定位盒里 z-index:2 的段</p><p>下一段</p></div></div>
   <p class="dot">末尾圆点<i></i></p>
   <p class="big" data-expect="svg">两行的大标题，<em>中间有一处</em>蓝字</p>
   <h3 class="mix" data-expect="svg"><b>A1</b>弹性容器里的文字段</h3>
