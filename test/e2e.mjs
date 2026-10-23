@@ -793,7 +793,7 @@ try {
           icon: img ? { src: img.getAttribute('src'), w: img.naturalWidth } : null,
         };
       });
-      const iconOk = hasIcon ? !!frame.icon && /\.ico$/.test(frame.icon.src) && frame.icon.w === 32 : !frame.icon;
+      const iconOk = hasIcon ? !!frame.icon && frame.icon.src.endsWith('.ico') && frame.icon.w === 32 : !frame.icon;
       check(
         frame.title === title &&
           frame.name === (author || '公众号名称') &&
@@ -1073,7 +1073,7 @@ try {
       r1.id &&
         r1.width === 1080 &&
         r1.height === 720 &&
-        /\.jpg$/.test(r1.id) &&
+        r1.id.endsWith('.jpg') &&
         r1.size <= 400 << 10 &&
         r1.srcSize === photo.length &&
         !r1.over,
@@ -1134,7 +1134,7 @@ try {
       ? await sharp(Buffer.from(await (await fetch(`http://127.0.0.1:${UI}/a/${r2.id}`)).arrayBuffer())).metadata()
       : {};
     check(
-      /\.png$/.test(r2.id || '') && r2meta.hasAlpha && r2.width === 1080,
+      (r2.id || '').endsWith('.png') && r2meta.hasAlpha && r2.width === 1080,
       '有透明部分的图片存为 PNG，保留透明；比 1080px 宽时缩到 1080px 宽',
       JSON.stringify({ id: r2.id, w: r2.width, alpha: r2meta.hasAlpha, how: r2.how }),
     );
@@ -1191,13 +1191,14 @@ try {
         });
         const doc = f.contentDocument;
         await Promise.all(
-          [...doc.images].map(i =>
-            i.complete
-              ? 0
-              : new Promise(r => {
+          [...doc.images]
+            .filter(i => !i.complete)
+            .map(
+              i =>
+                new Promise(r => {
                   i.onload = i.onerror = r;
                 }),
-          ),
+            ),
         );
         const m = await window.__wxcScales(doc, 335);
         f.remove();

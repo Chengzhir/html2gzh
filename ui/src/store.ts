@@ -42,13 +42,13 @@ export interface Shrunk {
   over: boolean;
 }
 /** 超过上限、仍是原图（或压不到上限）的图片；why 是给用户看的原因，可为空 */
-export interface Big {
+interface Big {
   id: string;
   name: string;
   size: number;
   why: string;
 }
-export interface Report extends PrepReport {
+interface Report extends PrepReport {
   big: Big[];
   shrunk: Shrunk[];
   sizes: Map<string, number>;
@@ -74,12 +74,13 @@ interface ShrinkOutcome {
   sizes: Map<string, number>;
 }
 export type NoticeKind = 'busy' | 'err';
-export interface Notice {
+interface Notice {
   text: string;
   kind: NoticeKind;
   shown: boolean;
   timer: number;
 }
+const idleNotice = (): Notice => ({ text: '', kind: 'busy', shown: false, timer: 0 });
 
 const OPTS_KEY = 'wxc.opts',
   SHRINK_KEY = 'wxc.shrink',
@@ -152,8 +153,8 @@ export const state = reactive({
   originalDoc: '',
   reader: { width: 0, dark: false, html: '', darkDoc: false },
   notices: {
-    all: { text: '', kind: 'busy', shown: false, timer: 0 } as Notice,
-    reader: { text: '', kind: 'busy', shown: false, timer: 0 } as Notice,
+    all: idleNotice(),
+    reader: idleNotice(),
   },
 });
 
@@ -280,7 +281,7 @@ function fontBytes(url: string): Promise<string | null> {
       return format ? uploadBlob(buf, format, `font.${format}`) : null;
     })().catch((): null => null);
     // 失败的不缓存，下次转换再试
-    job.then(id => {
+    void job.then(id => {
       if (!id) fontIds.delete(url);
     });
     return job;
@@ -301,7 +302,7 @@ async function imageSizes(payload: string) {
   return sizes;
 }
 /** 超过 limit 字节的本地图片，从大到小 */
-export async function bigImages(
+async function bigImages(
   payload: string,
   names: Map<string, string>,
   limit = limitBytes(),
@@ -388,7 +389,7 @@ export function saveShrink(patch: Partial<typeof SHRINK_DEFAULT>) {
   Object.assign(state.shrink, patch);
   localStorage.setItem(SHRINK_KEY, JSON.stringify(state.shrink));
   if (state.busy) shrinkAgain = true;
-  else reshrink();
+  else void reshrink();
 }
 async function reshrink() {
   const result = state.result;
@@ -412,7 +413,7 @@ let again = false;
 /** 转换进行中又改了设置：等这一轮结束再按新设置转一次 */
 export function rerun() {
   if (state.busy) again = true;
-  else run();
+  else void run();
 }
 
 async function run() {
@@ -484,10 +485,10 @@ async function run() {
     notice('all', t('stage.failed', { msg: state.error }), 'err');
   } finally {
     state.busy = false;
-    if (again) run();
+    if (again) void run();
     else if (shrinkAgain) {
       shrinkAgain = false;
-      reshrink();
+      void reshrink();
     }
   }
 }
@@ -553,7 +554,7 @@ export async function pollNow() {
       reloadTimer = window.setTimeout(rerun, 400);
     }
   }
-  pollTimer = window.setTimeout(pollNow, 1500);
+  pollTimer = window.setTimeout(() => void pollNow(), 1500);
 }
 export async function recheck() {
   state.recheckPending = true;
@@ -563,14 +564,14 @@ export async function recheck() {
     /* 下一次轮询会显示本机服务的状态 */
   } finally {
     state.recheckPending = false;
-    pollNow();
+    void pollNow();
   }
 }
 /** 保存取图地址：本机端口立即换绑，返回新的检测状态 */
 export async function saveHost(form: { imgPort: string; host: string; port: string; proto: string }) {
   const { host } = await api<{ host: HostState }>('/api/host', form);
   if (state.server) state.server = markRaw({ ...state.server, host, imgPort: host.config.imgPort });
-  pollNow();
+  void pollNow();
   return host;
 }
 
@@ -638,7 +639,7 @@ export async function openPath(input: string) {
   try {
     await api('/api/open', { path: input });
     srcNote(t('src.opening'));
-    pollNow();
+    void pollNow();
   } catch (e) {
     srcNote(errText(e), 'err');
   }
@@ -651,7 +652,7 @@ export function setWidth(width: number) {
 export function setDark(on: boolean) {
   state.dark = on;
   localStorage.setItem(DARK_KEY, on ? '1' : '');
-  if (!state.busy) renderReader();
+  if (!state.busy) void renderReader();
 }
 /** "重新转换"/"重新拖入文件夹"：检查结果里说怎么改完再转 */
 export const redoHint = () => t(state.src?.kind === 'files' ? 'src.redoFiles' : 'src.redoPath');

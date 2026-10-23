@@ -27,7 +27,7 @@ export const errorCode = (error: unknown) =>
 // ---------- 检查结果 ----------
 export type FindingLevel = 'error' | 'warn' | 'fixed' | 'info';
 /** 要在预览里标出的元素：元素本身或它的 data-wxc */
-export type FindingEls = (Element | string)[];
+type FindingEls = (Element | string)[];
 /** 详细说明里接在 finding.<code>.detail 之后的部分：一句话，或者一个列表 */
 export type FindingPart = Msg | { items: Msg[] };
 /**
@@ -202,7 +202,7 @@ export interface ArticleResponse {
 }
 
 // ---------- 大图处理 /api/shrink ----------
-export type ShrinkSkip = 'fits' | 'vector' | 'animated' | 'unreadable' | 'noGain';
+type ShrinkSkip = 'fits' | 'vector' | 'animated' | 'unreadable' | 'noGain';
 /** 存成什么格式：JPEG 带质量；PNG 为无损或 256 色 */
 export interface ShrinkHow {
   fmt: 'jpeg' | 'png' | 'palette';

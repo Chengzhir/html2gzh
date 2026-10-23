@@ -138,7 +138,7 @@
 
 ## 开发
 
-服务端与转换器用 TypeScript 编写，只用可以直接擦除的语法：Node 直接运行 `.ts` 文件，不需要编译。页面使用 Vue 3、Naive UI 与 vue-i18n，由 Vite 构建到 `ui/dist`；启动时如果页面或转换器的源码比构建结果新，会先重新构建。也可以手动运行 `npm run build`。代码格式由 Prettier 统一：`npm run format` 格式化，`npm run check` 检查格式并对服务端与页面做类型检查。
+服务端与转换器用 TypeScript 编写，只用可以直接擦除的语法：Node 直接运行 `.ts` 文件，不需要编译。页面使用 Vue 3、Naive UI 与 vue-i18n，由 Vite 构建到 `ui/dist`；启动时如果页面或转换器的源码比构建结果新，会先重新构建。也可以手动运行 `npm run build`。代码格式由 Prettier 统一：`npm run format` 格式化。`npm run check` 依次检查格式、对服务端与页面做类型检查（TypeScript 严格模式）、用 oxlint 做带类型信息的静态检查（如未处理的 Promise），并用 knip 查找未使用的文件、导出与依赖。
 
 页面上的文字集中在 `ui/src/locales/zh-CN.json`。转换器与接口错误只返回文案的键与参数，由页面组成句子；终端输出写在服务端代码中。
 

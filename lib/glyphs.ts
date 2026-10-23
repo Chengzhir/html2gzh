@@ -86,11 +86,11 @@ async function getSession(): Promise<Session> {
         try {
           url = new URL(request.url());
         } catch {
-          return request.abort();
+          return void request.abort();
         }
-        if (url.origin !== ORIGIN) return request.abort();
+        if (url.origin !== ORIGIN) return void request.abort();
         if (url.pathname === '/')
-          return request.respond({
+          return void request.respond({
             status: 200,
             contentType: 'text/html; charset=utf-8',
             // 打印时照原样印颜色：默认的省墨模式会把浅色字加深
@@ -98,8 +98,8 @@ async function getSession(): Promise<Session> {
           });
         const id = url.pathname.startsWith('/a/') ? url.pathname.slice(3) : '';
         const buf = ASSET_ID.test(id) ? getAsset(id) : null;
-        if (!buf) return request.respond({ status: 404, body: '' });
-        return request.respond({
+        if (!buf) return void request.respond({ status: 404, body: '' });
+        return void request.respond({
           status: 200,
           contentType: 'application/octet-stream',
           headers: { 'access-control-allow-origin': '*' },
@@ -128,7 +128,7 @@ function invalid(what: string): never {
   throw new Error(what);
 }
 const asText = (input: unknown, max: number, what: string) => {
-  const text = input == null ? '' : String(input);
+  const text = typeof input === 'string' || typeof input === 'number' ? String(input) : '';
   if (text.length > max || CONTROL_CHARS.test(text)) invalid(what + ' 超长或带控制字符');
   return text;
 };

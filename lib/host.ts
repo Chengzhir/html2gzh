@@ -142,13 +142,13 @@ export async function checkHosts() {
     host.checking = false;
     if (recheck || startGeneration !== generation) {
       recheck = false;
-      checkHosts();
+      void checkHosts();
     }
   }
 }
 /** 页面开着（每 1.5 秒来问一次状态）才定期重测；没人看时不去打扰查 IP 的网站 */
 export function checkIfStale() {
-  if (!host.checking && Date.now() - host.checkedAt > TTL) checkHosts();
+  if (!host.checking && Date.now() - host.checkedAt > TTL) void checkHosts();
 }
 function pickBase(): HostState['pick'] {
   if (publicAddress.host) return host.manual || { base: baseOf(publicAddress.host), ok: null };
@@ -167,7 +167,7 @@ export const hostState = (): HostState => ({
 
 /** 公网地址：域名、IPv4 或 IPv6，不带协议、端口和路径；内网地址微信服务器连不上，不收 */
 function cleanHost(input: unknown) {
-  const text = String(input || '').trim();
+  const text = typeof input === 'string' ? input.trim() : '';
   if (!text) return '';
   let parsed = null;
   try {
@@ -196,7 +196,7 @@ function cleanHost(input: unknown) {
 /** 页面上“取图地址”表单 { imgPort, host, port, proto } → 校验过的设置；不合格时抛出 CodedError（文案 api.*） */
 export function parseHostForm(form: Record<string, unknown>): HostConfig {
   // 空串表示留空；其余按数字解析，解析不出是 NaN，下面的校验会拒绝
-  const asPort = (value: unknown) => (value == null || String(value).trim() === '' ? 0 : Number(value));
+  const asPort = (value: unknown) => (typeof value === 'string' && !value.trim() ? 0 : Number(value ?? 0));
   const imgPort = asPort(form.imgPort),
     port = asPort(form.port);
   if (!validPort(imgPort)) throw new CodedError('api.badImgPort');
@@ -211,5 +211,5 @@ export function applyHost(config: HostConfig) {
   saveSettings({ imgPort: IMG_PORT, host: publicAddress.host, port: publicAddress.port, proto: publicAddress.proto });
   generation++;
   Object.assign(host, { list: [], manual: null, checkedAt: 0, probes: 0 });
-  checkHosts();
+  void checkHosts();
 }

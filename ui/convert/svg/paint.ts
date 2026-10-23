@@ -70,7 +70,7 @@ function approxPaint(el: SVGElement, ids: Map<string, Element>, win: Window, rep
     const match = URL_REF.exec(value);
     if (!match) continue;
     const server = ids.get(decodeURIComponent(match[1]));
-    const color = server && /Gradient$/.test(server.localName) ? averageStops(server, ids, win) : null;
+    const color = server && server.localName.endsWith('Gradient') ? averageStops(server, ids, win) : null;
     const fallback = value.slice(match.index + match[0].length).trim();
     el.removeAttribute(prop);
     el.style.setProperty(
@@ -174,7 +174,7 @@ function clipShapes(clipPath: Element, el: SVGGraphicsElement): ClipShape[] | nu
   if (clipPath.getAttribute('clipPathUnits') === 'objectBoundingBox') {
     let bbox: DOMRect;
     try {
-      bbox = (el as SVGGraphicsElement).getBBox();
+      bbox = el.getBBox();
     } catch {
       return null;
     }
@@ -253,7 +253,7 @@ function rectClip(doc: Document, el: SVGGraphicsElement, shapes: ClipShape[]): b
           k,
           attrOf(copy, k)
             .split(';')
-            .map(v => (attrName === 'x' ? `${-v} ${-y}` : `${-x} ${-v}`))
+            .map(v => (attrName === 'x' ? `${-Number(v)} ${-y}` : `${-x} ${-Number(v)}`))
             .join(';'),
         );
     if (a.localName === 'set') {
@@ -293,7 +293,7 @@ function pathClip(el: SVGGraphicsElement, shapes: ClipShape[], win: Window, rep:
   let box = 'view-box';
   if (!vbOriginZero(el)) {
     if (boxMoves(el)) return false;
-    const bbox = (el as SVGGraphicsElement).getBBox();
+    const bbox = el.getBBox();
     segs = transformPath(segs, [1, 0, 0, 1, -bbox.x, -bbox.y]);
     box = 'fill-box';
   }

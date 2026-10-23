@@ -14,9 +14,7 @@ function findHtml(target: string): string | null {
   return pick ? path.join(target, pick) : null;
 }
 function cleanPath(input: unknown) {
-  let text = String(input || '')
-    .trim()
-    .replace(/^["']|["']$/g, '');
+  let text = typeof input === 'string' ? input : ''.trim().replace(/^["']|["']$/g, '');
   if (/^file:\/\//i.test(text)) text = fileURLToPath(text);
   return text;
 }

@@ -174,7 +174,7 @@ export function webFamilies(doc: Document) {
   return out;
 }
 /** 字体栈里原稿用上的网络字体名，没有则为空串 */
-export const webIn = (stack: string, web: Set<string> | null) =>
+const webIn = (stack: string, web: Set<string> | null) =>
   web && web.size
     ? splitTop(stack)
         .map(unquote)
@@ -251,7 +251,8 @@ const boxWhy = (style: CSSStyleDeclaration, el: Element) =>
         : '';
 const blockOf = (win: Window, el: Element, root: Element) => {
   let block = el;
-  while (block !== root && /^inline/.test(win.getComputedStyle(block).display)) block = block.parentElement ?? root;
+  while (block !== root && win.getComputedStyle(block).display.startsWith('inline'))
+    block = block.parentElement ?? root;
   return block;
 };
 
@@ -486,7 +487,7 @@ export function planFonts(
         } else if (run.length) run.push(node);
         continue;
       }
-      if (itemized || !/^inline/.test(nodeStyle.display)) {
+      if (itemized || !nodeStyle.display.startsWith('inline')) {
         flush();
         visit(node);
         continue;

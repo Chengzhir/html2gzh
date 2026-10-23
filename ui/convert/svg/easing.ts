@@ -9,17 +9,17 @@ const NAMED: Record<string, number[]> = {
 };
 const SAMPLES = 16;
 
-export interface LinearEasing {
+interface LinearEasing {
   kind: 'linear';
 }
-export interface CubicEasing {
+interface CubicEasing {
   kind: 'cubic';
   /** cubic-bezier 的 x1 y1 x2 y2 */
   p: number[];
 }
 /** steps() 的跳变位置（去掉 jump- 前缀） */
-export type StepPosition = 'start' | 'end' | 'none' | 'both';
-export interface StepsEasing {
+type StepPosition = 'start' | 'end' | 'none' | 'both';
+interface StepsEasing {
   kind: 'steps';
   n: number;
   pos: StepPosition;

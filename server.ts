@@ -54,10 +54,10 @@ async function handOver() {
 await ensureUi();
 const uiServer = http.createServer(wrap(uiRoute));
 uiServer.once('error', (error: NodeJS.ErrnoException) => {
-  if (error.code === 'EADDRINUSE') handOver();
+  if (error.code === 'EADDRINUSE') void handOver();
   else throw error;
 });
-uiServer.listen(UI_PORT, '127.0.0.1', async () => {
+async function onListening() {
   if (initialArg) {
     try {
       openArticle(initialArg);
@@ -91,6 +91,7 @@ uiServer.listen(UI_PORT, '127.0.0.1', async () => {
   console.log(`\n  页面    http://127.0.0.1:${UI_PORT}/`);
   console.log(`  取图    0.0.0.0:${IMG_PORT}（对外网开放，只提供已载入文章中的图片；端口可在页面中修改）`);
   console.log('  退出    Ctrl+C\n');
-  checkHosts();
+  void checkHosts();
   openBrowser(`http://127.0.0.1:${UI_PORT}/`);
-});
+}
+uiServer.listen(UI_PORT, '127.0.0.1', () => void onListening());

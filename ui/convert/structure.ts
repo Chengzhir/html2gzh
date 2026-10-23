@@ -170,7 +170,7 @@ const isTextContext = (win: Window, el: Element) => {
     /^(p|h[1-6]|span|li|blockquote|td|th|pre|figcaption|b|strong|i|em|u|s|label|sub|sup|small|code|mark)$/.test(
       el.localName,
     ) ||
-    (/^inline/.test(win.getComputedStyle(el).display) && !/flex|grid/.test(win.getComputedStyle(el).display))
+    (win.getComputedStyle(el).display.startsWith('inline') && !/flex|grid/.test(win.getComputedStyle(el).display))
   );
 };
 
@@ -297,7 +297,7 @@ export function cleanAttributes(root: Element) {
       if (name === ID || name.startsWith('data-wxc')) continue;
       if (
         /^on/i.test(name) ||
-        /^data-v-/.test(name) ||
+        name.startsWith('data-v-') ||
         [
           'class',
           'loading',

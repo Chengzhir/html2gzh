@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": ["ui/dist/**", "test/out/**", "test/vendor/**", "test/fixture*/**"],
+  "rules": {
+    "unicorn/no-useless-spread": "off",
+    "eslint/no-useless-escape": "off",
+    "eslint/no-control-regex": "off",
+    "typescript/restrict-template-expressions": "off",
+    "eslint/no-unused-vars": ["warn", { "ignoreRestSiblings": true }],
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/await-thenable": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-base-to-string": "error"
+  }
+}

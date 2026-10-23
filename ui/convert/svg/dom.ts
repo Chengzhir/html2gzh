@@ -4,7 +4,7 @@ import { attrOf } from '../util.ts';
 
 export const SVG_NS = 'http://www.w3.org/2000/svg';
 export const XLINK_NS = 'http://www.w3.org/1999/xlink';
-export const ANIM = new Set(['animate', 'set', 'animateTransform', 'animateMotion']);
+const ANIM = new Set(['animate', 'set', 'animateTransform', 'animateMotion']);
 /** 存储后还在的 <animate>/<set> attributeName；其余的整条被删 */
 export const WX_ANIM_OK = new Set([
   'x',
@@ -62,13 +62,13 @@ export function inResource(el: Element): boolean {
     if (NON_RENDER.has(ancestor.localName)) return true;
   return false;
 }
-export const outerSvg = (el: Element): Element | null => {
+const outerSvg = (el: Element): Element | null => {
   let outer: Element | null = null;
   for (let ancestor: Element | null = el; ancestor && isSvg(ancestor); ancestor = ancestor.parentElement)
     if (ancestor.localName === 'svg') outer = ancestor;
   return outer;
 };
-export const svgKids = (el: Element): SVGElement[] => [...el.children].filter(isSvg);
+const svgKids = (el: Element): SVGElement[] => [...el.children].filter(isSvg);
 export const ownAnims = (el: Element): SVGElement[] => svgKids(el).filter(kid => ANIM.has(kid.localName));
 export const hasAnim = (el: Element): boolean =>
   [...el.getElementsByTagNameNS(SVG_NS, '*')].some(node => ANIM.has(node.localName));
@@ -109,13 +109,13 @@ export function xyToTranslate(anim: Element, base: number): Element {
   return animTransform;
 }
 
-export function mk(doc: Document, tag: string, attrs: Record<string, unknown> = {}) {
+export function mk(doc: Document, tag: string, attrs: Record<string, string | number | null | undefined> = {}) {
   const e = doc.createElementNS(SVG_NS, tag);
   for (const [name, value] of Object.entries(attrs)) if (value != null) e.setAttribute(name, String(value));
   return e;
 }
 /** 用一个 <g> 把元素包起来，返回这个 g */
-export function wrapG(el: Element, attrs?: Record<string, unknown>) {
+export function wrapG(el: Element, attrs?: Record<string, string | number | null | undefined>) {
   const g = mk(el.ownerDocument, 'g', attrs);
   el.before(g);
   g.appendChild(el);

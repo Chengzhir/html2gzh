@@ -203,7 +203,7 @@ function frozenClone(res: Element, win: SvgWindow): Element {
     if (!isSvg(el)) return;
     for (const a of ownAnims(el)) {
       const name = a.getAttribute('attributeName');
-      if (name) freezeValue(el as SVGElement, to[i] as SVGElement, name, win);
+      if (name) freezeValue(el, to[i] as SVGElement, name, win);
     }
   });
   return copy;
@@ -252,7 +252,7 @@ interface SubtreeFlags {
 }
 const SHAPE_KID = (kid: Element) => isSvg(kid) && !isAnim(kid) && !/^(title|desc|metadata)$/.test(kid.localName);
 /** 要画成位图的连续兄弟元素（静态、依赖 id）：[[el, el…], …] */
-export function findUnits(root: Element, win: Window, ids: Map<string, Element>): Element[][] {
+function findUnits(root: Element, win: Window, ids: Map<string, Element>): Element[][] {
   // 自下而上算一遍每个元素子树的标志，免得逐层重复遍历（大插画有上千个元素）
   const info = new Map<Element, SubtreeFlags>(),
     resAnim = new Map<Element, boolean>();
@@ -507,7 +507,7 @@ async function rasterize(
   if (run.some(el => paintAnimated(el, win, ids))) rep('paint:frozen', run[0]);
   const r3 = (n: number) => Math.round(n * 1000) / 1000;
   const fo = mk(doc, 'foreignObject', { x: r3(hit.x), y: r3(hit.y), width: r3(hit.w), height: r3(hit.h) });
-  const section = doc.createElementNS('http://www.w3.org/1999/xhtml', 'section') as HTMLElement;
+  const section = doc.createElementNS('http://www.w3.org/1999/xhtml', 'section');
   section.style.cssText = `width:100%;height:100%;margin:0;padding:0;background-image:url("${hit.src}");background-size:100% 100%;background-repeat:no-repeat`;
   fo.appendChild(section);
   run[0].before(fo);

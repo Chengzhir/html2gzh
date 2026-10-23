@@ -9,11 +9,11 @@ function value(param: Param): string | number {
   if ('list' in param) return param.list.map(value).join(t(param.sep));
   return fmt(param);
 }
-export function fmt(message: Msg): string {
+function fmt(message: Msg): string {
   const named = Object.fromEntries(Object.entries(message.params || {}).map(([name, param]) => [name, value(param)]));
   return t(message.key, named);
 }
-export const fmtKey = (key: string, params?: Record<string, Param>) => fmt({ key, params });
+const fmtKey = (key: string, params?: Record<string, Param>) => fmt({ key, params });
 
 /** 出错时给用户看的一句话 */
 export const errText = (e: unknown) =>

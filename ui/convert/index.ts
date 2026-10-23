@@ -34,13 +34,13 @@ import type {
  *  blockquote 不在此列：预览/发表时它身上的 color 会被删，所以 structure.ts 直接把它改成 section */
 const SELF_COLORED = 'a,mark';
 /** 两个转换宽度下量的字号（data-wxc → px）；t 是 335px 在两者之间的插值位置 */
-export interface Sizes {
+interface Sizes {
   A: Map<string, number> | null;
   B: Map<string, number> | null;
   t?: number;
 }
 /** 两个宽度的转换共用的上下文：主宽度先跑，填好 plan、web 等，另一个宽度沿用 */
-export interface ConvertContext {
+interface ConvertContext {
   o: typeof DEFAULT_OPTS;
   fontRules: FontRule[];
   glyphs: (req: GlyphRequest) => Promise<GlyphResponse>;
@@ -129,7 +129,7 @@ export async function convert(
     pins: new Map(),
     notes: { miss: new Map(), kinds: new Set(), server: null as Msg | null },
     // spline：白名单属性的 <animate> 带 calcMode="spline" 存得住（2026-10-21 实测），缓动直接写成 keySplines
-    sizes: { A: null, B: null } as Sizes,
+    sizes: { A: null, B: null },
     // copyText：画成位图的文字上方放透明文字，与转为路径的字共用一个选项
     svg: { raster, rasterCache: new Map(), spline: true, copyText: options.svgCopy },
   };
@@ -337,7 +337,7 @@ function outlineFindings(findings: FindingSink, outlineStat: OutlineStat, plan: 
       { n: outlineStat.kept, chars: outlineStat.chars, kb: Math.round(outlineStat.bytes / 1024) },
       { parts: [msg(ctx.o.svgCopy ? 'finding.svgPath.copy' : 'finding.svgPath.noCopy')] },
     );
-  if (ctx.notes.server) return findings.warn('svgPathServer', { reason: ctx.notes.server as Msg });
+  if (ctx.notes.server) return findings.warn('svgPathServer', { reason: ctx.notes.server });
   // 按原因合并计数（几种内部原因说法相同，whyCode 归成一种）；没有可见字的段不算问题
   const why = new Map<string, number>(),
     left: string[] = [];
@@ -429,7 +429,7 @@ function keepMaxWidth(doc: Document, root: Element) {
   for (const el of root.querySelectorAll<HTMLElement>('[style]')) {
     const style = el.style,
       computed = win.getComputedStyle(el);
-    if (!/px$/.test(style.maxWidth) || (style.width && style.width !== 'auto')) continue;
+    if (!style.maxWidth.endsWith('px') || (style.width && style.width !== 'auto')) continue;
     if (
       !FLOW.test(computed.display) ||
       computed.float !== 'none' ||

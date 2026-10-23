@@ -279,7 +279,7 @@ export function danglingRefs(doc: Document, rep: Report): void {
   for (const el of doc.getElementsByTagNameNS(SVG_NS, '*')) {
     if (inResource(el) || isAnim(el) || el.localName === 'textPath') continue;
     for (const attr of el.attributes) {
-      if (/^marker/.test(attr.name)) continue;
+      if (attr.name.startsWith('marker')) continue;
       if (
         /url\(\s*["']?#/.test(attr.value.replace(/marker-(start|mid|end)\s*:[^;]*/g, '')) ||
         (attr.name === 'href' && attr.value.trim().startsWith('#'))

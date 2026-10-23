@@ -15,7 +15,7 @@ const cq = (value: number, W: number) => {
   return percent ? fmt(percent, 'cqw') : '0px';
 };
 
-export interface MergeStat {
+interface MergeStat {
   cq: number;
   split: number;
   approx: number;

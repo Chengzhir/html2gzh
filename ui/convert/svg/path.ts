@@ -12,7 +12,7 @@ const fmt = (n: number) => {
 };
 
 /** 路径字符串 → [[命令, ...参数]]，原样保留相对/绝对与简写；格式错误时截断在出错处（与浏览器一致） */
-export function parsePath(d: string | null): PathSeg[] {
+function parsePath(d: string | null): PathSeg[] {
   const out: PathSeg[] = [];
   const re = /([MmZzLlHhVvCcSsQqTtAa])|([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/g;
   let cmd: string | null = null,
@@ -54,7 +54,7 @@ export function parsePath(d: string | null): PathSeg[] {
 }
 
 /** 转成只含 M/L/C/Z 的绝对坐标段 */
-export function toAbsolute(segs: PathSeg[]): PathSeg[] {
+function toAbsolute(segs: PathSeg[]): PathSeg[] {
   const out: PathSeg[] = [];
   // 上一段是 C/S（或 Q/T）时它的第二个控制点；S（或 T）按它反射出第一个控制点，否则用当前点
   let x = 0,
@@ -308,7 +308,7 @@ export function shapeSegs(el: Element, g: GeometryRead): PathSeg[] | null {
   return null;
 }
 /** 圆角矩形：圆角为 0 时也写出圆弧段，保证不同圆角的帧之间路径结构一致、可以插值 */
-export function roundRect(x: number, y: number, w: number, h: number, rx: number, ry: number): PathSeg[] {
+function roundRect(x: number, y: number, w: number, h: number, rx: number, ry: number): PathSeg[] {
   return toAbsolute([
     ['M', x + rx, y],
     ['L', x + w - rx, y],
@@ -375,4 +375,3 @@ export function fromDom(m: DOMMatrixReadOnly | null): Matrix | null {
   return m ? [m.a, m.b, m.c, m.d, m.e, m.f] : null;
 }
 export const matrixAttr = (m: Matrix): string => `matrix(${m.map(fmt).join(' ')})`;
-export const num = fmt;

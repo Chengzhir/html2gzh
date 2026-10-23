@@ -46,7 +46,7 @@ export const failWith = (res: ServerResponse, status: number, code: string, para
 /** 处理函数出错时记日志、回 500，进程照常运行 */
 export const wrap =
   (handler: (req: IncomingMessage, res: ServerResponse) => unknown) => (req: IncomingMessage, res: ServerResponse) =>
-    Promise.resolve(handler(req, res)).catch(error => {
+    void Promise.resolve(handler(req, res)).catch(error => {
       console.error(`${stamp()}  出错  ${messageOf(error)}`);
       if (!res.headersSent) send(res, 500, 'error');
     });

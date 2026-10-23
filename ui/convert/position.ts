@@ -211,7 +211,7 @@ function flexify(doc: Document, parent: HTMLElement): boolean {
   const win = viewOf(doc);
   for (const node of parent.childNodes) if (node.nodeType === 3 && (node as Text).data.trim()) return false;
   const kids = [...parent.children] as (HTMLElement | SVGElement)[];
-  if (kids.some(kid => /^inline/.test(win.getComputedStyle(kid).display) && !kid.hasAttribute('data-wxc-float')))
+  if (kids.some(kid => win.getComputedStyle(kid).display.startsWith('inline') && !kid.hasAttribute('data-wxc-float')))
     return false;
   const floating = (e: Element) => e.hasAttribute('data-wxc-float');
   // 浮动的元素稍后统一用 translate 摆回，不参与这里的校验；父级例外：下面要按它的内容框排，它自己浮动也要量

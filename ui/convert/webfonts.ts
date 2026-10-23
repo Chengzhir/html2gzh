@@ -87,9 +87,9 @@ export function fontFaceCss(doc: Document) {
   return out.join('\n');
 }
 
-export type FaceSrc = { local: string; url?: never; format?: never } | { local?: never; url: string; format: string };
+type FaceSrc = { local: string; url?: never; format?: never } | { local?: never; url: string; format: string };
 /** src 描述符 → [{ local } | { url, format }]，保持原顺序 */
-export function parseSrc(text: string): FaceSrc[] {
+function parseSrc(text: string): FaceSrc[] {
   return splitTop(text || '')
     .map((part): FaceSrc | null => {
       const localMatch = part.match(/^local\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^)]*?))\s*\)/i);
@@ -105,7 +105,7 @@ export function parseSrc(text: string): FaceSrc[] {
     .filter(src => src !== null);
 }
 
-export interface UsedFace extends Omit<GlyphFont, 'src'> {
+interface UsedFace extends Omit<GlyphFont, 'src'> {
   src: FaceSrc[];
   failed: boolean;
 }
@@ -184,7 +184,7 @@ export async function resolveWebFonts(
     if (!face.failed)
       for (const source of face.src) {
         if (source.local != null) {
-          src.push(source as GlyphFontSrc);
+          src.push(source);
           continue;
         }
         if (!OK_FORMAT.test(source.format)) continue;

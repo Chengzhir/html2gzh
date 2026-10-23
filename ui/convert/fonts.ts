@@ -5,7 +5,7 @@ import type { PhoneFonts } from './types.ts';
 // 按字形风格补上 iOS / 安卓自带的近似字体（备用字体），插在通用族名之前。规则是可编辑的文本，一行一条：
 //   原稿字体1, 原稿字体2 => 备用字体1, 备用字体2
 // 名字不分大小写、整名匹配，* 匹配任意字符。# 开头是注释。
-export const DEFAULT_RULES = `# 窄体英文数字：iPhone 用 DIN Condensed，安卓用 Roboto Condensed
+const DEFAULT_RULES = `# 窄体英文数字：iPhone 用 DIN Condensed，安卓用 Roboto Condensed
 Bahnschrift*, DIN, DIN *, DINPro*, Arial Narrow, Roboto Condensed, Oswald, Barlow*Condensed => DIN Condensed, Roboto Condensed, sans-serif-condensed
 # 黑体：iPhone 用苹方，安卓用思源黑体（系统名 Noto Sans CJK SC）
 Microsoft YaHei, Microsoft YaHei UI, 微软雅黑, Noto Sans CJK SC, Noto Sans SC, Source Han Sans, Source Han Sans SC, Source Han Sans CN, 思源黑体, SimHei, 黑体, DengXian, 等线, Hiragino Sans GB => PingFang SC, Noto Sans CJK SC

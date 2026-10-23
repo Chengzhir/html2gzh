@@ -7,7 +7,7 @@ const EVENTS =
 const UNIT_SECONDS: Record<string, number> = { h: 3600, min: 60, s: 1, ms: 0.001 };
 
 /** SMIL 时钟值 → 秒 */
-export function clock(text: string | null | undefined): number | null {
+function clock(text: string | null | undefined): number | null {
   text = (text || '').trim();
   let match = /^(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/.exec(text);
   if (match) return +(match[1] || 0) * 3600 + +match[2] * 60 + +match[3];
@@ -17,7 +17,7 @@ export function clock(text: string | null | undefined): number | null {
 }
 
 /** begin/end 列表里的一项；不带 id 的 event 作用于动画目标自己。带 id 的项序列化时原样写回 raw */
-export type TimingItem =
+type TimingItem =
   | { kind: 'other'; raw: string; id?: undefined }
   | { kind: 'offset'; t: number; id?: undefined; raw?: undefined }
   | { kind: 'event'; id?: null; ev: string; t: number; raw?: string }
@@ -57,7 +57,7 @@ function parseItem(raw: string): TimingItem {
   if (!EVENTS.test(match[2])) return { kind: 'other', raw: text };
   return { kind: 'event', id, ev: match[2], t, raw: text };
 }
-export const parseList = (value: string | null | undefined): TimingItem[] =>
+const parseList = (value: string | null | undefined): TimingItem[] =>
   (value || '')
     .split(';')
     .filter(part => part.trim())
@@ -88,7 +88,7 @@ function repeatLimit(text: string | null, parse: (text: string) => number | null
 }
 
 /** 一条动画的活动时长（秒）：repeatCount × dur 与 repeatDur 都写时取较短的。带 end/min/max 或不结束的返回 null */
-export function activeDur(anim: Element): number | null {
+function activeDur(anim: Element): number | null {
   if (anim.hasAttribute('end') || anim.hasAttribute('min') || anim.hasAttribute('max')) return null;
   const dur = simpleDur(anim);
   if (dur == null) return null;

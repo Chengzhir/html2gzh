@@ -1,0 +1,5 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["test/webfonts.mjs", "tools/*.mjs"],
+  "project": ["lib/**/*.ts", "ui/**/*.{ts,vue}", "test/*.mjs", "tools/*.mjs"]
+}

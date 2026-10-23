@@ -95,9 +95,9 @@ export function collectRules(doc: Document, notes: CascadeNotes): CollectedRule[
 const NAME = /(?:[\w-]|[^\x00-\x7f]|\\.)+/.source;
 const RE_ID = new RegExp('#' + NAME, 'g');
 const RE_CLS = new RegExp(/\./.source + NAME, 'g');
-export const cmpSpec = (a: Specificity, b: Specificity) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+const cmpSpec = (a: Specificity, b: Specificity) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
 
-export function specificity(sel: string): Specificity {
+function specificity(sel: string): Specificity {
   let a = 0,
     b = 0,
     c = 0;
@@ -209,7 +209,7 @@ function topComma(text: string) {
   return -1;
 }
 /** var() 用该元素的计算值展开；无值且无回退则整条声明无效 */
-export function substVars(value: string, computed: CSSStyleDeclaration): string | null {
+function substVars(value: string, computed: CSSStyleDeclaration): string | null {
   // 每轮展开一个 var()：计算值里不会再有 var()，回退值是原串的子串，所以总轮数不超过原串里 var( 的个数
   for (let guard = 0; guard < 1000; guard++) {
     const i = value.search(/var\(/i);
@@ -245,7 +245,7 @@ const RE_VW = new RegExp(NUM + /vw\b/.source, 'gi');
 const RE_PCT = new RegExp(NUM + '%', 'g');
 
 /** 把依赖容器/根字号/视口/包含块的长度固化成 px；env 提供惰性取值 */
-export function convertUnits(prop: string, value: string, env: UnitEnv) {
+function convertUnits(prop: string, value: string, env: UnitEnv) {
   value = value.replace(RE_CQ, (whole: string, num: string, unit: string) => {
     const container = env.cq();
     unit = unit.toLowerCase();
@@ -279,7 +279,7 @@ export function convertUnits(prop: string, value: string, env: UnitEnv) {
   return value;
 }
 
-export const DROP =
+const DROP =
   /^(content|container-name|transition(-.*)?|animation(-.*)?|will-change|cursor|pointer-events|user-select|-webkit-user-select|scroll-.*|content-visibility|counter-.*)$/;
 
 /** 排好序的声明 → 内联 style 文本；简写/长写覆盖交给浏览器 CSSOM 处理 */

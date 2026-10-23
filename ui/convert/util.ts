@@ -170,13 +170,14 @@ export function loadFrame(frame: HTMLIFrameElement, html: string, width: number,
       await Promise.race([doc.fonts.ready, sleep(4000)]);
       await Promise.race([
         Promise.all(
-          [...doc.images].map(img =>
-            img.complete
-              ? 0
-              : new Promise(done => {
+          [...doc.images]
+            .filter(img => !img.complete)
+            .map(
+              img =>
+                new Promise(done => {
                   img.onload = img.onerror = done;
                 }),
-          ),
+            ),
         ),
         sleep(10000),
       ]);

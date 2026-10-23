@@ -104,7 +104,7 @@ const POST: Record<string, (res: ServerResponse, body: JsonObject) => unknown> =
   },
   // { id, scale, max }：处理已登记的图片，结果另行登记（原文件与原 id 不变）
   '/api/shrink': async (res, body) => {
-    const asset = assets.get(String(body.id || ''));
+    const asset = assets.get(typeof body.id === 'string' ? body.id : '');
     const maxBytes = Math.floor(Number(body.max));
     const scale = body.scale == null ? null : Number(body.scale);
     if (!asset || !PUBLIC_EXT.has(asset.ext)) return failWith(res, 404, 'noImage');

@@ -13,7 +13,7 @@ import type { RootBox } from './root.ts';
 import { viewOf } from '../util.ts';
 
 /** captureCss 读到的一条 CSS 动画 */
-export interface CssAnimRecord {
+interface CssAnimRecord {
   name: string;
   timing: EffectTiming;
   kf: ComputedKeyframe[];
