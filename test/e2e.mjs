@@ -1069,6 +1069,17 @@ try {
       '上限宽裕时缩到 1080px 宽、用最高一档画质',
       `${roomy.width}×${roomy.height}，${JSON.stringify(roomy.how)}，${roomy.size} 字节`,
     );
+    // 原图在上限内、只是比 1080px 宽：副本不超过原图。这张质量 80 的图缩到 1080 宽后，质量 92 是原图的 114%、90 是 97%
+    const light = await sharp(px, { raw: { width: W, height: H, channels: 3 } })
+      .resize(1200, 800)
+      .jpeg({ quality: 80 })
+      .toBuffer();
+    const r5 = await shrinkApi({ id: await blob(light, 'jpg', 'light.jpg'), scale: 1, max: 1000 << 10 });
+    check(
+      r5.width === 1080 && r5.size <= light.length && r5.how?.q >= 85 && r5.how?.q < 92 && !r5.over,
+      '比 1080px 宽、不超过上限的图片缩到 1080px 宽，副本不超过原图',
+      `${light.length} → ${r5.size} 字节，${r5.width}×${r5.height}，${JSON.stringify(r5.how)}`,
+    );
     const served = r1.id ? await raw(IMG, '/a/' + r1.id) : { status: 0, headers: {} };
     check(
       served.status === 200 && served.headers['content-type'] === 'image/jpeg',

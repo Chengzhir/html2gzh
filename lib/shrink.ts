@@ -1,7 +1,8 @@
 // 大图处理：只处理提供给微信服务器的副本，原文件不动。读者拿到的图最宽 1080px（正文图片用 /640 档；iPhone、安卓保存下来的
 // 与电脑上加载的都是 1080 宽），更宽的由微信自己缩小、重新压缩，失真明显（2026-10-22 实测 6 张 1100–1200px 宽的照片，
 // 微信给的 1080 版比 Lanczos 缩小 + JPEG 质量 92 的 PSNR 低 6.3–6.8 dB；1080 宽的图微信只重新压缩、不缩小，PSNR 41.6 dB）。
-// 所以比 1080 宽的图先自己缩到 1080 宽，画质从高往低试；不到 1080 宽、但超过体积上限的，在原尺寸下降画质
+// 所以比 1080 宽的图先自己缩到 1080 宽，画质从高往低试，直到不超过体积上限（原图在上限内时，不超过原图）；
+// 不到 1080 宽、但超过体积上限的，在原尺寸下降画质
 import sharp from 'sharp';
 import type { ShrinkHow, ShrinkResult, ShrinkOutput } from '../ui/convert/types.ts';
 
@@ -46,7 +47,7 @@ const pngStep = (quality: number | 'lossless'): Step => ({ png: quality });
 // floor：缩到显示所需的尺寸仍放不下时依次降低的画质。平面图形的 JPEG 先不降采样色度（4:4:4），文字、线条边缘不发虚
 const PLANS: Record<string, { full: Step[]; better: Step[]; floor: Step[] }> = {
   photo: {
-    full: [jpegStep(92), jpegStep(85), jpegStep(80), jpegStep(75), jpegStep(70)],
+    full: [jpegStep(92), jpegStep(90), jpegStep(88), jpegStep(85), jpegStep(80), jpegStep(75), jpegStep(70)],
     better: [],
     floor: [jpegStep(65), jpegStep(60)],
   },
@@ -113,31 +114,36 @@ export async function shrink(
   };
   const fits = (candidate: Encoded) => candidate.buf.length <= max;
 
-  // 一、读者拿到的尺寸：画质从高到低。先试最高一档与最低一档，最低一档放得下时二分找放得下的最高一档
+  // 一、读者拿到的尺寸：取放得下的最高一档画质（先试最高、最低两档，再二分）。原图在上限内、只是比 1080px 宽时，副本也不超过
+  // 原图：原图没有的细节，副本存得再大也不会有。2026-10-24 实测 6 张质量约 86 的照片，这样取到质量 90–92、体积为原图的 92%–97%；
+  // 照原图的质量 86 重压体积更小，但缩放挪动了 8×8 分块，等于再压一遍，PSNR 低 0.8–2.5 dB。最低一档也超过原图时，按体积上限取
   const full = plan.full;
-  const first = keep(await encode(src, servedFactor, full[0]));
-  if (fits(first)) {
+  const encoded: Encoded[] = [];
+  const atStep = async (i: number) => (encoded[i] ??= keep(await encode(src, servedFactor, full[i])));
+  /** 不超过 limit 的最高一档的序号；最低一档也超过时为 -1 */
+  const bestUnder = async (limit: number) => {
+    if ((await atStep(0)).buf.length <= limit) return 0;
+    let lo = 0,
+      hi = full.length - 1;
+    if ((await atStep(hi)).buf.length > limit) return -1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if ((await atStep(mid)).buf.length <= limit) hi = mid;
+      else lo = mid;
+    }
+    return hi;
+  };
+  const budget = Math.min(max, buf.length);
+  const withinBudget = await bestUnder(budget);
+  if (withinBudget === 0)
     for (const step of plan.better) {
       const candidate = await encode(src, servedFactor, step);
-      if (fits(candidate)) return done(candidate, false);
+      if (candidate.buf.length <= budget) return done(candidate, false);
     }
-    return done(first, false);
-  }
-  const last = full.length > 1 ? keep(await encode(src, servedFactor, full[full.length - 1])) : first;
-  if (fits(last)) {
-    let lo = 0,
-      hi = full.length - 1,
-      fitting = last;
-    while (hi - lo > 1) {
-      const mid = (lo + hi) >> 1,
-        candidate = keep(await encode(src, servedFactor, full[mid]));
-      if (fits(candidate)) {
-        hi = mid;
-        fitting = candidate;
-      } else lo = mid;
-    }
-    return done(fitting, false);
-  }
+  if (withinBudget >= 0) return done(await atStep(withinBudget), false);
+  const withinMax = budget < max ? await bestUnder(max) : -1;
+  if (withinMax >= 0) return done(await atStep(withinMax), false);
+  const last = await atStep(full.length - 1);
 
   // 二、最低一档画质下缩小尺寸（只有显示所需比读者拿到的尺寸小的背景图才有余地）：在放得下与放不下的两次结果之间插值
   const searchStep = full[full.length - 1];
@@ -162,8 +168,8 @@ export async function shrink(
   }
   if (fitted) return done(fitted, false);
   for (const step of plan.floor) {
-    const c = keep(await encode(src, floor, step));
-    if (fits(c)) return done(c, false);
+    const candidate = keep(await encode(src, floor, step));
+    if (fits(candidate)) return done(candidate, false);
   }
   if (small.buf.length >= buf.length) return { skip: 'noGain' };
   return done(small, true);
