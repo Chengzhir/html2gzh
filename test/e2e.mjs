@@ -189,32 +189,27 @@ try {
     /^<section data-ignore-width="" style="[^"]*container-type: inline-size/.test(p),
     '根容器是查询容器且豁免宽度检测',
   );
-  // 检测器的段落级溢出只看段落节点自身属性：在 375/585/677 屏宽（正文 335/545/637）下逐个复核
   const prev = previewDoc(r.preview);
-  const unexempt = [];
-  for (const w of [335, 545, 637]) {
+  // 编辑器粘贴后弹出的"内容结构检测"：用它的开源引擎（test/vendor）检查正文区的内容
+  {
     const pg = await browser.newPage();
-    await pg.setViewport({ width: w, height: 800 });
-    await pg.setContent(prev, { waitUntil: 'networkidle0' });
-    unexempt.push(
-      ...(await pg.evaluate(() => {
-        const box = document.querySelector('.rich_media_content').getBoundingClientRect();
-        return [...document.querySelectorAll('.rich_media_content *')]
-          .filter(el => {
-            const r = el.getBoundingClientRect();
-            if (!r.width && !r.height) return false;
-            const centered = Math.abs(r.left - box.left - (box.right - r.right)) <= 1;
-            if (!((r.left < box.left - 1 || r.right > box.right + 1) && !centered)) return false;
-            for (let a = el; a && a.classList && !a.classList.contains('rich_media_content'); a = a.parentElement)
-              if (!a.hasAttribute('data-ignore-width')) return true;
-            return false;
-          })
-          .map(el => el.tagName + ' ' + (el.getAttribute('style') || '').slice(0, 50));
-      })),
-    );
+    await pg.setViewport({ width: 335, height: 800 });
+    await pg.setContent(prev, { waitUntil: 'load' });
+    const html = await pg.evaluate(() => document.querySelector('.rich_media_content').innerHTML);
+    await pg.setViewport({ width: 677, height: 800 });
+    await pg.goto('about:blank');
+    await pg.evaluate(fs.readFileSync(path.join(HERE, 'vendor', 'verify-article-structure.browser.js'), 'utf8'));
+    const res = await pg.evaluate(async html => {
+      const box = document.createElement('div');
+      box.innerHTML = html;
+      return window.VerifyArticleStructure.verifyArticleStructure(box);
+    }, html);
     await pg.close();
+    const found = Object.entries(res.inValidInfo).flatMap(([k, g]) =>
+      g.items.map(it => `[${k}] 第 ${it.paragraphIndex} 段 ${it.rules || ''} ${(it.outerHTML || '').slice(0, 80)}`),
+    );
+    check(res.isValid, '编辑器的内容结构检测不报问题', found.slice(0, 3).join(' | '));
   }
-  check(!unexempt.length, '超出正文区的节点及其祖先链都带 data-ignore-width', unexempt.slice(0, 3).join(' | '));
   // 文字颜色：逐元素比原稿与"套了微信正文样式"的成品（只比有直接文字的元素）
   const colorsOf = async html => {
     const pg = await browser.newPage();
@@ -347,6 +342,66 @@ try {
         .map(([a, b]) => `${a} ≠ ${b}`)
         .join(' | '),
     );
+    // 竖排轮廓的复制层：每个透明的字落在原稿同一个字的字框上（比字框中线与上沿）
+    const charBoxes = async (html, ids) => {
+      const pg = await browser.newPage();
+      await pg.setViewport({ width: 335, height: 800 });
+      await pg.goto(`http://127.0.0.1:${UI}/__blank`);
+      await pg.setContent(html, { waitUntil: 'networkidle0' });
+      await pg.evaluate(() => document.fonts.ready);
+      const out = await pg.evaluate(ids => {
+        ids ??= [...document.querySelectorAll('svg[data-wxc-unit]')]
+          .filter(s => getComputedStyle(s).writingMode !== 'horizontal-tb' && s.parentElement.hasAttribute('data-wxc'))
+          .map(s => s.parentElement.getAttribute('data-wxc'));
+        const range = document.createRange();
+        return ids.map(id => {
+          const el = document.querySelector(`[data-wxc="${id}"]`);
+          const texts = [...el.querySelectorAll('text')].filter(t => getComputedStyle(t).fillOpacity === '0');
+          const nodes = [];
+          const walk = n => (n.nodeType === 3 ? nodes.push(n) : n.childNodes.forEach(walk));
+          (texts.length ? texts : [el]).forEach(walk);
+          const boxes = [];
+          for (const t of nodes)
+            for (let i = 0; i < t.data.length; i++) {
+              if (!t.data[i].trim() || t.data[i] === '\u00a0' || t.data[i] === '\u2060') continue;
+              range.setStart(t, i);
+              range.setEnd(t, i + 1);
+              const b = range.getBoundingClientRect();
+              boxes.push([t.data[i], b.left + b.width / 2, b.top]);
+            }
+          return [id, boxes];
+        });
+      }, ids);
+      await pg.close();
+      return out;
+    };
+    const vc = await charBoxes(prev, null);
+    if (vc.length) {
+      const vo = new Map(
+        await charBoxes(
+          r.original,
+          vc.map(([id]) => id),
+        ),
+      );
+      const off = [];
+      let n = 0;
+      for (const [id, cs] of vc) {
+        const os = vo.get(id) || [];
+        if (cs.length !== os.length) off.push(`${id} 字数 ${cs.length}/${os.length}`);
+        else
+          cs.forEach(([ch, x, y], i) => {
+            n++;
+            const [oc, ox, oy] = os[i];
+            if (ch !== oc || Math.abs(x - ox) > 1 || Math.abs(y - oy) > 1)
+              off.push(`${id} ${ch} Δ${(x - ox).toFixed(1)},${(y - oy).toFixed(1)}`);
+          });
+      }
+      check(
+        !off.length,
+        '竖排轮廓的透明复制层逐字落在原稿的字框上',
+        off.slice(0, 4).join(' | ') || `${vc.length} 段 ${n} 字`,
+      );
+    }
     // 测试稿里用 data-expect 标了哪些该转、哪些不该转
     const wrong = await page.evaluate(html => {
       const d = document.createElement('div');
@@ -463,14 +518,17 @@ try {
   const pixelDiff = (a, b, masks) => diffIn(page, a, b, masks);
   if (SVG_MODE) {
     // 轮廓区域单独量：逐个单元的亚像素偏移与墨量（3 倍像素密度，接近手机）。
-    // 偏移门槛：Chrome 把 svg 盒子对齐到整 CSS 像素而字形保留小数位置，横向差最多 0.5px；纵向文字基线也取整，两次取整最多差 1px
+    // 偏移门槛：Chrome 把 svg 盒子对齐到整 CSS 像素而字形保留小数位置，横向差最多 0.5px；纵向文字基线也取整，两次取整最多差 1px。
+    // 祖先带旋转时，Chrome 画 svg 前还会把它的位置取整到整 CSS 像素（svg 挪 0.5px，量到的横向偏移在 3 倍、6 倍下都跳 1px），横向再多 0.5px
     console.log('\n轮廓对位（3x）');
     const al = await alignUnits(browser, r.original, prevHtml, width, 3, `http://127.0.0.1:${UI}`);
-    const off = al.filter(a => Math.abs(a.dx) > 0.55 || Math.abs(a.dy) > 1.1 || a.ink < 0.85 || a.ink > 1.15);
+    const off = al.filter(
+      a => Math.abs(a.dx) > (a.rotated ? 1.05 : 0.55) || Math.abs(a.dy) > 1.1 || a.ink < 0.85 || a.ink > 1.15,
+    );
     if (al.length)
       check(
         !off.length,
-        '每个轮廓与原稿字形对齐（横向 ≤0.55px、纵向 ≤1.1px、墨量差 ≤15%）',
+        '每个轮廓与原稿字形对齐（横向 ≤0.55px、在旋转的容器里 ≤1.05px，纵向 ≤1.1px，墨量差 ≤15%）',
         off.length
           ? off
               .slice(0, 4)

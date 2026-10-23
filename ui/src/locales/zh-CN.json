@@ -148,28 +148,21 @@
     "inline": "所在段落中有带背景、边框或上下标的行内元素",
     "deco": "所在段落中有下划线、删除线等装饰线",
     "effect": "所在段落中有描边、阴影或背景裁切文字（background-clip: text）",
-    "case": "所在段落中有大小写变换或小型大写字母（text-transform、font-variant）",
-    "dir": "所在段落为竖排或从右到左排列",
+    "color": "所在段落中有彩色字形，如表情符号",
     "clip": "所在的块用省略号截断文字（text-overflow、line-clamp）",
     "other": "所在段落用到了本工具不支持的文字属性或结构",
     "font": "无法获取原网页所用字体的字形",
     "server": "获取字形失败",
+    "relayout": "本工具绘制字形时排出的文字位置与当前页面不同，通常是因为当前浏览器不是 Chrome 或 Edge",
     "layout": "转为路径后周围的元素会移位",
     "reflow": "换行位置或缩放方式随屏宽变化，路径无法随之调整",
-    "shaping": "连字或随上下文变化的字形与浏览器渲染的字形不一致",
     "baseline": "无法准确测量文字基线",
     "mismatch": "在其他屏宽下段落的结构不同",
     "ineligible": "在其他屏宽下不再符合转换条件"
   },
   "miss": {
-    "nofont": "无法确定实际使用的字体",
-    "webfont": "网页字体的声明与字体文件不匹配",
     "webfile": "无法获取网页字体的文件",
-    "notindexed": "系统字体目录中没有这个字体的文件",
-    "color": "是彩色字体",
-    "shape": "读取字形时出错",
-    "notdef": "字体中没有这个字",
-    "long": "组合符号过多",
+    "render": "无法读取本工具绘制的字形轮廓",
     "named": "{name}：{why}"
   },
   "host": {
@@ -415,8 +408,7 @@
       "text": "{n} 段勾选的字未能转为 SVG 路径",
       "detail": "这些字保留为文字，手机上没有原网页所用的字体时显示为备用字体。原因：",
       "item": "{n} 段：{why}",
-      "itemFonts": "{n} 段：{why}（{fonts}）",
-      "notIndexed": "通过 Adobe Fonts 等工具临时激活的字体，需要正式安装后才能转为 SVG 路径。"
+      "itemFonts": "{n} 段：{why}（{fonts}）"
     },
     "hiddenText": {
       "title": "隐藏文字",

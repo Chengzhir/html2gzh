@@ -32,11 +32,11 @@ export async function openFontList(page) {
   if (!(await page.$eval('#faceBox', e => e.open))) await page.click('#faceBox > summary');
 }
 
-/** 测试用的勾选：字号 ≥ 18px 的行，加上 Bahnschrift 各款（含 Condensed）的所有行（手机上没有相近字体） */
-export async function pickDefault(page) {
-  await typeNumber(page, '#svgMin', 18);
+/** 测试用的勾选：字号 ≥ size（默认 18px）的行，加上 Bahnschrift 各款（含 Condensed）的所有行（手机上没有相近字体） */
+export async function pickDefault(page, size = 18) {
+  await typeNumber(page, '#svgMin', size);
   const min = await page.evaluate(() => window.__wxc.opts.svgMin);
-  if (min !== 18) throw new Error(`字号输入框没有改成 18（现在是 ${min}）`);
+  if (min !== size) throw new Error(`字号输入框没有改成 ${size}（现在是 ${min}）`);
   await page.click('#pickBig');
   await openFontList(page);
   const groups = await page.$$eval('#faceList [role="checkbox"][data-scope^="face:bahnschrift"]', cs =>

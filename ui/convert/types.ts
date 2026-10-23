@@ -84,21 +84,24 @@ export interface FontRow extends FontPlanRow {
 }
 
 // ---------- 字形接口 /api/glyphs ----------
-export interface GlyphItem {
-  family: string;
-  weight: string;
-  style: string;
-  stretch: string;
-  features: string;
-  variations: string;
-  ligatures: string;
+/** 快照里的节点：字符串是文字节点；元素只带标签、与父元素不同的样式、lang 与子节点（约定见 glyphapi.ts） */
+export type SnapNode = string | SnapElement;
+export interface SnapElement {
+  tag: string;
+  style: Record<string, string>;
+  lang?: string;
+  kids: SnapNode[];
+}
+/** 一个字（字素簇）在页面上量到的框：[起点, 终点]（快照全部文字连起来的下标）与相对内容盒左上角的 x、y、宽、高 */
+export type SnapChar = [from: number, to: number, x: number, y: number, w: number, h: number];
+/** 一个要转为路径的单元：内容盒的宽高、块的计算样式、lang 与子节点，以及逐字的框（服务端照着核对排版） */
+export interface GlyphUnit {
+  w: number;
+  h: number;
+  style: Record<string, string>;
   lang: string;
-  /** 字距不为 0 */
-  spaced: boolean;
-  /** 网页字体的字号（opsz 轴），0 为不设 */
-  opsz: number;
-  chars: string[];
-  runs: string[];
+  kids: SnapNode[];
+  chars: SnapChar[];
 }
 export type GlyphFontSrc =
   { local: string; id?: never; format?: never } | { local?: never; id: string; format: string };
@@ -113,65 +116,41 @@ export interface GlyphFont {
   src: GlyphFontSrc[];
 }
 export interface GlyphRequest {
-  items: GlyphItem[];
+  /** 页面的设备像素比：服务端按它排版，取整方式与页面相同 */
+  dpr: number;
   fonts: GlyphFont[];
+  units: GlyphUnit[];
 }
-
-export interface GlyphFace {
-  upem: number;
-  weight: number;
-  italic: boolean;
-  web?: boolean;
-  /** size-adjust 折成的倍数 */
-  scale?: number;
-  name: string;
-}
+/** 字形轮廓：字体单位，y 向上；首个 moveto 单独给出，其余为相对坐标 */
 export interface GlyphPath {
-  /** 首个 moveto 的绝对坐标 */
   m: [number, number];
   d: string;
 }
-/** [路径号, x, y]，字体单位 */
-export type GlyphRef = [path: number, x: number, y: number];
-export interface GlyphShape {
-  adv: number;
-  g: GlyphRef[];
+/** 一个字形：路径号、字体单位 → 内容盒 px 的矩阵、填充色、不透明度；w 是模拟加粗的描边宽（字体单位，0 为不描边） */
+export type PlacedGlyph = [
+  path: number,
+  m: [number, number, number, number, number, number],
+  fill: string,
+  alpha: number,
+  w: number,
+];
+/** 不是字形的填充（个别字体的粗体由 Skia 画成填充路径）：内容盒 px 的绝对坐标 */
+export interface GlyphFill {
+  d: string;
+  fill: string;
+  alpha: number;
+  evenOdd: boolean;
 }
-export type GlyphMissKind = 'nofont' | 'webfont' | 'notindexed' | 'color' | 'shape' | 'notdef';
-export interface GlyphOutline extends GlyphShape {
-  /** faces 的下标 */
-  f: number;
-  /** 标点挤压用的半宽字形 */
-  halt?: GlyphShape;
-  miss?: undefined;
-  ps?: undefined;
-  space?: undefined;
-}
-export interface GlyphMiss {
-  miss: GlyphMissKind;
-  ps?: string;
-  f?: undefined;
-  adv?: undefined;
-  g?: undefined;
-  halt?: undefined;
-  space?: undefined;
-}
-export interface GlyphSpace {
-  space: true;
-  f?: undefined;
-  adv?: undefined;
-  g?: undefined;
-  halt?: undefined;
-  miss?: undefined;
-  ps?: undefined;
-}
-export type GlyphChar = GlyphOutline | GlyphMiss | GlyphSpace;
-/** null：逐字排版就对；数组：按字素给出替换（null 为不变）；'bad'：对不上 Chrome 的排版 */
-export type GlyphRun = null | 'bad' | (GlyphShape | null)[];
+/**
+ * 单元的结果。fail：mismatch 服务端排出的逐字位置与页面不同，color 用到彩色字形（表情符号等），
+ * effect 用到描边、图片之类画不成单色轮廓的东西，render 打印或读取出错
+ */
+export type GlyphUnitResult =
+  | { fail?: undefined; detail?: undefined; glyphs: PlacedGlyph[]; fills: GlyphFill[] }
+  | { fail: 'mismatch' | 'color' | 'effect' | 'render'; detail?: string; glyphs?: undefined; fills?: undefined };
 export interface GlyphResponse {
-  faces: GlyphFace[];
   paths: GlyphPath[];
-  items: { chars: GlyphChar[]; runs: GlyphRun[] }[];
+  units: GlyphUnitResult[];
 }
 
 // ---------- 状态接口 /api/state ----------

@@ -1,0 +1,92 @@
+// 字形接口（/api/glyphs）的约定：页面（outline.ts）把要转的单元连同计算样式拍成快照发过去，服务端（lib/glyphs.ts）照快照重排、核对、打印取字形。
+// 快照只许出现下面这些属性与标签；服务端按 GLYPH_LIMITS 拒收，页面按略紧的 GLYPH_BATCH 分批
+
+/** 单元的块要写明的继承属性：服务端的块从这些值起算，子孙元素只写与父元素不同的 */
+export const SNAP_INHERITED = [
+  'color',
+  '-webkit-text-fill-color',
+  'font-family',
+  'font-size',
+  'font-weight',
+  'font-style',
+  'font-stretch',
+  'font-kerning',
+  'font-optical-sizing',
+  'font-feature-settings',
+  'font-variation-settings',
+  'font-variant-ligatures',
+  'font-variant-caps',
+  'font-variant-numeric',
+  'font-variant-east-asian',
+  'font-variant-alternates',
+  'font-variant-position',
+  'font-variant-emoji',
+  'font-synthesis-weight',
+  'font-synthesis-style',
+  'font-synthesis-small-caps',
+  'font-size-adjust',
+  'font-palette',
+  'line-height',
+  'letter-spacing',
+  'word-spacing',
+  'text-align',
+  'text-align-last',
+  'text-indent',
+  'text-transform',
+  'text-justify',
+  'text-rendering',
+  'text-orientation',
+  'text-combine-upright',
+  'text-spacing-trim',
+  'text-autospace',
+  'text-emphasis-style',
+  'text-emphasis-color',
+  'text-emphasis-position',
+  'text-underline-position',
+  'white-space-collapse',
+  'text-wrap-mode',
+  'text-wrap-style',
+  'word-break',
+  'line-break',
+  'overflow-wrap',
+  'hyphens',
+  'hyphenate-character',
+  'hyphenate-limit-chars',
+  'tab-size',
+  'quotes',
+  'direction',
+  'writing-mode',
+  'visibility',
+];
+/** 只在单元的块上写的非继承属性 */
+export const SNAP_BOX = ['unicode-bidi', 'align-content', 'text-box-trim', 'text-box-edge'];
+/** 行内子孙元素的非继承属性：与初始值不同才写 */
+export const SNAP_INLINE: Record<string, string> = {
+  'margin-top': '0px',
+  'margin-right': '0px',
+  'margin-bottom': '0px',
+  'margin-left': '0px',
+  'padding-top': '0px',
+  'padding-right': '0px',
+  'padding-bottom': '0px',
+  'padding-left': '0px',
+  opacity: '1',
+  'unicode-bidi': 'normal',
+};
+/** 照原样建的标签（br、wbr 断行；q 带浏览器生成的引号），其余行内元素一律建成 span，外观全由样式给出 */
+export const SNAP_TAGS = ['br', 'wbr', 'q'];
+
+export const GLYPH_LIMITS = {
+  units: 300,
+  elements: 20000,
+  depth: 64,
+  text: 200000,
+  chars: 60000,
+  value: 2000,
+  lang: 35,
+  fonts: 600,
+  str: 400,
+  range: 20000,
+  srcs: 8,
+};
+export const GLYPH_BATCH = { units: 200, elements: 15000, text: 150000, chars: 45000 };

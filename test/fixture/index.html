@@ -40,6 +40,18 @@ img{display:block;width:100%}
 .lig,.lig-ls{margin:0 0 4cqw;font:400 9cqw/1.3 Calibri,sans-serif}
 .lig-ls{letter-spacing:.08em}
 .web{font-family:WebX,Arial,sans-serif}
+/* 竖排：弹性容器里居中的一列（容器旋转）、多列竖排（楷体的竖排标点只挂在 hani/CHN 下）、含西文的竖排（西文侧转）；首行缩进的横排 */
+.vtag{display:flex;align-items:center;justify-content:center;width:30cqw;height:36cqw;margin:0 0 4cqw auto;background:#dbeafe;color:#1e3a8a;border:2px solid #93c5fd;border-radius:3cqw;transform:rotate(6deg)}
+.vtag span{writing-mode:vertical-rl;font:700 6cqw/1.2 "Microsoft YaHei",sans-serif;letter-spacing:.3em}
+.vcols{writing-mode:vertical-rl;height:42cqw;margin:0 0 4cqw;font:400 7cqw/1.5 KaiTi,serif}
+.vlat{writing-mode:vertical-rl;height:30cqw;margin:0 0 4cqw;font:400 7cqw/1.5 "Microsoft YaHei",sans-serif}
+.indent{margin:0 0 4cqw;font:700 6cqw/1.4 "Microsoft YaHei",sans-serif;text-indent:2em}
+/* 从右到左：阿拉伯文（字母相连）、希伯来文夹西文；彩色字形（表情符号）画不成单色轮廓，不该转；小型大写与大小写变换 */
+.rtl,.emo,.caps{margin:0 0 4cqw;font:400 7cqw/1.5 Arial,sans-serif}
+.rtl{direction:rtl}
+.emo{font-family:"Segoe UI Emoji",sans-serif}
+.caps{font-family:Calibri,sans-serif;font-variant:small-caps}
+.caps span{text-transform:uppercase}
 /* 阅读页脚本给图片写 height:auto!important + 原图宽高比（作用在 border-box 上）：下面三种都会变形，要钉住原尺寸 */
 .framed{width:200px;border:2px solid #333;border-right:0;padding-right:20px;box-sizing:border-box;background:#fff}
 .stretch{width:30%;height:40px;object-fit:cover}
@@ -65,8 +77,16 @@ img{display:block;width:100%}
   <p class="web" data-expect="svg" data-pixel-skip>Web Font</p>
   <p class="lig" data-expect="svg" data-expect-glyphs="8">office <span style="color:#2563eb">Sta</span>ff</p>
   <p class="lig-ls" data-expect="svg" data-expect-glyphs="11">office Staff</p>
-  <!-- 一个字素带 18 个组合用字素连接符（U+034F，零宽、不叠高），超过字形接口的单字长度上限：只有这一段留成文字，别的段照转 -->
-  <p class="zal" data-expect="text">Za&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;lgo</p>
+  <div class="vtag" data-expect="svg"><span>竖排标签</span></div>
+  <p class="vcols" data-expect="svg">竖排的段落，「引号」与（括号）。“弯引号”亦可</p>
+  <p class="vlat" data-expect="svg">竖排夹着 Latin 字母</p>
+  <p class="indent" data-expect="svg">首行缩进两个字的段落，第二行顶格排</p>
+  <p class="rtl" data-expect="svg" lang="ar">مرحبا بالعالم</p>
+  <p class="rtl" data-expect="svg" lang="he">שלום עולם, Hello</p>
+  <p class="emo" data-expect="text">笑脸😀与点赞👍</p>
+  <p class="caps" data-expect="svg">Small Caps <span>and upper</span></p>
+  <!-- 一个字素带 18 个组合用字素连接符（U+034F，零宽、不叠高）：快照里的逐字下标要跨过这一长串 -->
+  <p class="zal" data-expect="svg">Za&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;&#x34f;lgo</p>
   <img class="framed" src="pic.png" alt="带边框和右内边距的图">
   <img class="stretch" src="pic.png" alt="拉伸裁切的图">
   <img class="logo" src="pic.png" alt="按高度定尺寸的图">

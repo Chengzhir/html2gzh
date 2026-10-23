@@ -314,15 +314,15 @@ function outlineFindings(F: FindingSink, s, ctx) {
     'svgPathLeft',
     { n: left.length },
     {
-      // 字由、Adobe Fonts 一类工具激活的字体不装进系统字体目录，浏览器能用，字形接口找不到文件
-      parts: [
-        { items: [...why].map(([k, n]) => item(k, n)) },
-        ctx.notes.kinds.has('notindexed') && msg('finding.svgPathLeft.notIndexed'),
-      ],
+      parts: [{ items: [...why].map(([k, n]) => item(k, n)) }],
       els: left,
     },
   );
 }
+
+/** text-align 的 start、end 按书写方向换成 left、right（内容结构检测把 start/end 判为非标准值）；其余值不变 */
+const physicalAlign = (v: string, dir: string) =>
+  v === 'start' ? (dir === 'rtl' ? 'right' : 'left') : v === 'end' ? (dir === 'rtl' ? 'left' : 'right') : v;
 
 /** 与内容结构检测同一判据：盒子左右任一侧超出正文区 1px 以上、且不是左右对称居中 */
 function overflowing(doc) {
@@ -474,6 +474,8 @@ async function convertAt(html, width, frame, ctx) {
   });
   const forcedOf = c => Object.fromEntries(FORCED.map(k => [k, c.getPropertyValue(k)]));
   const want = new Map();
+  // 横排元素的对齐换成左右（内容结构检测不认 start/end），按各自的书写方向换：从右到左的元素 start 是右
+  const aligned = new Map<string, string>();
   const selfColor = new Map();
   for (const el of doc.body.querySelectorAll(SELF_COLORED)) if (isHtmlEl(el)) selfColor.set(el, cs(el).color);
   const plans = [],
@@ -482,7 +484,12 @@ async function convertAt(html, width, frame, ctx) {
     const b = matched.get(el);
     const inline = el.getAttribute('style');
     const id = el.getAttribute(ID);
-    if (id) want.set(id, forcedOf(cs(el)));
+    if (id) {
+      const c = cs(el);
+      want.set(id, forcedOf(c));
+      const ta = physicalAlign(c.textAlign, c.direction);
+      if (c.writingMode === 'horizontal-tb' && (ta === 'left' || ta === 'right')) aligned.set(id, ta);
+    }
     if (b || inline) plans.push([el, toStyle(cascadeOrder(b ? b.self : [], inline), cs(el), envFor(el), tmp)]);
     if (
       !b ||
@@ -585,8 +592,7 @@ async function convertAt(html, width, frame, ctx) {
   root.setAttribute('data-ignore-width', '');
   while (doc.body.firstChild) root.appendChild(doc.body.firstChild);
   doc.body.appendChild(root);
-  for (const [k, v] of rootDecl)
-    root.style.setProperty(k, k === 'text-align' ? v.replace(/^start$/, 'left').replace(/^end$/, 'right') : v);
+  for (const [k, v] of rootDecl) root.style.setProperty(k, k === 'text-align' ? physicalAlign(v, bodyCs.direction) : v);
   // 阅读页正文区还给这几项设了值（字距 0.544px、自动断词等），原稿没声明的元素会继承过去，换行全变；根容器写回原稿的值
   for (const k of [
     'letter-spacing',
@@ -599,6 +605,11 @@ async function convertAt(html, width, frame, ctx) {
   }
   if (pageBg) root.style.setProperty('background-color', pageBg);
   root.style.setProperty('container-type', 'inline-size');
+  // 换成左右之后，继承下去的值对书写方向相反的子孙就错了（从右到左的段落继承到 left）：照原稿逐个补回。按文档顺序，父元素先补好
+  for (const [id, ta] of aligned) {
+    const el = root.querySelector<HTMLElement>(`[${ID}="${id}"]`);
+    if (el && physicalAlign(cs(el).textAlign, cs(el).direction) !== ta) el.style.setProperty('text-align', ta);
+  }
   const capped = keepMaxWidth(doc, root);
 
   const S1 = measure(doc, true),

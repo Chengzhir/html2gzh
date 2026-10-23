@@ -33,14 +33,22 @@ async function grab(pg, b) {
   });
 }
 
-/** → [{ unit, dx, dy, ink }]，dx/dy 是成品相对原稿的偏移（CSS px），ink 是成品墨量 / 原稿墨量 */
+/** → [{ unit, dx, dy, ink, rotated }]，dx/dy 是成品相对原稿的偏移（CSS px），ink 是成品墨量 / 原稿墨量 */
 export async function alignUnits(browser, original, preview, width, dpr, origin) {
   const pc = await load(browser, preview, width, dpr, true, origin);
-  // svg 只占第一行，后面几行的字画在它的溢出区：取它所在块的框（文档坐标）
+  // svg 只占第一行，后面几行的字画在它的溢出区：取它所在块的框（文档坐标）。
+  // rotated：某层祖先的 transform 带旋转或错切
   const boxes = await pc.evaluate(() =>
     [...document.querySelectorAll('svg[data-wxc-unit]')].map(s => {
       const b = s.parentElement.getBoundingClientRect();
-      return { i: +s.dataset.wxcUnit, x: b.left + scrollX, y: b.top + scrollY, w: b.width, h: b.height };
+      let rotated = false;
+      for (let a = s.parentElement; a && !rotated; a = a.parentElement) {
+        const t = getComputedStyle(a).transform;
+        if (t === 'none') continue;
+        const m = new DOMMatrix(t);
+        rotated = Math.abs(m.b) > 1e-6 || Math.abs(m.c) > 1e-6;
+      }
+      return { i: +s.dataset.wxcUnit, x: b.left + scrollX, y: b.top + scrollY, w: b.width, h: b.height, rotated };
     }),
   );
   const C = [];
@@ -98,15 +106,23 @@ export async function alignUnits(browser, original, preview, width, dpr, origin)
             }
             return t;
           };
-          let best = 0,
-            bv = -1;
-          for (let s = -6; s <= 6; s++) {
-            const v = corr(s);
-            if (v > bv) {
-              bv = v;
-              best = s;
+          const peak = (lo, hi) => {
+            let best = lo,
+              bv = -1;
+            for (let s = lo; s <= hi; s++) {
+              const v = corr(s);
+              if (v > bv) {
+                bv = v;
+                best = s;
+              }
             }
-          }
+            return [best, bv];
+          };
+          // 先在 0 附近找。不按墨迹重心粗估：截图框里露进来的邻近色块（如旋转的印章底色）比字的墨迹重得多，会把重心带偏。
+          // 附近找到的峰与两边墨迹的归一化相关不到 0.5，说明整段挪远了，再全程找
+          const norm = p => Math.sqrt(p.reduce((t, v) => t + v * v, 0));
+          let [best, bv] = peak(-6, 6);
+          if (bv / (norm(a) * norm(b) || 1) < 0.5) [best, bv] = peak(1 - a.length, b.length - 1);
           const l = corr(best - 1),
             r = corr(best + 1);
           return best + (l - r) / (2 * (l - 2 * bv + r) || 1);
@@ -127,6 +143,7 @@ export async function alignUnits(browser, original, preview, width, dpr, origin)
     dx: +(res[n].dx / dpr).toFixed(3),
     dy: +(res[n].dy / dpr).toFixed(3),
     ink: +res[n].ink.toFixed(3),
+    rotated: b.rotated,
   }));
 }
 
@@ -138,17 +155,28 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const { startServer } = await import('./serve.mjs');
   const srv = await startServer({ article: ARTICLE, img: IMG, ui: UI });
   const browser = await puppeteer.launch({ executablePath: findChrome(), headless: true });
+  // UI_BROWSER：用另一个浏览器打开本工具页面（服务端仍用 findChrome 找到的那个），对位截图不变
+  const uiBrowser = process.env.UI_BROWSER
+    ? await puppeteer.launch({ executablePath: process.env.UI_BROWSER, headless: true })
+    : browser;
   try {
-    const ui = await browser.newPage();
+    const ui = await uiBrowser.newPage();
+    // UI_DPR：本工具页面的设备像素比（转换在这个页面里做，服务端照它排版）
+    if (process.env.UI_DPR) await ui.setViewport({ width: 1280, height: 900, deviceScaleFactor: +process.env.UI_DPR });
     await ui.goto(`http://127.0.0.1:${UI}/`);
     await ui.waitForFunction(() => window.__wxc.result, { timeout: 180000 });
     const { pickDefault } = await import('./ui.mjs');
-    await pickDefault(ui);
+    // PICK_MIN：勾选字号不小于它的行（默认 18）
+    await pickDefault(ui, +(process.env.PICK_MIN || 18));
     const r = await ui.evaluate(() => ({
       original: window.__wxc.result.original,
       preview: window.__wxc.result.preview,
       verdicts: window.__wxc.result.debug.verdicts,
     }));
+    const left = r.verdicts.filter(v => !v.keep);
+    console.log(`本工具页面：${await uiBrowser.version()}，设备像素比 ${await ui.evaluate(() => devicePixelRatio)}`);
+    console.log(`转为路径 ${r.verdicts.length - left.length}/${r.verdicts.length} 段`);
+    for (const v of left) console.log(`  未转 ${v.why} ${(v.detail || []).join(' ')} ${v.text}`);
     r.preview = previewDoc(r.preview);
     const rows = [];
     for (const dpr of DPRS.length ? DPRS : [1, 3])
@@ -156,6 +184,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         rows.push({ dpr, ...a, text: (r.verdicts[a.unit] || {}).text });
     console.table(rows);
   } finally {
+    if (uiBrowser !== browser) await uiBrowser.close();
     await browser.close();
     srv.stop();
   }

@@ -18,8 +18,8 @@
   },
   "dependencies": {
     "fontkit": "2.0.4",
-    "fontverter": "2.0.0",
     "mp-darkmode": "1.2.3-beta.8",
+    "mupdf": "1.28.1",
     "naive-ui": "2.45.3",
     "puppeteer-core": "25.13.0",
     "sharp": "0.35.5",

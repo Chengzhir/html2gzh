@@ -1,5 +1,6 @@
 ui/dist/
 test/out/
+test/vendor/
 package-lock.json
 *.md
 # 测试稿与探针页是输入数据，排版本身就是被测的内容

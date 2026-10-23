@@ -1,21 +1,26 @@
 import { ID, isHtmlEl, measure, diffBoxes, splitTop, unq, NO_TRANSFORM } from './util.ts';
-import { GLYPH_BATCH as BATCH } from './glyphlimits.ts';
+import { GLYPH_BATCH as BATCH, SNAP_BOX, SNAP_INHERITED, SNAP_INLINE, SNAP_TAGS } from './glyphapi.ts';
 import { faceKey } from './fonts.ts';
 import { annotateContainerWidths } from './responsive.ts';
 import { resolveWebFonts, usesMissing } from './webfonts.ts';
 import { CodedError, msg } from './types.ts';
 import type {
   FontPlanRow,
+  GlyphFill,
   GlyphFont,
-  GlyphItem,
+  GlyphPath,
   GlyphRequest,
   GlyphResponse,
-  GlyphShape,
+  GlyphUnit,
   Msg,
   OutlineVerdict,
+  SnapChar,
+  SnapElement,
+  SnapNode,
 } from './types.ts';
 
-// 字体表里勾选的字转为 SVG 路径：字形取自本机字体文件（服务端 /api/glyphs），摆在转换帧里实测的逐字位置上；同位叠一层透明 <text> 供选中复制。
+// 字体表里勾选的字转为 SVG 路径：单元连同计算样式拍成快照交给服务端（/api/glyphs），本机的 Chrome 照样排版、核对逐字位置后打印，
+// 取回它实际画出的字形，同位叠一层透明 <text> 供选中复制。
 // 单元 = 一个块元素的全部内容，或块容器/弹性容器里的一段行内内容（包进一个块级 span 后整体替换）。
 // 两个宽度各转一遍后，只保留"逐字位置按宽度等比缩放（或完全不变）"的单元，其余还原成文字。
 const SVG = 'http://www.w3.org/2000/svg';
@@ -28,9 +33,12 @@ const BOX_DISPLAY = /^(block|flow-root)$/;
 const REPLACED = /^(img|svg|video|canvas|iframe|object|embed|input|math|audio|picture|select|textarea|button)$/;
 const CLEAR = /^(transparent|rgba\(0, 0, 0, 0\))$/;
 const seg = new Intl.Segmenter('zh', { granularity: 'grapheme' });
-/** 样式+字 → 字形、样式+词 → 整词排版结果；跨多次转换复用（改设置重转时不必再问服务端） */
-const glyphCache = new Map(),
-  runCache = new Map();
+/** 一个单元取回的字形：[轮廓, 字体单位 → 内容盒 px 的矩阵, 填充色, 不透明度, 描边宽]，或没转成的原因 */
+type Drawn =
+  | { fail?: undefined; glyphs: [GlyphPath, number[], string, number, number][]; fills: GlyphFill[] }
+  | { fail: string; detail?: string };
+/** 快照 → 取回的字形；跨多次转换复用（改设置重转时，没变的单元不必再问服务端） */
+const unitCache = new Map<string, Drawn>();
 
 const isFloat = n => n.nodeType === 1 && n.hasAttribute('data-wxc-float');
 const f3 = n => String(Math.round(n * 1000) / 1000);
@@ -91,34 +99,31 @@ function plainInline(win, el) {
   if (c.filter !== 'none' || c.mixBlendMode !== 'normal' || c.clipPath !== 'none') return false;
   return [...el.children].every(k => plainInline(win, k));
 }
-/** 文字本身的继承属性里画不出来的：变形、竖排、小型大写、描边阴影、自动断词插入的连字符等。返回原因代码，可以画返回 '' */
-function textWhy(c) {
+/**
+ * 文字本身的继承属性里画不出来的：描边、阴影，遮住的密码字，以及透明复制层对不上位置的排法（侧向书写模式、竖排的斜体）。
+ * 字形由 Chrome 自己排、自己画，变形、小型大写、从右到左、竖排里侧转的字都照样转。返回原因代码，可以画返回 ''
+ */
+function textWhy(c: CSSStyleDeclaration) {
+  if (parseFloat(c.webkitTextStrokeWidth || '0') !== 0 || c.textShadow !== 'none') return 'effect';
   if (
-    c.textTransform !== 'none' ||
-    c.fontVariantCaps !== 'normal' ||
-    (c.fontVariantPosition || 'normal') !== 'normal' ||
-    (c.fontVariantAlternates || 'normal') !== 'normal'
-  )
-    return 'case';
-  if (c.writingMode !== 'horizontal-tb' || c.direction !== 'ltr') return 'dir';
-  if (parseFloat(c.webkitTextStrokeWidth || 0) !== 0 || c.textShadow !== 'none' || c.webkitTextFillColor !== c.color)
-    return 'effect';
-  if (
-    /^optimizespeed$/i.test(c.textRendering || '') ||
-    (c.webkitTextSecurity || 'none') !== 'none' ||
-    c.hyphens === 'auto' ||
+    !/^(horizontal-tb|vertical-rl|vertical-lr)$/.test(c.writingMode) ||
+    (c.writingMode !== 'horizontal-tb' && c.fontStyle !== 'normal') ||
+    (c.getPropertyValue('-webkit-text-security') || 'none') !== 'none' ||
     !(parseFloat(c.fontSize) > 0) ||
     c.visibility !== 'visible'
   )
     return 'other';
   return '';
 }
-const boxWhy = c =>
+/** 块本身的原因：背景裁切文字、省略号截断、分栏，以及缩放（zoom 下快照里的计算值与布局不成比例） */
+const boxWhy = (c: CSSStyleDeclaration, el: Element) =>
   c.backgroundClip === 'text'
     ? 'effect'
     : c.textOverflow !== 'clip' || (c.webkitLineClamp || 'none') !== 'none'
       ? 'clip'
-      : '';
+      : c.columnCount !== 'auto' || c.columnWidth !== 'auto' || ('currentCSSZoom' in el && el.currentCSSZoom !== 1)
+        ? 'other'
+        : '';
 const blockOf = (win, el, root) => {
   let a = el;
   while (a !== root && /^inline/.test(win.getComputedStyle(a).display)) a = a.parentElement;
@@ -156,7 +161,7 @@ const visibleCount = s => [...seg.segment(s.split(WJ).join(''))].filter(x => vis
 /** nodes 能不能整体换成路径：只含文字、无外观的行内元素、零占位浮动；box 是承载它们的块。能换返回 ''，否则返回原因代码 */
 function ineligible(win, box, nodes, root) {
   if (!nodes.length) return 'empty';
-  const bw = boxWhy(win.getComputedStyle(box));
+  const bw = boxWhy(win.getComputedStyle(box), box);
   if (bw) return bw;
   for (const n of nodes) {
     if (n.nodeType === 3 || n.nodeType === 8) continue;
@@ -168,11 +173,14 @@ function ineligible(win, box, nodes, root) {
   }
   const texts = textNodes(nodes);
   if (!texts.some(t => [...seg.segment(t.data)].some(s => visible(s.segment)))) return 'empty';
-  if (texts.some(t => /[\u00ad\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(t.data))) return 'other';
   const seen = new Set();
+  const wm = win.getComputedStyle(box).writingMode;
   for (const t of texts) {
-    const w = textWhy(win.getComputedStyle(t.parentElement));
+    const c = win.getComputedStyle(t.parentElement);
+    const w = textWhy(c);
     if (w) return w;
+    if (c.writingMode !== wm || ('currentCSSZoom' in t.parentElement && t.parentElement.currentCSSZoom !== 1))
+      return 'other';
     // 下划线等装饰会从祖先块传到子孙文字上
     for (let a = t.parentElement; a && a !== root.parentElement && !seen.has(a); a = a.parentElement) {
       seen.add(a);
@@ -400,91 +408,41 @@ function unwrapRun(u) {
   u.box = u.outer;
 }
 
-const FEAT = {
-  'lining-nums': 'lnum',
-  'oldstyle-nums': 'onum',
-  'proportional-nums': 'pnum',
-  'tabular-nums': 'tnum',
-  'diagonal-fractions': 'frac',
-  'stacked-fractions': 'afrc',
-  ordinal: 'ordn',
-  'slashed-zero': 'zero',
-  jis78: 'jp78',
-  jis83: 'jp83',
-  jis90: 'jp90',
-  jis04: 'jp04',
-  simplified: 'smpl',
-  traditional: 'trad',
-  'full-width': 'fwid',
-  'proportional-width': 'pwid',
-  ruby: 'ruby',
-};
-function featuresOf(c) {
-  const parts = [];
-  for (const v of `${c.fontVariantNumeric} ${c.fontVariantEastAsian}`.split(/\s+/))
-    if (FEAT[v]) parts.push(`"${FEAT[v]}" 1`);
-  if (c.fontKerning === 'none') parts.push('"kern" 0');
-  if (c.fontFeatureSettings && c.fontFeatureSettings !== 'normal') parts.push(c.fontFeatureSettings);
-  return parts.join(', ') || 'normal';
-}
-const parseColor = s => {
-  const m = s.match(/^rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)$/);
-  return m ? { fill: `rgb(${m[1]},${m[2]},${m[3]})`, a: m[4] == null ? 1 : +m[4] } : { fill: s, a: 1 };
-};
-
 /**
  * 内容盒的精确位置与宽度：计算样式里的 padding 是 CSS 值（如 10.05px），布局里却取整到 1/64px，
  * 直接相减会差 1/64px，换上的 svg 就会让弹性列收窄。临时塞一个空的块级子元素量它的框，得到的就是布局值
  */
 function exactContentBox(doc, el) {
+  const win = doc.defaultView;
+  const vertical = win.getComputedStyle(el).writingMode !== 'horizontal-tb';
   const p = doc.createElement('span');
-  p.style.cssText = 'display:block;width:auto;height:0;margin:0;padding:0;border:0;float:none';
+  // 竖排时块的起始边在右（vertical-rl）或左（vertical-lr），空块是一条竖线：它的高就是内容盒的行向长度，左边是坐标原点
+  p.style.cssText = `display:block;${vertical ? 'width:0;height:auto' : 'width:auto;height:0'};margin:0;padding:0;border:0;float:none`;
   el.prepend(p);
   const r = p.getBoundingClientRect();
   p.remove();
-  return { x: r.left, y: r.top, w: r.width, h: contentBox(doc.defaultView, el).h };
+  const cb = contentBox(win, el);
+  return vertical ? { x: r.left, y: r.top, w: cb.w, h: r.height } : { x: r.left, y: r.top, w: r.width, h: cb.h };
 }
 
-/** 逐字（字素簇）量位置与样式，坐标相对单元内容盒左上角。web：原稿用上的网页字体名；sig：这组网页字体的签名 */
-function measureChars(doc, u, { web, sig }) {
+/**
+ * 逐字（字素簇）量位置，坐标相对单元内容盒的原点（竖排 rl 在右上角，与服务端的取法相同）。web：原稿用上的网页字体名
+ */
+function measureChars(doc, u, web: Set<string>) {
   const win = doc.defaultView;
   const cb = exactContentBox(doc, u.box);
   u.w = cb.w;
   u.h = cb.h;
-  const styleOf = new Map();
-  const st = el => {
+  u.vertical = win.getComputedStyle(u.box).writingMode !== 'horizontal-tb';
+  u.rtl = win.getComputedStyle(u.box).direction === 'rtl';
+  // 每个字记下字号（透明复制层用）与原稿用上的网页字体（缺文件时整段不转）
+  const styleOf = new Map<Element, { size: number; family: string; web: string }>();
+  const st = (el: Element) => {
     let s = styleOf.get(el);
-    if (s) return s;
-    const c = win.getComputedStyle(el);
-    let op = 1;
-    for (let a = el; a && a !== u.box && a !== u.outer; a = a.parentElement)
-      op *= parseFloat(win.getComputedStyle(a).opacity);
-    const col = parseColor(c.color);
-    const lang = (el.closest('[lang]') || doc.documentElement).getAttribute('lang') || '';
-    s = {
-      size: parseFloat(c.fontSize),
-      ls: parseFloat(c.letterSpacing) || 0,
-      fill: col.fill,
-      alpha: col.a * op,
-      family: c.fontFamily,
-      weight: c.fontWeight,
-      style: c.fontStyle,
-      stretch: c.fontStretch,
-      features: featuresOf(c),
-      variations: c.fontVariationSettings,
-      lang,
-      synthW: c.fontSynthesisWeight !== 'none',
-      synthS: c.fontSynthesisStyle !== 'none',
-      ligatures: c.fontVariantLigatures,
-      spaced: (parseFloat(c.letterSpacing) || 0) !== 0,
-      web: webIn(c.fontFamily, web),
-    };
-    // 网页字体：可变字体的 opsz 轴随字号变，字形要按字号取；签名区分同名字体的不同文件
-    if (s.web) {
-      s.opsz = c.fontOpticalSizing === 'none' ? 0 : s.size;
-      s.wsig = sig;
+    if (!s) {
+      const c = win.getComputedStyle(el);
+      styleOf.set(el, (s = { size: parseFloat(c.fontSize), family: c.fontFamily, web: webIn(c.fontFamily, web) }));
     }
-    styleOf.set(el, s);
     return s;
   };
   u.chars = [];
@@ -495,12 +453,12 @@ function measureChars(doc, u, { web, sig }) {
       range.setStart(t, index);
       range.setEnd(t, index + segment.length);
       const r = range.getClientRects()[0];
-      if (!r || (!r.width && !segment.trim())) {
+      if (!r || (!(u.vertical ? r.height : r.width) && !segment.trim())) {
         // 行末折行处的空格不占位置（没有矩形），但复制出来的文字里要有它，记在前一个字上
         if (!segment.trim() && u.chars.length) u.chars[u.chars.length - 1].trail = true;
         continue;
       }
-      u.chars.push({
+      const c = {
         t,
         i: index,
         s: segment,
@@ -510,10 +468,13 @@ function measureChars(doc, u, { web, sig }) {
         h: r.height,
         st: st(t.parentElement),
         space: !segment.trim() || segment === '\u00a0',
-      });
+      };
+      // 竖排的"基线"是列的中线：直立的字在字框里左右居中（实测与字框中线差不到 0.3px）
+      if (u.vertical) Object.assign(c, { base: c.x + c.w / 2 });
+      u.chars.push(c);
     }
   }
-  u.fail = u.chars.some(c => !c.space) ? baselines(doc, u, cb) : 'empty';
+  u.fail = !u.chars.some(c => !c.space) ? 'empty' : u.vertical ? null : baselines(doc, u, cb);
 }
 /**
  * 基线：同一行里首尾相接的字分成一段，在段末最后一个非空白字后面临时插一个零尺寸行内块，它的底边就是这一行的基线。
@@ -524,7 +485,9 @@ function baselines(doc, u, cb) {
   let cur = null;
   for (const c of u.chars) {
     const p = cur && cur[cur.length - 1];
-    const same = p && Math.abs(c.x - (p.x + p.w)) < 0.6 && c.y < p.y + p.h && p.y < c.y + c.h;
+    // 首尾相接：从左到右的字接在前一个字的右边，从右到左的接在左边
+    const same =
+      p && (Math.abs(c.x - (p.x + p.w)) < 0.6 || Math.abs(c.x + c.w - p.x) < 0.6) && c.y < p.y + p.h && p.y < c.y + c.h;
     if (same) cur.push(c);
     else segs.push((cur = [c]));
   }
@@ -554,65 +517,69 @@ function baselines(doc, u, cb) {
   return u.chars.some(c => !c.space && c.base == null) ? 'baseline' : null;
 }
 
-const keyOf = s =>
-  JSON.stringify([
-    s.family,
-    s.weight,
-    s.style,
-    s.stretch,
-    s.features,
-    s.variations,
-    s.ligatures,
-    s.lang,
-    s.spaced,
-    ...(s.web ? [s.opsz, s.wsig] : []),
-  ]);
 /**
- * 单元里的词：同一样式、同一字号、首尾相接（同一行、中间没有内边距之类的空隙）的一串非空白字。
- * Chrome 跨元素连排（只换颜色的相邻 span 照样成连字），字号、字距不同或有空隙就断开
+ * 单元的快照：服务端照它重排版。块写明继承属性与几项块级属性；子孙元素只写与父元素不同的继承属性、与初始值不同的行内属性；
+ * 零占位的浮动元素不带（它们留在原处，不进轮廓）。chars 是逐字的框，下标按快照里全部文字连起来计
  */
-function wordsOf(u) {
-  const out = [];
-  let cur = null,
-    prev = null;
-  for (const c of u.chars) {
-    if (c.space) {
-      cur = null;
-      prev = c;
-      continue;
-    }
-    const k = keyOf(c.st);
-    const joined =
-      cur &&
-      !prev.space &&
-      !prev.trail &&
-      k === cur.k &&
-      c.st.size === prev.st.size &&
-      Math.abs(c.x - (prev.x + prev.w)) < 0.6 &&
-      c.base === prev.base;
-    if (!joined) out.push((cur = { k, st: c.st, chars: [] }));
-    cur.chars.push(c);
-    prev = c;
+function snapshot(win: Window, u): { unit: GlyphUnit; elements: number; text: number } {
+  const bc = win.getComputedStyle(u.box);
+  const style: Record<string, string> = {};
+  for (const k of [...SNAP_INHERITED, ...SNAP_BOX]) {
+    const v = bc.getPropertyValue(k);
+    if (v) style[k] = v;
   }
-  // 太长的（不带空格的长串）按码元数切成几段，各段单独排
-  return out.flatMap(w => {
-    const parts = [];
-    let p = null;
-    for (const c of w.chars) {
-      if (!p || p.len + c.s.length > BATCH.run) parts.push((p = { k: w.k, st: w.st, chars: [], len: 0 }));
-      p.chars.push(c);
-      p.len += c.s.length;
+  const base = new Map<Text, number>();
+  let text = 0,
+    elements = 0;
+  const walk = (pc: CSSStyleDeclaration, nodes: ChildNode[]): SnapNode[] => {
+    const out: SnapNode[] = [];
+    for (const n of nodes) {
+      if (n.nodeType === 3) {
+        const t = n as Text;
+        if (!t.data) continue;
+        base.set(t, text);
+        text += t.data.length;
+        out.push(t.data);
+      } else if (n.nodeType === 1 && !isFloat(n)) {
+        const el = n as Element,
+          c = win.getComputedStyle(el);
+        const s: Record<string, string> = {};
+        for (const k of SNAP_INHERITED) {
+          const v = c.getPropertyValue(k);
+          if (v && v !== pc.getPropertyValue(k)) s[k] = v;
+        }
+        for (const [k, init] of Object.entries(SNAP_INLINE)) {
+          const v = c.getPropertyValue(k);
+          if (v && v !== init) s[k] = v;
+        }
+        elements++;
+        const node: SnapElement = {
+          tag: SNAP_TAGS.includes(el.localName) ? el.localName : 'span',
+          style: s,
+          kids: walk(c, [...el.childNodes]),
+        };
+        if (el.hasAttribute('lang')) node.lang = el.getAttribute('lang');
+        out.push(node);
+      }
     }
-    return parts.filter(q => q.chars.length > 1).map(q => ({ ...q, text: q.chars.map(c => c.s).join('') }));
+    return out;
+  };
+  // 一段行内内容此时已包进块级 span（u.box），子节点就是这一段
+  const kids = walk(bc, [...u.box.childNodes]);
+  const chars: SnapChar[] = u.chars.map(c => {
+    const at = base.get(c.t);
+    if (at == null) throw new Error('snapshot');
+    return [at + c.i, at + c.i + c.s.length, c.x, c.y, c.w, c.h];
   });
+  const lang = (u.box.closest('[lang]') || u.box.ownerDocument.documentElement).getAttribute('lang') || '';
+  return { unit: { w: u.w, h: u.h, style, lang, kids, chars }, elements, text };
 }
-/** 一种样式要问的字与词 */
-type WantItem = Omit<GlyphItem, 'chars' | 'runs'> & { k: string; chars: Set<string>; runs: Set<string> };
+
 /**
- * 把各单元缺的字形分批问齐；没装 Chrome、字体找不到之类在 notes 里记原因。
- * 用到网页字体时先取字体文件（只取一次）；文件取不到的字体，用到它的单元不转
+ * 各单元的字形分批问服务端，结果记在 u.drawn。用到网页字体时先取字体文件（只取一次）；文件取不到的字体，用到它的单元不转。
+ * 没装 Chrome 之类的错误整体抛出，由 outline 记下
  */
-async function fetchGlyphs(units, ctx, notes) {
+async function fetchOutlines(win: Window, units, ctx, notes) {
   const glyphs: (req: GlyphRequest) => Promise<GlyphResponse> = ctx.glyphs;
   let fonts: GlyphFont[] = [];
   if (units.some(u => !u.fail && u.chars.some(c => !c.space && c.st.web))) {
@@ -628,230 +595,193 @@ async function fetchGlyphs(units, ctx, notes) {
         }
       }
   }
-  const want = new Map<string, WantItem>();
-  const item = (st): WantItem => {
-    const k = keyOf(st);
-    let it = want.get(k);
-    if (!it)
-      want.set(
-        k,
-        (it = {
-          k,
-          family: st.family,
-          weight: st.weight,
-          style: st.style,
-          stretch: st.stretch,
-          features: st.features,
-          variations: st.variations,
-          ligatures: st.ligatures,
-          lang: st.lang,
-          spaced: st.spaced,
-          opsz: st.opsz || 0,
-          chars: new Set(),
-          runs: new Set(),
-        }),
-      );
-    return it;
-  };
-  for (const u of units)
-    if (!u.fail) {
-      for (const c of u.chars) {
-        if (c.space) continue;
-        const k = keyOf(c.st);
-        if (glyphCache.has(k + '\u0000' + c.s)) continue;
-        // 叠了一长串组合符号的字服务端不收，按缺字处理
-        if (c.s.length > BATCH.char) {
-          glyphCache.set(k + '\u0000' + c.s, { miss: 'long' });
-          continue;
-        }
-        item(c.st).chars.add(c.s);
-      }
-      u.words = wordsOf(u);
-      for (const w of u.words) if (!runCache.has(w.k + '\u0001' + w.text)) item(w.st).runs.add(w.text);
+  const dpr = win.devicePixelRatio || 1;
+  const sig = JSON.stringify([dpr, ctx.webSig || '']);
+  const todo: { u; key: string; unit: GlyphUnit; elements: number; text: number }[] = [];
+  for (const u of units) {
+    if (u.fail) continue;
+    let snap: ReturnType<typeof snapshot>;
+    try {
+      snap = snapshot(win, u);
+    } catch {
+      u.fail = 'other';
+      continue;
     }
-  const parts: (GlyphItem & { k: string; len?: number })[] = [];
-  for (const it of want.values()) {
-    const chars = [...it.chars],
-      runs = [...it.runs];
-    for (let i = 0; i < chars.length; i += BATCH.chars)
-      parts.push({ ...it, chars: chars.slice(i, i + BATCH.chars), runs: [] });
-    for (let i = 0, p = null; i < runs.length; i++) {
-      if (!p || p.runs.length >= BATCH.runs || p.len + runs[i].length > BATCH.runChars)
-        parts.push((p = { ...it, chars: [], runs: [], len: 0 }));
-      p.runs.push(runs[i]);
-      p.len += runs[i].length;
+    if (snap.elements > BATCH.elements || snap.text > BATCH.text || snap.unit.chars.length > BATCH.chars) {
+      u.fail = 'other';
+      continue;
     }
+    const key = sig + JSON.stringify(snap.unit);
+    if (unitCache.has(key)) u.drawn = unitCache.get(key);
+    else todo.push({ u, key, ...snap });
   }
-  const map = (res: GlyphResponse, gs: GlyphShape['g']) => gs.map(([p, x, y]) => [res.paths[p], x, y]);
-  for (let i = 0; i < parts.length;) {
-    const batch = [];
+  for (let i = 0; i < todo.length;) {
+    const batch: typeof todo = [];
     for (
-      let n = 0, r = 0, rc = 0;
-      i < parts.length &&
+      let e = 0, t = 0, c = 0;
+      i < todo.length &&
       (!batch.length ||
-        (batch.length < BATCH.items &&
-          n + parts[i].chars.length <= BATCH.chars &&
-          r + parts[i].runs.length <= BATCH.runs &&
-          rc + (parts[i].len || 0) <= BATCH.runChars));
+        (batch.length < BATCH.units &&
+          e + todo[i].elements <= BATCH.elements &&
+          t + todo[i].text <= BATCH.text &&
+          c + todo[i].unit.chars.length <= BATCH.chars));
       i++
     ) {
-      batch.push(parts[i]);
-      n += parts[i].chars.length;
-      r += parts[i].runs.length;
-      rc += parts[i].len || 0;
+      batch.push(todo[i]);
+      e += todo[i].elements;
+      t += todo[i].text;
+      c += todo[i].unit.chars.length;
     }
-    const res = await glyphs({ items: batch.map(({ len, k, ...it }) => it), fonts });
-    batch.forEach((it, j) => {
-      const k = it.k;
-      it.chars.forEach((ch, q) => {
-        const g = res.items[j].chars[q];
-        glyphCache.set(
-          k + '\u0000' + ch,
-          g.miss
-            ? { miss: g.miss, ps: g.ps }
-            : {
-                face: res.faces[g.f],
-                adv: g.adv,
-                g: map(res, g.g),
-                halt: g.halt && { adv: g.halt.adv, g: map(res, g.halt.g) },
-              },
-        );
-      });
-      it.runs.forEach((w, q) => {
-        const v = res.items[j].runs[q];
-        runCache.set(k + '\u0001' + w, Array.isArray(v) ? v.map(o => o && { adv: o.adv, g: map(res, o.g) }) : v);
-      });
+    const res = await glyphs({ dpr, fonts, units: batch.map(b => b.unit) });
+    batch.forEach((b, j) => {
+      const r = res.units[j];
+      const drawn: Drawn = r.fail
+        ? { fail: r.fail, detail: r.detail }
+        : { glyphs: r.glyphs.map(([p, m, fill, a, w]) => [res.paths[p], m, fill, a, w]), fills: r.fills };
+      if (unitCache.size > 4000) unitCache.delete(unitCache.keys().next().value);
+      unitCache.set(b.key, drawn);
+      b.u.drawn = drawn;
     });
   }
+  // 服务端的原因 → 本模块的原因代码（文案 why.<代码>）：排版对不上是 relayout，读不出轮廓归到 font 并记下 miss.render
+  const WHY = { mismatch: 'relayout', color: 'color', effect: 'effect', render: 'font' };
   for (const u of units)
-    if (!u.fail) {
-      for (const c of u.chars) {
-        if (c.space) continue;
-        const g = glyphCache.get(keyOf(c.st) + '\u0000' + c.s);
-        if (!g || g.miss) {
-          u.fail = 'font';
-          noteMiss(notes, g ? g.miss : 'nofont', g && g.ps);
-          break;
-        }
-        c.g = g;
-      }
-      if (u.fail) continue;
-      // 整词排版和逐字不同的（连字、上下文变体）换上整词的字形：簇首拿整簇，连字的后续字为空
-      for (const w of u.words) {
-        const v = runCache.get(w.k + '\u0001' + w.text);
-        if (v === 'bad' || v === undefined || (v && v.length !== w.chars.length)) {
-          u.fail = 'shaping';
-          u.detail = [w.text.slice(0, 20)];
-          break;
-        }
-        if (!v) continue;
-        w.chars.forEach((c, i) => {
-          if (v[i]) c.g = { face: c.g.face, adv: v[i].adv, g: v[i].g };
-        });
-      }
+    if (!u.fail && u.drawn.fail) {
+      u.fail = WHY[u.drawn.fail] || 'font';
+      if (u.fail === 'font') noteMiss(notes, 'render');
+      if (u.drawn.detail) u.detail = [u.drawn.detail];
     }
-}
-// Windows 上 Chrome 的假粗体分两种。本机字体由 DirectWrite 模拟（实测 SimSun 26–100px）：笔画横向加粗约 2.4% 字号、纵向约 1.9%，
-// 描边只能取一个值，用两者平均；12px 及以下 SimSun 用内嵌点阵，不加粗。网页字体由 Skia 描边加粗：描边宽 = 字号 × 比例，
-// 比例在 9px 时 1/24、36px 起 1/32，中间线性插值（实测 Arial 200px 与 size/32 的 SVG 描边相同）
-const fakeBold = size => (size <= 12 ? 0 : size * 0.0215);
-const webBold = size =>
-  size * (size <= 9 ? 1 / 24 : size >= 36 ? 1 / 32 : 1 / 24 + ((size - 9) / 27) * (1 / 32 - 1 / 24));
-const ITALIC_SKEW = 0.25;
-/**
- * 合成粗体、斜体：本机字体按字形面的字重差超过 200 判断；网页字体照 Blink 的规则，要求字重 ≥ 600 而 @font-face 的字重上限低于 600、
- * 要求斜体而声明的不是斜体才合成。返回描边宽（px，0 为不加粗）与是否倾斜
- */
-function synth(st, face) {
-  const w = parseInt(st.weight, 10);
-  const bold = !st.synthW
-    ? 0
-    : face.web
-      ? w >= 600 && face.weight < 600
-        ? webBold(st.size)
-        : 0
-      : w - face.weight > 200
-        ? fakeBold(st.size)
-        : 0;
-  return { bold, ital: st.synthS && st.style !== 'normal' && !face.italic };
 }
 
-/** 单元 → <svg>：同色同字号的字拼成一条 path（变换只写一次，各字首点按字位偏移），外加透明复制层 */
-function buildSvg(doc, u, o) {
-  const groups = new Map();
-  for (const c of u.chars) {
-    // 连字的后续字没有字形（画在簇首那个字上）
-    if (c.space || !c.g.g.length) continue;
-    // scale：@font-face 的 size-adjust，字形按它缩放
-    const g = c.g,
-      s = (c.st.size * (g.face.scale || 1)) / g.face.upem;
-    // 全角标点被挤压成半宽时用 halt 字形：看实测宽度更接近哪个步进
-    const full = g.adv * s + c.st.ls;
-    const v = g.halt && Math.abs(c.w - (g.halt.adv * s + c.st.ls)) + 0.2 < Math.abs(c.w - full) ? g.halt : g;
-    const { bold, ital } = synth(c.st, g.face);
-    const key = [c.st.fill, f3(c.st.alpha), s, bold, ital].join('|');
-    let grp = groups.get(key);
-    if (!grp) groups.set(key, (grp = { st: c.st, s, bold, ital, x0: c.x, y0: c.base, d: '' }));
-    const k = ital ? ITALIC_SKEW : 0;
-    for (const [p, gx, gy] of v.g) {
-      // 组变换把 (u,v) 映到 (x0 + s·u + k·s·v, y0 − s·v)；倾斜要绕各字自己的原点，所以首点横向扣掉 k·v0
-      const v0 = (grp.y0 - c.base) / s + gy;
-      const u0 = (c.x - grp.x0) / s + gx - k * v0;
-      grp.d += `M${Math.round(u0 + p.m[0])} ${Math.round(v0 + p.m[1])}${p.d}`;
-    }
-  }
-  const svg = doc.createElementNS(SVG, 'svg');
-  // 高度交给行盒：Chrome 的行高按 1/64px 四舍五入、height 却向下截断，比例写法的固定高度在别的宽度下总会差 1/64px，
-  // 几个轮廓累积起来就把下文挤动。所以 svg 做成第一行里的行内块，比一行矮（不撑高行盒），其余各行由 <br> + 连接符撑出，
-  // 字形画在 svg 的溢出区里。宽度加 1/256px：截断和四舍五入都落回原值
+/**
+ * 单元的 <svg> 空壳，先放进版面量位置，再由 drawSvg 画字。
+ * 高度交给行盒：Chrome 的行高按 1/64px 四舍五入、height 却向下截断，比例写法的固定高度在别的宽度下总会差 1/64px，
+ * 几个轮廓累积起来就把下文挤动。所以 svg 做成第一行里的行内块，比一行矮（不撑高行盒），其余各行由 <br> + 连接符撑出，
+ * 字形画在 svg 的溢出区里。行向长度加 1/256px：截断和四舍五入都落回原值。竖排时"行"是列，宽高对调
+ */
+function shellSvg(doc, u) {
   const lines = new Set(u.chars.filter(c => !c.space).map(c => Math.round(c.base * 100))).size;
   const lh = parseFloat(doc.defaultView.getComputedStyle(u.box).lineHeight);
-  const h1 = Math.max(1, Math.min(lh > 0 ? lh : Infinity, u.h / lines) - 1 / 32);
   u.lines = lines;
-  const bw = f3(u.w + 1 / 256),
-    bh = f3(h1);
-  svg.setAttribute('viewBox', `0 0 ${bw} ${bh}`);
+  u.thick = Math.max(1, Math.min(lh > 0 ? lh : Infinity, (u.vertical ? u.w : u.h) / lines) - 1 / 32);
+  const svg = doc.createElementNS(SVG, 'svg');
+  sizeSvg(svg, u, 0);
   svg.setAttribute('role', 'img');
   svg.setAttribute('aria-label', u.d.text.slice(0, 500));
-  svg.setAttribute('style', `display:inline-block;vertical-align:top;width:${bw}px;height:${bh}px;overflow:visible`);
-  for (const grp of groups.values()) {
-    const p = doc.createElementNS(SVG, 'path');
-    const sk = grp.ital ? ITALIC_SKEW * grp.s : 0;
-    p.setAttribute(
-      'transform',
-      `matrix(${+grp.s.toPrecision(6)} 0 ${+sk.toPrecision(6)} ${-+grp.s.toPrecision(6)} ${f3(grp.x0)} ${f3(grp.y0)})`,
-    );
-    p.setAttribute('fill', grp.st.fill);
-    if (grp.st.alpha < 0.999) p.setAttribute('fill-opacity', f3(grp.st.alpha));
-    if (grp.bold) {
-      p.setAttribute('stroke', grp.st.fill);
-      p.setAttribute('stroke-width', f3(grp.bold / grp.s));
-      if (grp.st.alpha < 0.999) p.setAttribute('stroke-opacity', f3(grp.st.alpha));
-    }
-    p.setAttribute('d', grp.d);
-    svg.appendChild(p);
-  }
-  if (o.svgCopy) for (const line of copyLines(u)) svg.appendChild(line(doc));
   return svg;
 }
+/** inset：svg 在行向上离内容盒起始边的距离（首行缩进等），行向长度扣掉它，免得伸出内容盒 */
+function sizeSvg(svg, u, inset: number) {
+  const len = f3((u.vertical ? u.h : u.w) - inset + 1 / 256),
+    th = f3(u.thick);
+  const [bw, bh] = u.vertical ? [th, len] : [len, th];
+  svg.setAttribute('viewBox', `0 0 ${bw} ${bh}`);
+  svg.setAttribute('style', `display:inline-block;vertical-align:top;width:${bw}px;height:${bh}px;overflow:visible`);
+}
 
-/** 透明复制层：每行一个 <text>，逐字给 x；空格写成不换行空格，免得被 SVG 的空白折叠吃掉、错开后面的位置 */
+/**
+ * 放进版面后的空壳里画字：服务端给的字形按颜色、不透明度、描边与矩阵的线性部分分组，每组拼成一条 path
+ * （变换只写一次，各字首点按自己的原点偏移），外加透明复制层。字形坐标相对内容盒，减去 svg 相对内容盒的偏移（竖排的列、首行缩进）
+ */
+function drawSvg(doc, u, o) {
+  const svg = u.svg,
+    r = svg.getBoundingClientRect(),
+    cb = exactContentBox(doc, u.box);
+  const near0 = (v: number) => (Math.abs(v) < 1e-6 ? 0 : v);
+  u.ox = near0(r.left - cb.x);
+  u.oy = near0(r.top - cb.y);
+  sizeSvg(svg, u, u.vertical ? u.oy : u.ox);
+  const groups = new Map<string, { m: number[]; fill: string; alpha: number; w: number; d: string }>();
+  for (const [p, m, fill, alpha, w] of u.drawn.glyphs) {
+    const [a, b, c, d] = m,
+      e = m[4] - u.ox,
+      f = m[5] - u.oy;
+    const det = a * d - b * c;
+    if (!det) continue;
+    const key = [fill, alpha, w, a, b, c, d].join('|');
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = { m: [a, b, c, d, e, f], fill, alpha, w, d: '' }));
+    // 组矩阵 (a b c d E F) 把字体单位 (x, y) 映到 (E + a·x + c·y, F + b·x + d·y)：这个字的原点在组里的坐标是 (e − E, f − F) 反解出来的
+    const dx = e - g.m[4],
+      dy = f - g.m[5];
+    const x0 = (d * dx - c * dy) / det,
+      y0 = (a * dy - b * dx) / det;
+    g.d += `M${Math.round(x0 + p.m[0])} ${Math.round(y0 + p.m[1])}${p.d}`;
+  }
+  for (const g of groups.values()) {
+    const p = doc.createElementNS(SVG, 'path');
+    p.setAttribute('transform', `matrix(${g.m.slice(0, 4).join(' ')} ${f3(g.m[4])} ${f3(g.m[5])})`);
+    p.setAttribute('fill', g.fill);
+    if (g.alpha < 0.999) p.setAttribute('fill-opacity', f3(g.alpha));
+    if (g.w) {
+      p.setAttribute('stroke', g.fill);
+      p.setAttribute('stroke-width', f3(g.w));
+      if (g.alpha < 0.999) p.setAttribute('stroke-opacity', f3(g.alpha));
+    }
+    p.setAttribute('d', g.d);
+    svg.appendChild(p);
+  }
+  for (const fl of u.drawn.fills) {
+    const p = doc.createElementNS(SVG, 'path');
+    if (u.ox || u.oy) p.setAttribute('transform', `translate(${f3(-u.ox)} ${f3(-u.oy)})`);
+    p.setAttribute('fill', fl.fill);
+    if (fl.alpha < 0.999) p.setAttribute('fill-opacity', f3(fl.alpha));
+    if (fl.evenOdd) p.setAttribute('fill-rule', 'evenodd');
+    p.setAttribute('d', fl.d);
+    svg.appendChild(p);
+  }
+  if (o.svgCopy) {
+    for (const line of u.vertical ? copyColumns(u) : copyLines(u)) svg.appendChild(line(doc));
+    keepInside(svg, cb, u.vertical);
+  }
+  return svg;
+}
+/**
+ * 透明复制层不许伸出内容盒：从右到左的行首字以右边对准盒子右边，Chrome 给 <text> 量出的框比字框多出约 1px，
+ * 内容结构检测会把它判为溢出。逐行量，伸出去多少就往回挪多少（再留 0.25px）；字是透明的，只影响选中时高亮的位置
+ */
+function keepInside(svg: SVGSVGElement, cb: { x: number; y: number; w: number; h: number }, vertical: boolean) {
+  const lo = vertical ? cb.y : cb.x,
+    hi = lo + (vertical ? cb.h : cb.w);
+  const attr = vertical ? 'y' : 'x';
+  for (const t of svg.querySelectorAll('text')) {
+    const r = t.getBoundingClientRect();
+    const a = vertical ? r.top : r.left,
+      b = vertical ? r.bottom : r.right;
+    const d = a < lo ? lo - a + 0.25 : b > hi ? hi - b - 0.25 : 0;
+    if (d)
+      t.setAttribute(
+        attr,
+        t
+          .getAttribute(attr)
+          .split(' ')
+          .map(v => f3(+v + d))
+          .join(' '),
+      );
+  }
+}
+
+/**
+ * 透明复制层：每行一个 <text>，逐字给 x；空格写成不换行空格，免得被 SVG 的空白折叠吃掉、错开后面的位置。
+ * 从右到左的段落里 <text> 继承 rtl，每个字以右边对准 x，所以 x 取字框的右边；字的先后照原文，复制出来的顺序不变
+ */
 function copyLines(u) {
   const lines = [];
   let cur = null,
     pend = false;
+  const xOf = c => f3((u.rtl ? c.x + c.w : c.x) - u.ox);
   for (const c of u.chars) {
     const base = c.base != null ? c.base : cur && Math.abs(c.y - cur.y) < 1 ? cur.base : null;
     if (base == null) continue;
-    if (!cur || Math.abs(base - cur.base) > 0.5 || c.st.size !== cur.size || c.x < cur.right - 0.6)
+    if (!cur || Math.abs(base - cur.base) > 0.5 || c.st.size !== cur.size || (!u.rtl && c.x < cur.right - 0.6))
       lines.push((cur = { base, size: c.st.size, family: c.st.family, y: c.y, xs: [], text: '', right: 0 }));
     // 折行处被吃掉的空格补在下一行行首、和首字同一位置：放在上一行末尾会伸出盒子
     if (pend) {
-      cur.xs.push(f3(c.x));
+      cur.xs.push(xOf(c));
       cur.text += '\u00a0';
       pend = false;
     }
-    for (let i = 0; i < c.s.length; i++) cur.xs.push(f3(c.x));
+    for (let i = 0; i < c.s.length; i++) cur.xs.push(xOf(c));
     cur.text += c.space ? '\u00a0'.repeat(c.s.length) : c.s;
     cur.right = c.x + c.w;
     if (c.trail) pend = true;
@@ -861,7 +791,46 @@ function copyLines(u) {
     .map(l => doc => {
       const t = doc.createElementNS(SVG, 'text');
       t.setAttribute('x', l.xs.join(' '));
-      t.setAttribute('y', f3(l.base));
+      t.setAttribute('y', f3(l.base - u.oy));
+      t.setAttribute('font-size', f3(l.size));
+      t.setAttribute('fill-opacity', '0');
+      t.textContent = l.text;
+      return t;
+    });
+}
+/**
+ * 竖排的透明复制层：每列一个 <text>，逐字给 x（列中线）、y（字框上沿）。svg 从单元的块继承竖排，
+ * 竖排的 <text> 以中线定横向位置、以字的上沿定纵向位置，透明的字逐个落在原来的字框里
+ */
+function copyColumns(u) {
+  const cols = [];
+  let cur = null,
+    pend = false;
+  for (const c of u.chars) {
+    if (!cur || Math.abs(c.base - cur.base) > 0.5 || c.st.size !== cur.size || c.y < cur.bottom - 0.6)
+      cols.push((cur = { base: c.base, size: c.st.size, xs: [], ys: [], text: '', bottom: 0 }));
+    const at = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        cur.xs.push(f3(c.base - u.ox));
+        cur.ys.push(f3(c.y - u.oy));
+      }
+    };
+    if (pend) {
+      at(1);
+      cur.text += '\u00a0';
+      pend = false;
+    }
+    at(c.s.length);
+    cur.text += c.space ? '\u00a0'.repeat(c.s.length) : c.s;
+    cur.bottom = c.y + c.h;
+    if (c.trail) pend = true;
+  }
+  return cols
+    .filter(l => l.text.trim())
+    .map(l => doc => {
+      const t = doc.createElementNS(SVG, 'text');
+      t.setAttribute('x', l.xs.join(' '));
+      t.setAttribute('y', l.ys.join(' '));
       t.setAttribute('font-size', f3(l.size));
       t.setAttribute('fill-opacity', '0');
       t.textContent = l.text;
@@ -892,18 +861,18 @@ export async function outline(doc, root, descs, ctx, notes) {
   noTf.textContent = NO_TRANSFORM;
   doc.head.appendChild(noTf);
   const units = descs.map(d => locate(doc, root, d));
-  const fonts = { web: ctx.web || new Set(), sig: ctx.webSig || '' };
+  const web = ctx.web || new Set();
   for (const u of units)
     if (!u.fail) {
       u.html = originalHtml(u);
       u.orig = [...u.nodes];
       wrapRun(doc, u);
-      measureChars(doc, u, fonts);
+      measureChars(doc, u, web);
       u.cw = nearestCw(win, u.box, root);
     }
   if (units.some(u => !u.fail)) {
     try {
-      await fetchGlyphs(units, ctx, notes);
+      await fetchOutlines(win, units, ctx, notes);
     } catch (e) {
       notes.server =
         e instanceof CodedError ? msg(e.key, e.params) : msg('common.raw', { msg: String((e && e.message) || e) });
@@ -925,10 +894,12 @@ export async function outline(doc, root, descs, ctx, notes) {
       unwrapRun(u);
       continue;
     }
-    u.svg = buildSvg(doc, u, ctx.o);
+    u.svg = shellSvg(doc, u);
     u.svg.setAttribute('data-wxc-unit', String(descs.indexOf(u.d)));
     apply(u);
   }
+  // 全部换上之后再量各 svg 的位置、画字：前面的单元换上后，后面单元的块可能挪位，但 svg 相对自己内容盒的偏移不变
+  for (const u of units) if (!u.fail) drawSvg(doc, u, ctx.o);
   noTf.remove();
   const applied = units.filter(u => !u.fail);
   // 被换掉的内层元素不在新的测量里，diffBoxes 会跳过它们；其余所有元素都不许动，连 1/64px 也不行（会翻转下文的整像素取整）
@@ -963,8 +934,12 @@ export async function outline(doc, root, descs, ctx, notes) {
           w: u.w,
           h: u.h,
           html: u.html,
+          vertical: u.vertical,
           chars: u.chars.filter(c => !c.space).length,
-          sig: u.chars.filter(c => !c.space).map(c => [c.x, c.base, c.st.size]),
+          // 相对 svg 的 [行向位置, 行（列）的位置, 字号]
+          sig: u.chars
+            .filter(c => !c.space)
+            .map(c => (u.vertical ? [c.y - u.oy, c.base - u.ox, c.st.size] : [c.x - u.ox, c.base - u.oy, c.st.size])),
           bytes: u.svg.outerHTML.length - u.html.length,
         },
   );
@@ -976,10 +951,12 @@ export function decide(ra, rb): OutlineVerdict[] {
     const b = rb[i];
     if (!a.ok) return { keep: false, why: a.fail, detail: a.detail };
     if (!b || !b.ok) return { keep: false, why: b ? b.fail : 'missing', detail: b && b.detail, side: 'B' };
-    if (a.chars !== b.chars) return { keep: false, why: 'reflow' };
-    // 最大偏差（px）：盒宽、盒高、逐字横坐标、基线、字号
+    if (a.chars !== b.chars || a.vertical !== b.vertical) return { keep: false, why: 'reflow' };
+    // 最大偏差（px）：行向长度、块向长度、逐字的行向位置、基线（竖排为列中线）、字号。
+    // 横排的行向长度是盒宽，竖排是盒高；w 为 false 时不比行向长度
+    const [len, thick] = a.vertical ? ['h', 'w'] : ['w', 'h'];
     const dev = (r, w) => {
-      const d = [w ? Math.abs(b.w - a.w * r) : 0, Math.abs(b.h - a.h * r), 0, 0, 0];
+      const d = [w ? Math.abs(b[len] - a[len] * r) : 0, Math.abs(b[thick] - a[thick] * r), 0, 0, 0];
       a.sig.forEach((p, j) => {
         const q = b.sig[j];
         d[2] = Math.max(d[2], Math.abs(q[0] - p[0] * r));
