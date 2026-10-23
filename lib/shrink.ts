@@ -22,14 +22,14 @@ const LOSSLESS_RATIO = 1.5,
 
 interface Step {
   jpeg?: number;
-  cs?: string;
+  chroma?: string;
   png?: number | 'lossless';
   flatten?: boolean;
 }
 interface Source {
   buf: Buffer;
-  W: number;
-  H: number;
+  width: number;
+  height: number;
   opaque: boolean;
 }
 interface Encoded {
@@ -38,24 +38,28 @@ interface Encoded {
   how: ShrinkHow;
   width: number;
   height: number;
-  f: number;
+  factor: number;
 }
-const JPEG = (q: number, cs = '4:2:0'): Step => ({ jpeg: q, cs });
-const PNG = (q: number | 'lossless'): Step => ({ png: q });
+const jpegStep = (quality: number, chroma = '4:2:0'): Step => ({ jpeg: quality, chroma });
+const pngStep = (quality: number | 'lossless'): Step => ({ png: quality });
 // full：目标尺寸下依次尝试的画质，最后一档仍放不下时用它缩小尺寸；better：full 第一档放得下时再试的更好的编码；
 // floor：缩到显示所需的尺寸仍放不下时依次降低的画质。平面图形的 JPEG 先不降采样色度（4:4:4），文字、线条边缘不发虚
 const PLANS: Record<string, { full: Step[]; better: Step[]; floor: Step[] }> = {
-  photo: { full: [JPEG(92), JPEG(85), JPEG(80), JPEG(75), JPEG(70)], better: [], floor: [JPEG(65), JPEG(60)] },
-  graphic: {
-    full: [JPEG(92, '4:4:4'), JPEG(85, '4:4:4'), JPEG(85), JPEG(80), JPEG(70)],
+  photo: {
+    full: [jpegStep(92), jpegStep(85), jpegStep(80), jpegStep(75), jpegStep(70)],
     better: [],
-    floor: [JPEG(65), JPEG(60)],
+    floor: [jpegStep(65), jpegStep(60)],
   },
-  lossless: { full: [PNG('lossless')], better: [], floor: [PNG(95), PNG(85)] },
-  palette: { full: [PNG(95)], better: [PNG('lossless')], floor: [PNG(85), PNG(75)] },
+  graphic: {
+    full: [jpegStep(92, '4:4:4'), jpegStep(85, '4:4:4'), jpegStep(85), jpegStep(80), jpegStep(70)],
+    better: [],
+    floor: [jpegStep(65), jpegStep(60)],
+  },
+  lossless: { full: [pngStep('lossless')], better: [], floor: [pngStep(95), pngStep(85)] },
+  palette: { full: [pngStep(95)], better: [pngStep('lossless')], floor: [pngStep(85), pngStep(75)] },
   // 有透明部分：只能用 PNG（微信把 WebP 转存为 JPEG，透明部分会丢）。抠图照片先试无损；平面图形用 256 色
-  alpha: { full: [PNG('lossless')], better: [], floor: [PNG(95), PNG(85), PNG(75)] },
-  alphaFlat: { full: [PNG(95)], better: [PNG('lossless')], floor: [PNG(85), PNG(75)] },
+  alpha: { full: [pngStep('lossless')], better: [], floor: [pngStep(95), pngStep(85), pngStep(75)] },
+  alphaFlat: { full: [pngStep(95)], better: [pngStep('lossless')], floor: [pngStep(85), pngStep(75)] },
 };
 
 /**
@@ -78,79 +82,85 @@ export async function shrink(
   if (!meta.width || !meta.height) return { skip: 'unreadable' };
   // EXIF 方向 5–8 是转了 90°：浏览器按转正后的宽高显示，scale 也是按转正后的尺寸算的
   const turned = (meta.orientation || 1) >= 5;
-  const src = { buf, W: turned ? meta.height : meta.width, H: turned ? meta.width : meta.height, opaque: true };
-  if (src.W <= SERVED_W && buf.length <= max) return { skip: 'fits' };
-  // f0：读者拿到的尺寸；floor：显示所需的尺寸（背景图可能比 f0 小），不再往下缩
-  const f0 = Math.min(1, SERVED_W / src.W);
-  const floor = scale == null ? f0 : Math.min(f0, scale);
-  const pf = Math.min(f0, PROBE / Math.max(src.W, src.H));
-  src.opaque = !meta.hasAlpha || (await opaqueAt(src, pf));
-  const plan = PLANS[await classify(src, pf, GRAPHIC_SRC.has(meta.format))];
-  const done = (c: Encoded, over: boolean): ShrinkOutput => ({
-    buf: c.buf,
-    ext: c.ext,
-    how: c.how,
-    width: c.width,
-    height: c.height,
-    srcWidth: src.W,
-    srcHeight: src.H,
+  const src: Source = {
+    buf,
+    width: turned ? meta.height : meta.width,
+    height: turned ? meta.width : meta.height,
+    opaque: true,
+  };
+  if (src.width <= SERVED_W && buf.length <= max) return { skip: 'fits' };
+  // servedFactor：读者拿到的尺寸；floor：显示所需的尺寸（背景图可能比它小），不再往下缩
+  const servedFactor = Math.min(1, SERVED_W / src.width);
+  const floor = scale == null ? servedFactor : Math.min(servedFactor, scale);
+  const probeFactor = Math.min(servedFactor, PROBE / Math.max(src.width, src.height));
+  src.opaque = !meta.hasAlpha || (await opaqueAt(src, probeFactor));
+  const plan = PLANS[await classify(src, probeFactor, GRAPHIC_SRC.has(meta.format))];
+  const done = (candidate: Encoded, over: boolean): ShrinkOutput => ({
+    buf: candidate.buf,
+    ext: candidate.ext,
+    how: candidate.how,
+    width: candidate.width,
+    height: candidate.height,
+    srcWidth: src.width,
+    srcHeight: src.height,
     over,
   });
 
   let small: Encoded = null;
-  const keep = (c: Encoded) => {
-    if (!small || c.buf.length < small.buf.length) small = c;
-    return c;
+  const keep = (candidate: Encoded) => {
+    if (!small || candidate.buf.length < small.buf.length) small = candidate;
+    return candidate;
   };
-  const fits = (c: Encoded) => c.buf.length <= max;
+  const fits = (candidate: Encoded) => candidate.buf.length <= max;
 
   // 一、读者拿到的尺寸：画质从高到低。先试最高一档与最低一档，最低一档放得下时二分找放得下的最高一档
   const full = plan.full;
-  const top = keep(await encode(src, f0, full[0]));
-  if (fits(top)) {
+  const first = keep(await encode(src, servedFactor, full[0]));
+  if (fits(first)) {
     for (const step of plan.better) {
-      const c = await encode(src, f0, step);
-      if (fits(c)) return done(c, false);
+      const candidate = await encode(src, servedFactor, step);
+      if (fits(candidate)) return done(candidate, false);
     }
-    return done(top, false);
+    return done(first, false);
   }
-  const last = full.length > 1 ? keep(await encode(src, f0, full[full.length - 1])) : top;
+  const last = full.length > 1 ? keep(await encode(src, servedFactor, full[full.length - 1])) : first;
   if (fits(last)) {
     let lo = 0,
       hi = full.length - 1,
-      ok = last;
+      fitting = last;
     while (hi - lo > 1) {
       const mid = (lo + hi) >> 1,
-        c = keep(await encode(src, f0, full[mid]));
-      if (fits(c)) {
+        candidate = keep(await encode(src, servedFactor, full[mid]));
+      if (fits(candidate)) {
         hi = mid;
-        ok = c;
+        fitting = candidate;
       } else lo = mid;
     }
-    return done(ok, false);
+    return done(fitting, false);
   }
 
-  // 二、最低一档画质下缩小尺寸（只有显示所需比 f0 小的背景图才有余地）：在放得下（lo）与放不下（hi）的两次结果之间插值
+  // 二、最低一档画质下缩小尺寸（只有显示所需比读者拿到的尺寸小的背景图才有余地）：在放得下与放不下的两次结果之间插值
   const searchStep = full[full.length - 1];
-  let lo: Probe = null,
-    hi: Probe = { f: f0, size: last.buf.length },
-    fit: Encoded = null;
-  const record = (c: Encoded) => {
-    keep(c);
-    if (fits(c)) {
-      if (!lo || c.f > lo.f) {
-        lo = { f: c.f, size: c.buf.length };
-        fit = c;
+  let fitProbe: Probe = null,
+    overProbe: Probe = { factor: servedFactor, size: last.buf.length },
+    fitted: Encoded = null;
+  const record = (candidate: Encoded) => {
+    keep(candidate);
+    if (fits(candidate)) {
+      if (!fitProbe || candidate.factor > fitProbe.factor) {
+        fitProbe = { factor: candidate.factor, size: candidate.buf.length };
+        fitted = candidate;
       }
-    } else if (c.f < hi.f) hi = { f: c.f, size: c.buf.length };
+    } else if (candidate.factor < overProbe.factor)
+      overProbe = { factor: candidate.factor, size: candidate.buf.length };
   };
   const target = max * 0.97;
-  for (let k = 0; k < 6 && floor < f0 - 1e-9; k++) {
-    if (lo && (lo.size >= max * GOOD || hi.f / lo.f < CLOSE)) break;
-    if (!lo && hi.f <= floor + 1e-9) break;
-    record(await encode(src, nextF(lo, hi, target, floor), searchStep));
+  for (let k = 0; k < 6 && floor < servedFactor - 1e-9; k++) {
+    if (fitProbe && (fitProbe.size >= max * GOOD || overProbe.factor / fitProbe.factor < CLOSE)) break;
+    if (!fitProbe && overProbe.factor <= floor + 1e-9) break;
+    record(await encode(src, nextFactor(fitProbe, overProbe, target, floor), searchStep));
   }
-  if (fit) return done(fit, false);
+  if (fitted) return done(fitted, false);
   for (const step of plan.floor) {
     const c = keep(await encode(src, floor, step));
     if (fits(c)) return done(c, false);
@@ -159,68 +169,80 @@ export async function shrink(
   return done(small, true);
 }
 
-/** 下一次尝试的尺寸（原图的 f 倍） */
+/** 一次尝试：尺寸（原图的 factor 倍）与编码后的字节数 */
 interface Probe {
-  f: number;
+  factor: number;
   size: number;
 }
-function nextF(lo: Probe | null, hi: Probe, target: number, floor: number) {
-  if (lo && hi) {
-    const t = (Math.log(target) - Math.log(lo.size)) / (Math.log(hi.size) - Math.log(lo.size));
-    const f = Math.exp(Math.log(lo.f) + t * (Math.log(hi.f) - Math.log(lo.f)));
-    const gap = hi.f - lo.f;
-    return Math.min(hi.f - gap * 0.1, Math.max(lo.f + gap * 0.1, f));
+/** 下一次尝试的尺寸（原图的倍数） */
+function nextFactor(fitProbe: Probe | null, overProbe: Probe, target: number, floor: number) {
+  if (fitProbe && overProbe) {
+    const fraction =
+      (Math.log(target) - Math.log(fitProbe.size)) / (Math.log(overProbe.size) - Math.log(fitProbe.size));
+    const factor = Math.exp(
+      Math.log(fitProbe.factor) + fraction * (Math.log(overProbe.factor) - Math.log(fitProbe.factor)),
+    );
+    const gap = overProbe.factor - fitProbe.factor;
+    return Math.min(overProbe.factor - gap * 0.1, Math.max(fitProbe.factor + gap * 0.1, factor));
   }
-  if (lo) return Math.min(hi.f, lo.f * (target / lo.size) ** (1 / SIZE_EXP));
-  return Math.max(floor, hi.f * (target / hi.size) ** (1 / SIZE_EXP));
+  if (fitProbe) return Math.min(overProbe.factor, fitProbe.factor * (target / fitProbe.size) ** (1 / SIZE_EXP));
+  return Math.max(floor, overProbe.factor * (target / overProbe.size) ** (1 / SIZE_EXP));
 }
 
 /** 缩略图的透明通道里是否全是 255 */
-async function opaqueAt(src: Source, pf: number) {
-  let p = sharp(src.buf, { limitInputPixels: LIMIT_PIXELS }).rotate();
-  if (pf < 1) p = p.resize(Math.max(1, Math.round(src.W * pf)), Math.max(1, Math.round(src.H * pf)), { fit: 'fill' });
-  const { data, info } = await p.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+async function opaqueAt(src: Source, probeFactor: number) {
+  let pipeline = sharp(src.buf, { limitInputPixels: LIMIT_PIXELS }).rotate();
+  if (probeFactor < 1)
+    pipeline = pipeline.resize(
+      Math.max(1, Math.round(src.width * probeFactor)),
+      Math.max(1, Math.round(src.height * probeFactor)),
+      { fit: 'fill' },
+    );
+  const { data, info } = await pipeline.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   for (let i = info.channels - 1; i < data.length; i += info.channels) if (data[i] !== 255) return false;
   return true;
 }
 
 /** 用缩略图的编码体积判断按 PLANS 中的哪一类编码 */
-async function classify(src: Source, pf: number, graphicSrc: boolean) {
-  const bytes = async (step: Step) => (await encode(src, pf, step)).buf.length;
+async function classify(src: Source, probeFactor: number, graphicSrc: boolean) {
+  const bytes = async (step: Step) => (await encode(src, probeFactor, step)).buf.length;
   if (!src.opaque) {
     // 与不透明的图同一判据：铺上灰底后的 JPEG 只用来比体积。无损 PNG 比它大得多，说明是照片一类（如抠图），256 色会出色带
-    const l = await bytes(PNG('lossless')),
-      j = await bytes({ ...JPEG(92, '4:4:4'), flatten: true });
-    return l <= j * LOSSLESS_RATIO ? 'alphaFlat' : 'alpha';
+    const losslessBytes = await bytes(pngStep('lossless')),
+      jpegBytes = await bytes({ ...jpegStep(92, '4:4:4'), flatten: true });
+    return losslessBytes <= jpegBytes * LOSSLESS_RATIO ? 'alphaFlat' : 'alpha';
   }
   if (!graphicSrc) return 'photo';
-  const j = await bytes(JPEG(92, '4:4:4'));
-  if ((await bytes(PNG('lossless'))) <= j * LOSSLESS_RATIO) return 'lossless';
-  if ((await bytes(PNG(95))) <= j * PALETTE_RATIO) return 'palette';
+  const jpegBytes = await bytes(jpegStep(92, '4:4:4'));
+  if ((await bytes(pngStep('lossless'))) <= jpegBytes * LOSSLESS_RATIO) return 'lossless';
+  if ((await bytes(pngStep(95))) <= jpegBytes * PALETTE_RATIO) return 'palette';
   return 'graphic';
 }
 
-/** 缩放到原图的 f 倍（转正、转为 sRGB）后按 step 编码 */
-async function encode(src: Source, f: number, step: Step): Promise<Encoded> {
-  const w = Math.max(1, Math.round(src.W * f)),
-    h = Math.max(1, Math.round(src.H * f));
-  let p = sharp(src.buf, { limitInputPixels: LIMIT_PIXELS }).rotate();
-  if (w !== src.W || h !== src.H) p = p.resize(w, h, { fit: 'fill', kernel: 'lanczos3', fastShrinkOnLoad: false });
-  if (src.opaque) p = p.removeAlpha();
-  else if (step.flatten) p = p.flatten({ background: '#808080' });
-  let b: Buffer, ext: string, how: ShrinkHow;
+/** 缩放到原图的 factor 倍（转正、转为 sRGB）后按 step 编码 */
+async function encode(src: Source, factor: number, step: Step): Promise<Encoded> {
+  const w = Math.max(1, Math.round(src.width * factor)),
+    h = Math.max(1, Math.round(src.height * factor));
+  let pipeline = sharp(src.buf, { limitInputPixels: LIMIT_PIXELS }).rotate();
+  if (w !== src.width || h !== src.height)
+    pipeline = pipeline.resize(w, h, { fit: 'fill', kernel: 'lanczos3', fastShrinkOnLoad: false });
+  if (src.opaque) pipeline = pipeline.removeAlpha();
+  else if (step.flatten) pipeline = pipeline.flatten({ background: '#808080' });
+  let output: Buffer, ext: string, how: ShrinkHow;
   if (step.jpeg) {
-    b = await p.jpeg({ quality: step.jpeg, mozjpeg: true, chromaSubsampling: step.cs }).toBuffer();
+    output = await pipeline.jpeg({ quality: step.jpeg, mozjpeg: true, chromaSubsampling: step.chroma }).toBuffer();
     ext = '.jpg';
     how = { fmt: 'jpeg', q: step.jpeg };
   } else if (step.png === 'lossless') {
-    b = await p.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer();
+    output = await pipeline.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer();
     ext = '.png';
     how = { fmt: 'png' };
   } else {
-    b = await p.png({ palette: true, quality: step.png, effort: 10, dither: 1, compressionLevel: 9 }).toBuffer();
+    output = await pipeline
+      .png({ palette: true, quality: step.png, effort: 10, dither: 1, compressionLevel: 9 })
+      .toBuffer();
     ext = '.png';
     how = { fmt: 'palette' };
   }
-  return { buf: b, ext, how, width: w, height: h, f };
+  return { buf: output, ext, how, width: w, height: h, factor };
 }
