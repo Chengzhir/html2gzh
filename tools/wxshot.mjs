@@ -160,12 +160,7 @@ const maskRects = (pg, sampled, o) =>
   );
 
 /** 逐像素比：屏蔽区域外扩 3px 画成浅蓝，不计入；返回差异图与并排图（原稿 | 预览 | 差异） */
-async function compare(A, B, masks) {
-  const cmp = await b.newPage();
-  const r = await pixelDiff(cmp, A, B, masks, { side: true });
-  await cmp.close();
-  return r;
-}
+const compare = (A, B, masks) => pixelDiff(A, B, masks, { side: true });
 
 try {
   const pv = await openPreview(),

@@ -12,7 +12,7 @@ import { WX_ANIM_OK } from '../ui/convert/svg/dom.ts';
 import { settled, pickDefault, openFontList, isChecked, setChecked, typeNumber } from './ui.mjs';
 import { buildWebfontFixture, serveRemote } from './webfonts.mjs';
 import { startServer } from './serve.mjs';
-import { pixelDiff as diffIn } from './pixeldiff.mjs';
+import { pixelDiff, WINDOW } from './pixeldiff.mjs';
 import { assetIdsIn } from '../ui/convert/assetid.ts';
 
 const HERE = import.meta.dirname;
@@ -510,7 +510,8 @@ try {
   // 动画一律冻结在时刻 t（默认 0）：CSS 动画暂停并跳到 t，每个 svg（嵌套的有自己的时间线）的 SMIL 也跳到 t；
   // use 影子树里的 CSS 动画 getAnimations 拿不到，靠 CDP 把整页时间线的播放速度设成 0（只能停在 0）。
   // clicks：先点一遍标了 data-click 的元素，再跳到这个时刻。非 0 时刻时，标了 data-sample-skip 的也屏蔽
-  const shot = async (html, w, masks, t = 0, clicks = null) => {
+  // hide：不比的元素（data-wxc），它们在这张图里的框追加到 hidden
+  const shot = async (html, w, masks, t = 0, clicks = null, hide = [], hidden = []) => {
     const pg = await browser.newPage();
     await pg.setViewport({ width: w, height: 800 });
     // 在本机服务的源下写入内容：原稿引用的本地字体（/a/…）同源，不用跨域
@@ -556,11 +557,25 @@ try {
           !!(t || clicks != null),
         )),
       );
+    if (hide.length)
+      hidden.push(
+        ...(await pg.evaluate(
+          ids =>
+            ids.flatMap(id =>
+              [...document.querySelectorAll(`[data-wxc="${id}"]`)].map(e => {
+                const b = e.getBoundingClientRect();
+                return [b.left + scrollX, b.top + scrollY, b.width, b.height];
+              }),
+            ),
+          hide,
+        )),
+      );
     const b = await pg.screenshot({ fullPage: true, encoding: 'base64' });
     await pg.close();
     return b;
   };
-  const pixelDiff = (a, b, masks) => diffIn(page, a, b, masks);
+  // 成片差异的门槛：测试稿与本机文章里字形的亚像素位移腐蚀后每个方块至多剩 32 个，20×20 的缺块剩 256 个
+  const SOLID_MAX = 64;
   if (SVG_MODE) {
     // 轮廓区域单独量：逐个单元的亚像素偏移与墨量（3 倍像素密度，接近手机）。
     // 偏移门槛：Chrome 把 svg 盒子对齐到整 CSS 像素而字形保留小数位置，横向差最多 0.5px；纵向文字基线也取整，两次取整最多差 1px。
@@ -585,20 +600,23 @@ try {
   console.log('\n逐像素');
   for (const w of [width, 320, 460, 637]) {
     const sfx = w === width ? '' : '-' + w;
-    const masks = [];
-    const [a, b] = [await shot(r.original, w), await shot(prevHtml, w, masks)];
+    const masks = [],
+      hide = w === width ? [] : [...listed];
+    const [a, b] = [
+      await shot(r.original, w, null, 0, null, hide, masks),
+      await shot(prevHtml, w, masks, 0, null, hide, masks),
+    ];
     fs.writeFileSync(path.join(OUT, `original${sfx}.png`), Buffer.from(a, 'base64'));
     fs.writeFileSync(path.join(OUT, `converted${sfx}.png`), Buffer.from(b, 'base64'));
     const diff = await pixelDiff(a, b, masks);
     fs.writeFileSync(path.join(OUT, `diff${sfx}.png`), Buffer.from(diff.diff, 'base64'));
-    const ratio = diff.bad / (diff.total - diff.area);
     check(Math.abs(diff.ha - diff.hb) <= 2, `${w}px 页面高度一致`, `${diff.ha} vs ${diff.hb}`);
-    // 主宽度要求 0.3%；其他宽度下图片重采样、斜排文字的亚像素位置不同，放宽到 0.5%（逐元素比对另有 1.5px 硬门槛）
+    // 已列入检查结果（这个宽度下有偏差）的元素在两张图里都不比
     check(
-      ratio < (w === width ? 0.003 : 0.005),
-      `${w}px 差异像素 < ${w === width ? '0.3' : '0.5'}%` +
-        (diff.area ? `（不含屏蔽区域 ${((diff.area / diff.total) * 100).toFixed(1)}%）` : ''),
-      `${(ratio * 100).toFixed(3)}%（test/out/diff${sfx}.png）`,
+      diff.solid <= SOLID_MAX,
+      `${w}px 没有成片的差异（${WINDOW}×${WINDOW} 方块里腐蚀后 ≤${SOLID_MAX} 个不同的像素）` +
+        (diff.area ? `，不含屏蔽区域 ${((diff.area / diff.total) * 100).toFixed(1)}%` : ''),
+      `最多 ${diff.solid} 个，在 (${diff.at})；不同的像素共 ${diff.bad} 个（test/out/diff${sfx}.png）`,
     );
   }
 
@@ -616,14 +634,13 @@ try {
       const masks = [];
       const [a, b] = [await shot(r.original, width, null, t, clicks), await shot(prevHtml, width, masks, t, clicks)];
       const d = await pixelDiff(a, b, masks);
-      const ratio = d.bad / (d.total - d.area);
-      if (ratio >= 0.003) {
+      if (d.solid > SOLID_MAX) {
         const tag = clicks == null ? `t=${t}s` : `点击后 ${Math.round((clicks - t) * 100) / 100}s`;
-        bad.push(`${tag} ${(ratio * 100).toFixed(2)}%`);
+        bad.push(`${tag} ${d.solid} 个，在 (${d.at})`);
         fs.writeFileSync(path.join(OUT, `diff-anim-${t}-${clicks ?? 'x'}.png`), Buffer.from(d.diff, 'base64'));
       }
     }
-    check(!bad.length, '动画在各采样时刻与原稿一致（差异像素 < 0.3%）', bad.join(' | ') || '5 个时刻');
+    check(!bad.length, '动画在各采样时刻与原稿一致（没有成片的差异）', bad.join(' | ') || '5 个时刻');
   }
 
   // 字体表（放在逐像素之后：勾选会触发重新转换）

@@ -30,6 +30,7 @@
     "@intlify/unplugin-vue-i18n": "11.2.7",
     "@types/node": "26.6.5",
     "@vitejs/plugin-vue": "6.0.10",
+    "pixelmatch": "8.0.0",
     "prettier": "3.9.10",
     "subset-font": "2.9.0",
     "typescript": "6.0.3",
