@@ -519,9 +519,6 @@ details.fold > summary:hover {
 }
 .check {
   --c: var(--ui-info);
-  display: flex;
-  gap: 8px;
-  padding: 8px 10px;
   border-radius: var(--ui-radius);
   font-size: var(--ui-fs-sm);
   line-height: 1.6;
@@ -538,27 +535,56 @@ details.fold > summary:hover {
 .check.fixed {
   --c: var(--ui-ok);
 }
-.check-icon {
+/* 每条只有一句结论，与图标同在一行；能展开的，整行都可点击，箭头在右端 */
+.check-head {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+}
+.check-icon,
+.check-chevron {
   flex: none;
   width: 16px;
   height: 16px;
   margin-top: 2px;
+}
+.check-icon {
   color: var(--c);
 }
-.check-body {
+.check-text {
   min-width: 0;
   flex: 1;
-}
-.check b {
-  margin-right: 6px;
-  font-weight: var(--ui-strong);
   color: var(--ui-text1);
 }
 .check-more > summary {
+  list-style: none;
   cursor: pointer;
+  border-radius: var(--ui-radius);
 }
-.check-more > summary::marker {
+.check-more > summary::-webkit-details-marker {
+  display: none;
+}
+.check-more > summary:focus-visible {
+  outline-offset: -2px;
+}
+.check-chevron {
   color: var(--ui-text3);
+  transition: transform 0.15s;
+}
+.check-more > summary:hover .check-chevron {
+  color: var(--ui-text1);
+}
+.check-more[open] .check-chevron {
+  transform: rotate(180deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .check-chevron {
+    transition: none;
+  }
+}
+/* 展开的内容与结论左端对齐：10px 边距 + 16px 图标 + 8px 间隔 */
+.check-detail {
+  padding: 0 10px 8px 34px;
 }
 .check .detail {
   margin: 6px 0 0;
@@ -568,6 +594,9 @@ details.fold > summary:hover {
   margin: 6px 0 0;
   padding-left: 1.2em;
   color: var(--ui-text3);
+}
+.check-detail > :first-child {
+  margin-top: 0;
 }
 .check .detail-list li + li {
   margin-top: 2px;

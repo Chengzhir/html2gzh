@@ -10,7 +10,6 @@ import type { Shrunk } from './store.ts';
 export interface CheckItem {
   key: string;
   level: FindingLevel;
-  title: string;
   text: string;
   blocks: Block[];
   ids: string[];
@@ -55,7 +54,6 @@ export const checkItems = computed<CheckItem[]>(() => {
   ): CheckItem => ({
     key: 'a:' + code,
     level,
-    title: t(`checks.${code}.title`),
     text: t(`checks.${code}.text`, params),
     blocks,
     ids,
@@ -121,5 +119,5 @@ export const counts = computed(() => ({
   warn: checkItems.value.filter(({ level }) => level === 'warn').length,
 }));
 
-// 测试日志用：把一条检查结果排成标题与结论
+// 测试日志用：把一条检查结果排成句子
 Object.assign(window, { __wxcFinding: showFinding });

@@ -160,7 +160,7 @@ try {
   );
   [...r.findings]
     .sort((a, b) => a.level.localeCompare(b.level))
-    .forEach((f, i) => console.log(`    [${f.level}] ${f.code} ${shown[i].title}：${shown[i].text}`));
+    .forEach((f, i) => console.log(`    [${f.level}] ${f.code} ${shown[i].text}`));
   console.log(
     `    图片 本地 ${r.report.local} · 缺失 ${r.report.missing.length} · data: ${r.report.dataUri} · 外链 ${r.report.remote}`,
   );
@@ -1266,12 +1266,12 @@ try {
         kb: window.__wxc.shrink.kb,
         has: r.payload.includes('/a/' + id),
         shrunk: (r.report.shrunk || []).map(s => s.id),
-        check: document.getElementById('checks').textContent.includes('图片压缩'),
+        check: document.getElementById('checks').textContent.includes('张图片已缩小或压缩'),
       };
     }, photoId);
     check(
       on.kb === 400 && !on.has && on.shrunk.includes(r1.id) && on.check,
-      '勾选后成品中的大图换成压缩后的副本，检查结果列出“图片压缩”',
+      '勾选后成品中的大图换成压缩后的副本，检查结果列出已缩小或压缩的图片',
       JSON.stringify(on),
     );
     await setShrink(false, 1000);

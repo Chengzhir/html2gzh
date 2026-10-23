@@ -14,19 +14,22 @@ const ICON = {
   fixed: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1.2 14.2-4-4 1.4-1.4 2.6 2.6 5.6-5.6 1.4 1.4-7 7z',
   info: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z',
 };
+const CHEVRON = 'M16.6 8.6 12 13.2 7.4 8.6 6 10l6 6 6-6z';
 </script>
 
 <template>
   <li :class="['check', item.level]">
-    <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path :d="ICON[item.level]" fill="currentColor" />
-    </svg>
-    <div class="check-body">
-      <details v-if="item.blocks.length" class="check-more">
-        <summary>
-          <b>{{ item.title }}</b
-          >{{ item.text }}
-        </summary>
+    <details v-if="item.blocks.length" class="check-more">
+      <summary class="check-head">
+        <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path :d="ICON[item.level]" fill="currentColor" />
+        </svg>
+        <span class="check-text">{{ item.text }}</span>
+        <svg class="check-chevron" viewBox="0 0 24 24" aria-hidden="true">
+          <path :d="CHEVRON" fill="currentColor" />
+        </svg>
+      </summary>
+      <div class="check-detail">
         <template v-for="(b, i) in item.blocks" :key="i">
           <p v-if="'p' in b" class="detail">{{ b.p }}</p>
           <ul v-else class="detail-list">
@@ -36,14 +39,18 @@ const ICON = {
         <NButton v-if="item.ids.length" size="tiny" secondary @click="highlight(item.ids)">{{
           t('checks.mark')
         }}</NButton>
-      </details>
-      <template v-else>
-        <b>{{ item.title }}</b
-        >{{ item.text }}
-        <NButton v-if="item.ids.length" class="mark" size="tiny" secondary @click="highlight(item.ids)">{{
+      </div>
+    </details>
+    <div v-else class="check-head">
+      <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path :d="ICON[item.level]" fill="currentColor" />
+      </svg>
+      <span class="check-text"
+        >{{ item.text
+        }}<NButton v-if="item.ids.length" class="mark" size="tiny" secondary @click="highlight(item.ids)">{{
           t('checks.mark')
-        }}</NButton>
-      </template>
+        }}</NButton></span
+      >
     </div>
   </li>
 </template>

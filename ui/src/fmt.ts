@@ -28,7 +28,7 @@ export const kb = (bytes: number) =>
 
 /** 详细说明排成的段落与列表 */
 export type Block = { p: string } | { ul: string[] };
-/** 检查结果的标题、结论、说明。说明 = finding.<code>.detail（有的话，换行处分段）+ parts：相邻的句子并成一段，列表另起 */
+/** 检查结果的结论与说明。说明 = finding.<code>.detail（有的话，换行处分段）+ parts：相邻的句子并成一段，列表另起 */
 export function showFinding(f: Finding) {
   const base = 'finding.' + f.code,
     params = f.params;
@@ -47,5 +47,5 @@ export function showFinding(f: Finding) {
     } else para += fmt(part);
   }
   flush();
-  return { title: t(base + '.title'), text: fmtKey(base + '.text', params), blocks };
+  return { text: fmtKey(base + '.text', params), blocks };
 }
