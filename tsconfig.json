@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
-    "target": "es2024",
+    "target": "esnext",
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "lib": ["es2024", "dom", "dom.iterable"],
+    "lib": ["esnext", "dom", "dom.iterable"],
     "types": ["node"],
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": false,

@@ -13,5 +13,5 @@ export default defineConfig({
     // 文案在构建时预编译：格式写错（如未转义的 @）构建就失败。文案里有 <use>、<animate> 这样的标签名，按纯文本处理
     VueI18n({ include: [ui + 'src/locales/**'], strictMessage: false, escapeHtml: false }),
   ],
-  build: { outDir: 'dist', emptyOutDir: true, target: 'es2023', chunkSizeWarningLimit: 2000 },
+  build: { outDir: 'dist', emptyOutDir: true, target: 'esnext', chunkSizeWarningLimit: 2000 },
 });
