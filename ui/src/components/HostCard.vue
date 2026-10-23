@@ -188,7 +188,7 @@ const guidePort = computed(() => host.value?.config.imgPort ?? 38960);
     <div class="host-result">
       <p id="hostLine" :class="['status', line.cls]">
         <template v-if="line.base"
-          >{{ t('host.current') }}<span :class="['tag', line.reach]">{{ t(TAG[line.reach]) }}</span
+          >{{ t('host.current') }}<span :class="['tag', line.reach]">{{ t(TAG[line.reach ?? 'wait']) }}</span
           ><span class="url">{{ line.base }}</span></template
         >
         <template v-else>{{ line.text }}</template>
@@ -213,7 +213,7 @@ const guidePort = computed(() => host.value?.config.imgPort ?? 38960);
             <span class="ip">{{ exit.ip }}</span>
             <span v-if="exit.stale" class="tag wait">{{ t('host.exitStale') }}</span>
             <span v-else :class="['tag', exit.ok ? 'ok' : 'no']">{{ t(exit.ok ? 'host.tagOk' : 'host.tagNo') }}</span>
-            <span v-if="host.pick?.base === exit.base" class="in-use">{{ t('host.inUse') }}</span>
+            <span v-if="host?.pick?.base === exit.base" class="in-use">{{ t('host.inUse') }}</span>
           </li>
         </ul>
       </details>

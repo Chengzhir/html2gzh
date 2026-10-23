@@ -1,4 +1,4 @@
-import { ID, isHtmlEl, measure, diffBoxes, loadFrame, sleep, NO_TRANSFORM } from './util.ts';
+import { ID, idOf, isHtmlEl, measure, diffBoxes, loadFrame, sleep, NO_TRANSFORM, viewOf } from './util.ts';
 import { collectRules, matchRules, cascadeOrder, toStyle } from './cascade.ts';
 import type { CascadeNotes, StyleEnv, UnitHits } from './cascade.ts';
 import { convertPositions, correctOffsets, INHERITED } from './position.ts';
@@ -43,8 +43,8 @@ export interface Sizes {
 export interface ConvertContext {
   o: typeof DEFAULT_OPTS;
   fontRules: FontRule[];
-  glyphs: ((req: GlyphRequest) => Promise<GlyphResponse>) | null;
-  fontBytes: ((url: string) => Promise<string | null>) | null;
+  glyphs: (req: GlyphRequest) => Promise<GlyphResponse>;
+  fontBytes: (url: string) => Promise<string | null>;
   plan: FontPlan | null;
   web: Set<string> | null;
   webUsed: ReturnType<typeof usedWebFonts> | null;
@@ -79,7 +79,7 @@ function collector(): FindingSink {
         code,
         params,
         parts: parts.filter(Boolean) as Finding['parts'],
-        ids: els.map(el => (typeof el === 'string' ? el : el.getAttribute && el.getAttribute(ID))).filter(Boolean),
+        ids: els.map(el => (typeof el === 'string' ? el : idOf(el))).filter(Boolean),
       });
     };
   return { list, fixed: add('fixed'), warn: add('warn'), info: add('info'), error: add('error') };
@@ -98,11 +98,11 @@ export interface ConvertOptions {
   frame: HTMLIFrameElement;
   verifyFrame: HTMLIFrameElement;
   opts?: Partial<typeof DEFAULT_OPTS>;
-  glyphs?: ((req: GlyphRequest) => Promise<GlyphResponse>) | null;
+  glyphs: (req: GlyphRequest) => Promise<GlyphResponse>;
   /** data: 地址 → 登记后的图片地址 */
   raster?: ((uri: string) => Promise<string>) | null;
   /** 网页字体地址 → 本机服务里的文件 id */
-  fontBytes?: ((url: string) => Promise<string | null>) | null;
+  fontBytes: (url: string) => Promise<string | null>;
 }
 
 /**
@@ -111,7 +111,7 @@ export interface ConvertOptions {
  */
 export async function convert(
   html: string,
-  { width, frame, verifyFrame, opts = {}, glyphs = null, raster = null, fontBytes = null }: ConvertOptions,
+  { width, frame, verifyFrame, opts = {}, glyphs, raster = null, fontBytes }: ConvertOptions,
 ): Promise<ConvertResult> {
   const options = { ...DEFAULT_OPTS, ...opts };
   const { rules: fontRules, bad: badRules } = parseRules(options.rules);
@@ -147,22 +147,25 @@ export async function convert(
     previewB = B.preview,
     outlineStat: OutlineStat | null = null;
   if (A.outlined) {
-    const verdicts = decide(A.outlined, B.outlined);
-    previewA = finalize(previewA, A.outlined, verdicts);
-    previewB = finalize(previewB, B.outlined, verdicts);
-    outlineStat = { units: verdicts.length, verdicts, kept: 0, chars: 0, bytes: 0 };
+    const resultsA = A.outlined,
+      resultsB = B.outlined ?? [];
+    const verdicts = decide(resultsA, resultsB);
+    previewA = finalize(previewA, resultsA, verdicts);
+    previewB = finalize(previewB, resultsB, verdicts);
+    const stat: OutlineStat = { units: verdicts.length, verdicts, kept: 0, chars: 0, bytes: 0 };
     verdicts.forEach((verdict, i) => {
-      if (!verdict.keep) return;
-      const result = A.outlined[i];
-      outlineStat.kept++;
-      outlineStat.chars += result.chars;
-      outlineStat.bytes += result.bytes;
+      const result = resultsA[i];
+      if (!verdict.keep || !result.ok) return;
+      stat.kept++;
+      stat.chars += result.chars;
+      stat.bytes += result.bytes;
     });
+    outlineStat = stat;
   }
-  const fonts = fontRows(ctx, outlineStat && outlineStat.verdicts);
+  const fonts = fontRows(A.plan, ctx, outlineStat && outlineStat.verdicts);
   const { html: mergedRaw, stat } = mergeWidths(previewA, previewB);
   const findings = A.findings;
-  if (outlineStat) outlineFindings(findings, outlineStat, ctx);
+  if (outlineStat) outlineFindings(findings, outlineStat, A.plan, ctx);
   // 用网页字体、又没转为路径的字：公众号正文加载不了网页字体，手机上换成别的字体
   const webLeft = new Map<string, number>();
   for (const row of fonts)
@@ -199,7 +202,7 @@ export async function convert(
   if (A.pageBg && A.pageBg !== 'rgb(255, 255, 255)') findings.warn('pageBg', { color: A.pageBg });
   if (badRules.length) findings.warn('badRules', { lines: badRules });
   if (stat.cq)
-    findings.fixed('cq', { n: stat.cq }, { parts: [stat.split && msg('finding.cq.split', { n: stat.split })] });
+    findings.fixed('cq', { n: stat.cq }, { parts: [stat.split > 0 && msg('finding.cq.split', { n: stat.split })] });
   // 多宽度比对都过了就只是说明，不必处理
   if (stat.approx)
     (others.length ? findings.warn : findings.info)(
@@ -254,17 +257,20 @@ export async function convert(
         outlineStat &&
         outlineStat.verdicts.map((verdict, i) => ({
           ...verdict,
-          id: ctx.plan.units[i].id,
-          run: ctx.plan.units[i].from != null,
-          text: ctx.plan.units[i].text.slice(0, 40),
+          id: A.plan.units[i].id,
+          run: A.plan.units[i].from != null,
+          text: A.plan.units[i].text.slice(0, 40),
         })),
     },
   };
 }
 
 /** 字体表：每行的字数、转为路径的字数、没转的原因（原因代码 → 字数），以及手机上的字体栈 */
-function fontRows(ctx: Pick<ConvertContext, 'plan' | 'fontRules' | 'o'>, verdicts: OutlineVerdict[] | null): FontRow[] {
-  const { rows, units, skip } = ctx.plan;
+function fontRows(
+  { rows, units, skip }: FontPlan,
+  ctx: Pick<ConvertContext, 'fontRules' | 'o'>,
+  verdicts: OutlineVerdict[] | null,
+): FontRow[] {
   const out = new Map(
     rows.map((row): [string, FontRow] => [
       row.key,
@@ -279,6 +285,7 @@ function fontRows(ctx: Pick<ConvertContext, 'plan' | 'fontRules' | 'o'>, verdict
   (verdicts || []).forEach((verdict, i) => {
     for (const [key, n] of Object.entries(units[i].rows)) {
       const row = out.get(key);
+      if (!row) continue;
       if (verdict.keep) row.done += n;
       else if (ctx.o.paths.includes(key)) {
         const why = whyCode(verdict.why);
@@ -291,10 +298,10 @@ function fontRows(ctx: Pick<ConvertContext, 'plan' | 'fontRules' | 'o'>, verdict
 
 /** 每个字号（含 ::before/::after）：data-wxc → px；'' 是 body 的 */
 function readSizes(doc: Document) {
-  const win = doc.defaultView,
+  const win = viewOf(doc),
     out = new Map([['', parseFloat(win.getComputedStyle(doc.body).fontSize)]]);
   for (const el of doc.querySelectorAll(`[${ID}]`)) {
-    const id = el.getAttribute(ID);
+    const id = idOf(el);
     out.set(id, parseFloat(win.getComputedStyle(el).fontSize));
     if (!isHtmlEl(el)) continue;
     for (const slot of ['before', 'after'])
@@ -308,19 +315,22 @@ function readSizes(doc: Document) {
  */
 function sizeAtRef(sizes: Sizes, pseudoSrc: Map<string, string>) {
   return (el: Element) => {
-    const px = parseFloat(el.ownerDocument.defaultView.getComputedStyle(el).fontSize);
-    if (!sizes.B) return px;
-    for (let ancestor = el; ancestor; ancestor = ancestor.parentElement) {
-      const id = ancestor.getAttribute && ancestor.getAttribute(ID);
+    const px = parseFloat(viewOf(el.ownerDocument).getComputedStyle(el).fontSize);
+    const { A, B, t = 0 } = sizes;
+    if (!A || !B) return px;
+    for (let ancestor: Element | null = el; ancestor; ancestor = ancestor.parentElement) {
+      const id = ancestor.getAttribute(ID);
       const key = ancestor === ancestor.ownerDocument.body ? '' : id && (pseudoSrc.get(id) || id);
-      if (key == null || !sizes.A.has(key) || !sizes.B.has(key) || !sizes.A.get(key)) continue;
-      return px * (1 + sizes.t * (sizes.B.get(key) / sizes.A.get(key) - 1));
+      const sizeA = key == null ? undefined : A.get(key),
+        sizeB = key == null ? undefined : B.get(key);
+      if (!sizeA || sizeB == null) continue;
+      return px * (1 + t * (sizeB / sizeA - 1));
     }
     return px;
   };
 }
 
-function outlineFindings(findings: FindingSink, outlineStat: OutlineStat, ctx: ConvertContext) {
+function outlineFindings(findings: FindingSink, outlineStat: OutlineStat, plan: FontPlan, ctx: ConvertContext) {
   if (outlineStat.kept)
     findings.fixed(
       'svgPath',
@@ -335,7 +345,7 @@ function outlineFindings(findings: FindingSink, outlineStat: OutlineStat, ctx: C
     if (verdict.keep || verdict.why === 'empty') return;
     const code = whyCode(verdict.why);
     why.set(code, (why.get(code) || 0) + 1);
-    left.push(ctx.plan.units[i].id);
+    left.push(plan.units[i].id);
   });
   if (!why.size) return;
   const miss = missMsgs(ctx.notes.miss).slice(0, 3);
@@ -355,13 +365,13 @@ function outlineFindings(findings: FindingSink, outlineStat: OutlineStat, ctx: C
 
 /** 与内容结构检测同一判据：盒子左右任一侧超出正文区 1px 以上、且不是左右对称居中 */
 function overflowing(doc: Document) {
-  const box = doc.querySelector('.rich_media_content').getBoundingClientRect();
+  const box = (doc.querySelector('.rich_media_content') ?? doc.body).getBoundingClientRect();
   const out: string[] = [];
   for (const el of doc.querySelectorAll(`[${ID}]`)) {
     const rect = el.getBoundingClientRect();
     if (!rect.width && !rect.height) continue;
     const centered = Math.abs(rect.left - box.left - (box.right - rect.right)) <= 1;
-    if ((rect.left < box.left - 1 || rect.right > box.right + 1) && !centered) out.push(el.getAttribute(ID));
+    if ((rect.left < box.left - 1 || rect.right > box.right + 1) && !centered) out.push(idOf(el));
   }
   return out;
 }
@@ -391,14 +401,14 @@ function alignStartEnd(html: string) {
     );
     if (!hit.length) continue;
     n++;
-    for (const el of hit) if (el.hasAttribute(ID)) els.push(el.getAttribute(ID));
+    for (const el of hit) if (el.hasAttribute(ID)) els.push(idOf(el));
   }
   return { n, els };
 }
 
 /** 读屏专用的隐藏文字（1px 裁切）：公众号自带标题栏，这种写法留着会被判"内容溢出容器" */
 function dropVisuallyHidden(doc: Document, findings: FindingSink) {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   let n = 0;
   for (const el of [...doc.body.querySelectorAll('*')]) {
     if (!el.isConnected || !isHtmlEl(el) || !el.textContent.trim()) continue;
@@ -414,7 +424,7 @@ function dropVisuallyHidden(doc: Document, findings: FindingSink) {
 
 /** 微信给所有元素加 max-width:100%!important，作者的 max-width 会失效；块级自动宽度的元素改写成 width，效果等同 min(原上限, 100%) */
 function keepMaxWidth(doc: Document, root: Element) {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   let n = 0;
   for (const el of root.querySelectorAll<HTMLElement>('[style]')) {
     const style = el.style,
@@ -474,6 +484,8 @@ interface ConvertAtResult {
   n: number;
   moved: number;
   outlined: OutlineResult[] | null;
+  /** 主宽度定下的字体表与单元，另一个宽度沿用 */
+  plan: FontPlan;
   pageBg: string | undefined;
 }
 
@@ -485,7 +497,7 @@ async function convertAt(
 ): Promise<ConvertAtResult> {
   const findings = collector();
   const doc = await loadFrame(frame, withNeutral(html), width);
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   const computedStyleOf = (el: Element) => win.getComputedStyle(el);
 
   const n = tagIds(doc);
@@ -622,7 +634,10 @@ async function convertAt(
   const htmlAnims = new Set(
     doc
       .getAnimations()
-      .filter((a: CssAnim): a is CssAnim => a instanceof win.CSSAnimation && isHtmlEl(a.effect.target))
+      .filter(
+        (a): a is CssAnim =>
+          a instanceof win.CSSAnimation && a.effect instanceof win.KeyframeEffect && isHtmlEl(a.effect.target),
+      )
       .map(a => a.effect.target),
   ).size;
 
@@ -743,7 +758,8 @@ async function convertAt(
   for (const [id, rect] of layoutAfter)
     if (id.startsWith('p')) {
       target.set(id, rect);
-      targetV.set(id, visualAfter.get(id));
+      const visual = visualAfter.get(id);
+      if (visual) targetV.set(id, visual);
     }
 
   // 套上微信正文区的默认样式，把被它顶掉的属性逐个补回
@@ -794,13 +810,12 @@ async function convertAt(
   annotateContainerWidths(doc, root);
   // 路径放在最后：逐字位置要在最终布局里量。主宽度定字体表和单元，另一个宽度沿用同一组描述
   let outlined: OutlineResult[] | null = null;
-  if (!ctx.plan)
-    ctx.plan = planFonts(doc, root, {
-      picked: new Set(ctx.o.paths),
-      web: ctx.web,
-      sizeAt: sizeAtRef(ctx.sizes, pseudoSrc),
-    });
-  if (ctx.plan.units.length) outlined = await outline(doc, root, ctx.plan.units, ctx, ctx.notes);
+  const plan = (ctx.plan ??= planFonts(doc, root, {
+    picked: new Set(ctx.o.paths),
+    web: ctx.web,
+    sizeAt: sizeAtRef(ctx.sizes, pseudoSrc),
+  }));
+  if (plan.units.length) outlined = await outline(doc, root, plan.units, ctx, ctx.notes);
 
   root.querySelectorAll('[data-wxc-float],[data-wxc-pseudo]').forEach(el => {
     el.removeAttribute('data-wxc-float');
@@ -818,7 +833,7 @@ async function convertAt(
       { n: pinned },
       {
         els: [...root.querySelectorAll('img')].filter(img => {
-          const pin = ctx.pins.get(img.getAttribute(ID));
+          const pin = ctx.pins.get(idOf(img));
           return pin && (pin.w || pin.h);
         }),
       },
@@ -837,17 +852,13 @@ async function convertAt(
     findings.warn(
       'cascade',
       { n: cascadeBad.length },
-      { els: cascadeBad.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean) },
+      { els: cascadeBad.filter(id => doc.querySelector(`[${ID}="${id}"]`)) },
     );
   if (stuck.length)
-    findings.warn(
-      'stuck',
-      { n: stuck.length },
-      { els: stuck.map(id => doc.querySelector(`[${ID}="${id}"]`)).filter(Boolean) },
-    );
+    findings.warn('stuck', { n: stuck.length }, { els: stuck.filter(id => doc.querySelector(`[${ID}="${id}"]`)) });
   if (notes.media) findings.info('media', { n: notes.media, width });
 
-  return { findings, preview, original, targetV, n, moved, outlined, pageBg };
+  return { findings, preview, original, targetV, n, moved, outlined, plan, pageBg };
 }
 
 /** 伪元素 content 计算值 → 文本；counter()/url() 无法转换返回 null */

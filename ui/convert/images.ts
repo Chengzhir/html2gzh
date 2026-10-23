@@ -1,4 +1,4 @@
-import { splitTop } from './util.ts';
+import { isHtmlEl, splitTop, viewOf } from './util.ts';
 import { ASSET_URL_RE } from './assetid.ts';
 
 // 需要的设备像素按电脑上的阅读页算：正文宽 677px、2 倍屏（手机正文最宽约 400px × 3 倍屏 = 1200，比它小）。
@@ -17,7 +17,7 @@ interface ContentElement extends Element {
  * 随动画缩放的 SVG 里的图）。doc 是按正文宽 width 渲染的成品文档。同一张图用在几处时取最大值。返回 Map<id, number | null>
  */
 export async function imageScales(doc: Document, width: number): Promise<Map<string, number | null>> {
-  const win = doc.defaultView,
+  const win = viewOf(doc),
     root: ContentElement = doc.querySelector('.rich_media_content') || doc.body;
   const needRatio = NEED_W / width;
   const need = new Map<string, number | null>();
@@ -27,7 +27,7 @@ export async function imageScales(doc: Document, width: number): Promise<Map<str
     if (current === null) return;
     need.set(id, ratio === null ? null : current === undefined ? ratio : Math.max(current, ratio));
   };
-  const idOf = (url: string | null) => {
+  const assetIdOf = (url: string | null) => {
     const match = ASSET_URL_RE.exec(url || '');
     return match && match[1];
   };
@@ -44,7 +44,7 @@ export async function imageScales(doc: Document, width: number): Promise<Map<str
 
   // 正文里的 <img> 读者点开就是全屏的 1080 宽版本，不管它在版面里显示多大
   for (const img of root.querySelectorAll('img')) {
-    const id = idOf(img.currentSrc || img.src);
+    const id = assetIdOf(img.currentSrc || img.src);
     if (id) note(id, 1);
   }
 
@@ -67,11 +67,11 @@ export async function imageScales(doc: Document, width: number): Promise<Map<str
     const computed = win.getComputedStyle(el);
     for (const prop of OTHER)
       for (const match of String(computed[prop] || '').matchAll(/url\(\s*["']?([^"')]+)/g)) {
-        const id = idOf(match[1]);
+        const id = assetIdOf(match[1]);
         if (id) note(id, null);
       }
     if (el.localName === 'image') {
-      const id = idOf(el.getAttribute('href') || el.getAttribute('xlink:href'));
+      const id = assetIdOf(el.getAttribute('href') || el.getAttribute('xlink:href'));
       if (id) note(id, null);
     }
     const backgroundImage = computed.backgroundImage;
@@ -81,12 +81,14 @@ export async function imageScales(doc: Document, width: number): Promise<Map<str
       origins = splitTop(computed.backgroundOrigin);
     for (let i = 0; i < layers.length; i++) {
       const urlMatch = /^url\(\s*["']?([^"')]+)["']?\s*\)$/.exec(layers[i].trim());
-      const id = urlMatch && idOf(urlMatch[1]);
+      const id = urlMatch && assetIdOf(urlMatch[1]);
       if (!id) {
-        if (idOf(layers[i])) note(idOf(layers[i]), null);
+        const inside = assetIdOf(layers[i]);
+        if (inside) note(inside, null);
         continue;
       }
-      if (!el.offsetWidth || moving(el) || crisp(computed)) {
+      // SVG 元素没有 offsetWidth：它们的背景图量不出显示尺寸
+      if (!isHtmlEl(el) || !el.offsetWidth || moving(el) || crisp(computed)) {
         note(id, null);
         continue;
       }
@@ -141,8 +143,7 @@ function layerScale(
   const w = resolveLength(widthToken, areaWidth),
     h = resolveLength(heightToken, areaHeight);
   if (Number.isNaN(w) || Number.isNaN(h)) return null;
-  if (w == null && h == null) return 1;
-  if (w == null) return h / naturalHeight;
+  if (w == null) return h == null ? 1 : h / naturalHeight;
   if (h == null) return w / naturalWidth;
   return Math.max(w / naturalWidth, h / naturalHeight);
 }

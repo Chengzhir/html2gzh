@@ -5,6 +5,7 @@ import * as fontkit from 'fontkit';
 import type { Browser, CDPSession, Page } from 'puppeteer-core';
 import type { Font, Matrix, Page as PdfPage, PDFDocument } from 'mupdf';
 import { findChrome } from './chrome.ts';
+import { isJsonObject, type JsonObject } from './http.ts';
 import { ASSET_ID } from '../ui/convert/assetid.ts';
 import { GLYPH_LIMITS as LIMITS, SNAP_BOX, SNAP_INHERITED, SNAP_INLINE, SNAP_TAGS } from '../ui/convert/glyphapi.ts';
 import { CodedError } from '../ui/convert/types.ts';
@@ -98,7 +99,7 @@ async function getSession(): Promise<Session> {
         const id = url.pathname.startsWith('/a/') ? url.pathname.slice(3) : '';
         const buf = ASSET_ID.test(id) ? getAsset(id) : null;
         if (!buf) return request.respond({ status: 404, body: '' });
-        request.respond({
+        return request.respond({
           status: 200,
           contentType: 'application/octet-stream',
           headers: { 'access-control-allow-origin': '*' },
@@ -131,9 +132,6 @@ const asText = (input: unknown, max: number, what: string) => {
   if (text.length > max || CONTROL_CHARS.test(text)) invalid(what + ' 超长或带控制字符');
   return text;
 };
-type JsonObject = Record<string, unknown>;
-const isJsonObject = (value: unknown): value is JsonObject =>
-  !!value && typeof value === 'object' && !Array.isArray(value);
 const asStyle = (input: unknown): Record<string, string> => {
   if (!isJsonObject(input)) invalid('style 应为对象');
   const out: Record<string, string> = {};
@@ -366,9 +364,10 @@ async function layOut(units: GlyphUnit[]): Promise<{ units: LaidOut[]; elementFo
       range.setStart(textNode, start - textStart);
       range.setEnd(textNode, Math.min(end - textStart, textNode.data.length));
       const rect = range.getClientRects()[0];
-      const el = Number(textNode.parentElement.getAttribute('data-e'));
-      size = Math.max(size, info[el].size);
-      if (!rect) {
+      // 文字都在 build 建出的带编号元素里；找不到编号的字与量不到框的字一样，整个单元判为排版对不上
+      const el = Number(textNode.parentElement?.getAttribute('data-e'));
+      size = Math.max(size, info[el]?.size ?? 0);
+      if (!rect || !info[el]) {
         deviation = 1e9;
         worst = textNode.data.slice(start - textStart, end - textStart);
         continue;
@@ -564,20 +563,25 @@ function outlines(mupdf: typeof import('mupdf'), fonts: FontUse, fontPrograms: M
       });
     const uses = [...svg.matchAll(/<use[^>]*?xlink:href="#(font_\w+)"/g)].map(match => match[1]);
     const defaultUpem = fontPrograms.get(name)?.upem || 2048;
-    glyphList.forEach(([gid], i) => {
-      const key = name + '|' + gid;
-      if (uses.length !== glyphList.length)
-        return out.set(key, { path: null, upem: defaultUpem, centerX: 0, centerY: 0, bad: 'render' });
-      const def = defs.get(uses[i]);
-      if (!def) return out.set(key, { path: null, upem: defaultUpem, centerX: 0, centerY: 0 });
-      if (def.group != null && /\sfill="|<image|<use/.test(def.group))
-        return out.set(key, { path: null, upem: defaultUpem, centerX: 0, centerY: 0, bad: 'color' });
-      try {
-        out.set(key, toFontUnits(def.attrs, defaultUpem));
-      } catch {
-        out.set(key, { path: null, upem: defaultUpem, centerX: 0, centerY: 0, bad: 'render' });
-      }
+    const noOutline = (bad?: Outline['bad']): Outline => ({
+      path: null,
+      upem: defaultUpem,
+      centerX: 0,
+      centerY: 0,
+      bad,
     });
+    const outlineAt = (i: number): Outline => {
+      if (uses.length !== glyphList.length) return noOutline('render');
+      const def = defs.get(uses[i]);
+      if (!def) return noOutline();
+      if (def.group != null && /\sfill="|<image|<use/.test(def.group)) return noOutline('color');
+      try {
+        return toFontUnits(def.attrs, defaultUpem);
+      } catch {
+        return noOutline('render');
+      }
+    };
+    glyphList.forEach(([gid], i) => out.set(name + '|' + gid, outlineAt(i)));
   }
   return out;
 }
@@ -866,6 +870,7 @@ async function renderGlyphs(request: GlyphRequest): Promise<GlyphResponse> {
   }
   await installFonts(session.page, request.fonts);
   const laid = await session.page.evaluate(layOut, request.units);
+  // null：排版对得上、要打印的单元，结果在下面补上
   const results: (GlyphUnitResult | null)[] = laid.units.map(unit =>
     unit.deviation > LAYOUT_TOLERANCE
       ? {
@@ -874,8 +879,13 @@ async function renderGlyphs(request: GlyphRequest): Promise<GlyphResponse> {
         }
       : null,
   );
+  const complete = () =>
+    results.map(result => {
+      if (!result) throw new Error('glyphs: unit without result');
+      return result;
+    });
   const kept = results.flatMap((result, i) => (result ? [] : [i]));
-  if (!kept.length) return { paths: [], units: results };
+  if (!kept.length) return { paths: [], units: complete() };
   const paper = await session.page.evaluate(
     paginate,
     kept.map(unitIndex => ({ unit: unitIndex, padding: laid.units[unitIndex].padding })),
@@ -894,7 +904,7 @@ async function renderGlyphs(request: GlyphRequest): Promise<GlyphResponse> {
     if (doc.countPages() !== kept.length) {
       for (const unitIndex of kept)
         results[unitIndex] = { fail: 'render', detail: `${doc.countPages()}/${kept.length} pages` };
-      return { paths, units: results };
+      return { paths, units: complete() };
     }
     const pages = kept.map((unitIndex, pageIndex) => {
       const layout = laid.units[unitIndex];
@@ -911,26 +921,25 @@ async function renderGlyphs(request: GlyphRequest): Promise<GlyphResponse> {
     const fontPrograms = readFontPrograms(doc);
     const glyphOutlines = outlines(mupdf, fonts, fontPrograms);
     const simulations = await simulated(session.cdp, pages, fontPrograms, glyphOutlines, laid.elementFonts);
-    kept.forEach((unitIndex, pageIndex) => {
-      const { ink } = pages[pageIndex];
-      if (ink.effect) return (results[unitIndex] = { fail: 'effect' });
+    const unitResult = ({ ink }: (typeof pages)[number]): GlyphUnitResult => {
+      if (ink.effect) return { fail: 'effect' };
       const unitOutlines = ink.glyphs.map(glyph => glyphOutlines.get(glyph.name + '|' + glyph.gid));
-      if (unitOutlines.some(outline => outline?.bad === 'color')) return (results[unitIndex] = { fail: 'color' });
-      if (unitOutlines.some(outline => !outline || outline.bad)) return (results[unitIndex] = { fail: 'render' });
+      if (unitOutlines.some(outline => outline?.bad === 'color')) return { fail: 'color' };
+      if (!unitOutlines.every((outline): outline is Outline => !!outline && !outline.bad)) return { fail: 'render' };
       const glyphs: PlacedGlyph[] = [];
-      for (const glyph of ink.glyphs) {
-        const key = glyph.name + '|' + glyph.gid,
-          outline = glyphOutlines.get(key);
-        if (!outline.path) continue;
-        if (!pathIndexOf.has(key)) {
-          pathIndexOf.set(key, paths.length);
-          paths.push(outline.path);
-        }
-        glyphs.push(place(glyph, outline, pathIndexOf.get(key), simulations.get(glyph.name)));
-      }
-      results[unitIndex] = { glyphs, fills: ink.fills };
+      ink.glyphs.forEach((glyph, i) => {
+        const outline = unitOutlines[i],
+          path = outline.path;
+        if (!path) return;
+        const pathIndex = pathIndexOf.getOrInsertComputed(glyph.name + '|' + glyph.gid, () => paths.push(path) - 1);
+        glyphs.push(place(glyph, outline, pathIndex, simulations.get(glyph.name)));
+      });
+      return { glyphs, fills: ink.fills };
+    };
+    kept.forEach((unitIndex, pageIndex) => {
+      results[unitIndex] = unitResult(pages[pageIndex]);
     });
-    return { paths, units: results };
+    return { paths, units: complete() };
   } finally {
     for (const { font } of fonts.values()) font.destroy();
     doc.destroy();

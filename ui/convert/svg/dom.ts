@@ -1,5 +1,7 @@
 // SVG 转换共用的小工具与公众号规则（规则来自草稿存储实测，见 tools/wxprobe.mjs）
 
+import { attrOf } from '../util.ts';
+
 export const SVG_NS = 'http://www.w3.org/2000/svg';
 export const XLINK_NS = 'http://www.w3.org/1999/xlink';
 export const ANIM = new Set(['animate', 'set', 'animateTransform', 'animateMotion']);
@@ -33,7 +35,8 @@ export const RESOURCE = new Set([
 const NON_RENDER = new Set([...RESOURCE, 'defs']);
 
 export const isSvg = (node: Node | null | undefined): node is SVGElement =>
-  node && node.nodeType === 1 && (node as Element).namespaceURI === SVG_NS;
+  !!node && node.nodeType === 1 && (node as Element).namespaceURI === SVG_NS;
+/** 属性值；没有这个属性时为空串（用在已知有这个属性的地方，如 hasAttribute、getAttributeNames 之后） */
 export const isAnim = (node: Node | null | undefined): node is SVGAnimationElement =>
   isSvg(node) && ANIM.has(node.localName);
 /** 能取变换矩阵的图形元素（图形、容器、文字）；按方法判断，iframe 里的元素 instanceof 不认外层的类 */
@@ -61,7 +64,7 @@ export function inResource(el: Element): boolean {
 }
 export const outerSvg = (el: Element): Element | null => {
   let outer: Element | null = null;
-  for (let ancestor: Element = el; ancestor && isSvg(ancestor); ancestor = ancestor.parentElement)
+  for (let ancestor: Element | null = el; ancestor && isSvg(ancestor); ancestor = ancestor.parentElement)
     if (ancestor.localName === 'svg') outer = ancestor;
   return outer;
 };
@@ -84,13 +87,12 @@ export function xyToTranslate(anim: Element, base: number): Element {
   });
   for (const name of anim.getAttributeNames())
     if (!/^(attributeName|attributeType|values|from|to|by|additive)$/.test(name))
-      animTransform.setAttribute(name, anim.getAttribute(name));
+      animTransform.setAttribute(name, attrOf(anim, name));
   for (const name of ['values', 'from', 'to', 'by']) {
     if (!anim.hasAttribute(name)) continue;
     animTransform.setAttribute(
       name,
-      anim
-        .getAttribute(name)
+      attrOf(anim, name)
         .split(';')
         .filter(value => value.trim())
         .map(value => {
@@ -101,7 +103,7 @@ export function xyToTranslate(anim: Element, base: number): Element {
     );
   }
   if (anim.localName === 'set') {
-    animTransform.setAttribute('values', animTransform.getAttribute('to'));
+    animTransform.setAttribute('values', attrOf(animTransform, 'to'));
     animTransform.removeAttribute('to');
   }
   return animTransform;
@@ -124,8 +126,7 @@ export function wrapG(el: Element, attrs?: Record<string, unknown>) {
 export function tally() {
   const counts = new Map<string, { n: number; roots: Set<Element> }>();
   const add = (key: string, el: Element | null, n = 1) => {
-    let entry = counts.get(key);
-    if (!entry) counts.set(key, (entry = { n: 0, roots: new Set() }));
+    const entry = counts.getOrInsertComputed(key, () => ({ n: 0, roots: new Set<Element>() }));
     entry.n += n;
     const root = el && outerSvg(el);
     if (root) entry.roots.add(root);
@@ -134,7 +135,7 @@ export function tally() {
     m: counts,
     add,
     n: (key: string) => (counts.get(key) || { n: 0 }).n,
-    roots: (key: string): Element[] => [...((counts.get(key) || ({} as { roots?: Set<Element> })).roots || [])],
+    roots: (key: string): Element[] => [...(counts.get(key)?.roots ?? [])],
   };
 }
 export type Report = ReturnType<typeof tally>['add'];

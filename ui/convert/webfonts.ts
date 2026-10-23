@@ -1,4 +1,4 @@
-import { splitTop, ruleType, unquote, unicodeRanges, eachAuthorSheet } from './util.ts';
+import { splitTop, ruleType, unquote, unicodeRanges, eachAuthorSheet, viewOf } from './util.ts';
 import type { GlyphFont, GlyphFontSrc } from './types.ts';
 
 // 原稿的网页字体（@font-face）：哪些在原稿里真正用上了（加载过），字体文件在哪。
@@ -50,7 +50,7 @@ const faceKey = (family: string, weight: string, style: string, stretch: string,
 
 /** 作者样式表里生效的 @font-face（所在的 @media/@supports 当场成立） */
 function faceRules(doc: Document) {
-  const win = doc.defaultView,
+  const win = viewOf(doc),
     out: CSSFontFaceRule[] = [];
   const walk = (list: CSSRuleList) => {
     for (const rule of list) {
@@ -102,7 +102,7 @@ export function parseSrc(text: string): FaceSrc[] {
         format: formatMatch ? formatMatch[1].trim().toLowerCase() : '',
       };
     })
-    .filter(Boolean);
+    .filter(src => src !== null);
 }
 
 export interface UsedFace extends Omit<GlyphFont, 'src'> {

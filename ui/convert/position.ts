@@ -1,4 +1,4 @@
-import { ID, isHtmlEl, round, measure, NO_TRANSFORM } from './util.ts';
+import { ID, idOf, isHtmlEl, round, measure, NO_TRANSFORM, viewOf } from './util.ts';
 import { msg } from './types.ts';
 import type { BoxRect, FindingSink } from './types.ts';
 
@@ -53,7 +53,7 @@ interface PositionPlan {
 }
 
 export function convertPositions(doc: Document, root: Element, findings: FindingSink): Set<string> {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   const computedStyle = (el: Element) => win.getComputedStyle(el);
   const layers = new Set<string>();
   const els = [...root.querySelectorAll('*')].filter(isHtmlEl);
@@ -79,9 +79,10 @@ export function convertPositions(doc: Document, root: Element, findings: Finding
   for (const item of plan) {
     if (item.pos !== 'absolute' && item.pos !== 'fixed') continue;
     const style = item.el.style;
-    item.explicitH = style.height && style.height !== 'auto';
-    item.stretch = style.left && style.left !== 'auto' && style.right && style.right !== 'auto';
-    item.side = style.right && style.right !== 'auto' && (!style.left || style.left === 'auto') ? 'right' : 'left';
+    const set = (value: string) => !!value && value !== 'auto';
+    item.explicitH = set(style.height);
+    item.stretch = set(style.left) && set(style.right);
+    item.side = set(style.right) && !set(style.left) ? 'right' : 'left';
     item.maxContent = false;
     if ((!style.width || style.width === 'auto') && !item.stretch) {
       const old = style.getPropertyValue('width');
@@ -97,14 +98,14 @@ export function convertPositions(doc: Document, root: Element, findings: Finding
   for (const item of plan) {
     const { el } = item,
       style = el.style;
-    layers.add(el.getAttribute(ID));
+    layers.add(idOf(el));
     if (item.pos === 'relative' || item.pos === 'sticky') {
       stripInset(style);
       continue;
     }
     if (item.pos === 'fixed') fixed.push(el);
     stripInset(style);
-    style.setProperty('float', item.side);
+    style.setProperty('float', item.side ?? 'left');
     style.setProperty('clear', 'none');
     style.setProperty('box-sizing', 'border-box');
     style.setProperty('width', item.maxContent ? 'max-content' : round(item.w) + 'px');
@@ -155,7 +156,7 @@ export function convertPositions(doc: Document, root: Element, findings: Finding
     const layerRect = layer.getBoundingClientRect();
     let ok = true;
     for (const later of els) {
-      const id = later.getAttribute(ID);
+      const id = idOf(later);
       if (!layers.has(id) || later === layer || layer.contains(later) || !(layer.compareDocumentPosition(later) & 4))
         continue;
       if (!overlap(layerRect, later.getBoundingClientRect())) continue;
@@ -196,7 +197,7 @@ export function convertPositions(doc: Document, root: Element, findings: Finding
     findings.fixed(
       'position',
       { n: plan.length },
-      { parts: [relocated && msg('finding.position.relocated', { n: relocated })] },
+      { parts: [relocated > 0 && msg('finding.position.relocated', { n: relocated })] },
     );
   if (flexified.size) findings.fixed('zFlex', { n: flexified.size });
   if (zLost.length) findings.warn('zLost', { n: zLost.length }, { els: zLost });
@@ -207,7 +208,7 @@ export function convertPositions(doc: Document, root: Element, findings: Finding
 
 /** 父级改纵向 flex，用外边距复现原位置；任何元素位移超差就还原 */
 function flexify(doc: Document, parent: HTMLElement): boolean {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   for (const node of parent.childNodes) if (node.nodeType === 3 && (node as Text).data.trim()) return false;
   const kids = [...parent.children] as (HTMLElement | SVGElement)[];
   if (kids.some(kid => /^inline/.test(win.getComputedStyle(kid).display) && !kid.hasAttribute('data-wxc-float')))
@@ -299,7 +300,7 @@ export function correctOffsets(
   target: Map<string, BoxRect>,
   layers: Set<string>,
 ): { moved: number; stuck: string[] } {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   const cur = measure(doc, true);
   const stuck: string[] = [];
   let moved = 0;
@@ -307,9 +308,9 @@ export function correctOffsets(
     const id = el.getAttribute(ID);
     let nx = ax,
       ny = ay;
-    if (id && cur.has(id) && target.has(id)) {
-      const goal = target.get(id),
-        now = cur.get(id);
+    const goal = id ? target.get(id) : undefined,
+      now = id ? cur.get(id) : undefined;
+    if (id && goal && now) {
       const dx = goal.x - now.x - ax,
         dy = goal.y - now.y - ay;
       const need = Math.abs(dx) > 0.05 || Math.abs(dy) > 0.05;

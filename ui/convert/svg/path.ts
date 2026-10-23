@@ -18,24 +18,24 @@ export function parsePath(d: string | null): PathSeg[] {
   let cmd: string | null = null,
     args: number[] = [],
     match: RegExpExecArray | null;
-  const push = () => {
-    const n = ARGS[cmd.toUpperCase()];
+  const push = (command: string) => {
+    const n = ARGS[command.toUpperCase()];
     if (n === 0) {
-      out.push([cmd]);
+      out.push([command]);
       return;
     }
     if (!args.length || args.length % n) return;
     for (let i = 0; i < args.length; i += n) {
       // M 后面多余的坐标对按 L 处理
-      const command = i && (cmd === 'M' || cmd === 'm') ? (cmd === 'M' ? 'L' : 'l') : cmd;
-      out.push([command, ...args.slice(i, i + n)]);
+      const segCmd = i && (command === 'M' || command === 'm') ? (command === 'M' ? 'L' : 'l') : command;
+      out.push([segCmd, ...args.slice(i, i + n)]);
     }
   };
   // 圆弧的两个标志位可以不带分隔符紧挨着写（"a1 1 0 01 10 10"），按位拆开
   const src = d || '';
   while ((match = re.exec(src))) {
     if (match[1]) {
-      if (cmd) push();
+      if (cmd) push(cmd);
       cmd = match[1];
       args = [];
       continue;
@@ -49,20 +49,20 @@ export function parsePath(d: string | null): PathSeg[] {
     }
     args.push(+match[2]);
   }
-  if (cmd) push();
+  if (cmd) push(cmd);
   return out;
 }
 
 /** 转成只含 M/L/C/Z 的绝对坐标段 */
 export function toAbsolute(segs: PathSeg[]): PathSeg[] {
   const out: PathSeg[] = [];
+  // 上一段是 C/S（或 Q/T）时它的第二个控制点；S（或 T）按它反射出第一个控制点，否则用当前点
   let x = 0,
     y = 0,
     sx = 0,
     sy = 0,
     lastCubic: number[] | null = null,
-    lastQuad: number[] | null = null,
-    prev = '';
+    lastQuad: number[] | null = null;
   for (const seg of segs) {
     const cmd = seg[0],
       rel = cmd !== cmd.toUpperCase(),
@@ -70,6 +70,9 @@ export function toAbsolute(segs: PathSeg[]): PathSeg[] {
       args = seg.slice(1) as number[];
     const ox = rel ? x : 0,
       oy = rel ? y : 0;
+    const prevCubic = lastCubic,
+      prevQuad = lastQuad;
+    lastCubic = lastQuad = null;
     if (C === 'M') {
       x = args[0] + ox;
       y = args[1] + oy;
@@ -91,25 +94,21 @@ export function toAbsolute(segs: PathSeg[]): PathSeg[] {
       y = args[0] + oy;
       out.push(['L', x, y]);
     } else if (C === 'C') {
-      const points = [args[0] + ox, args[1] + oy, args[2] + ox, args[3] + oy, args[4] + ox, args[5] + oy];
+      const points: number[] = [args[0] + ox, args[1] + oy, args[2] + ox, args[3] + oy, args[4] + ox, args[5] + oy];
       out.push(['C', ...points]);
       lastCubic = [points[2], points[3]];
       x = points[4];
       y = points[5];
     } else if (C === 'S') {
-      const reflected = /^[CS]$/.test(prev) ? [2 * x - lastCubic[0], 2 * y - lastCubic[1]] : [x, y];
-      const points = [reflected[0], reflected[1], args[0] + ox, args[1] + oy, args[2] + ox, args[3] + oy];
+      const reflected = prevCubic ? [2 * x - prevCubic[0], 2 * y - prevCubic[1]] : [x, y];
+      const points: number[] = [reflected[0], reflected[1], args[0] + ox, args[1] + oy, args[2] + ox, args[3] + oy];
       out.push(['C', ...points]);
       lastCubic = [points[2], points[3]];
       x = points[4];
       y = points[5];
     } else if (C === 'Q' || C === 'T') {
-      const control =
-        C === 'Q'
-          ? [args[0] + ox, args[1] + oy]
-          : /^[QT]$/.test(prev)
-            ? [2 * x - lastQuad[0], 2 * y - lastQuad[1]]
-            : [x, y];
+      const control: number[] =
+        C === 'Q' ? [args[0] + ox, args[1] + oy] : prevQuad ? [2 * x - prevQuad[0], 2 * y - prevQuad[1]] : [x, y];
       const end = C === 'Q' ? [args[2] + ox, args[3] + oy] : [args[0] + ox, args[1] + oy];
       out.push([
         'C',
@@ -131,7 +130,6 @@ export function toAbsolute(segs: PathSeg[]): PathSeg[] {
       x = ex;
       y = ey;
     }
-    prev = C;
   }
   return out;
 }
@@ -266,26 +264,22 @@ export function shapeSegs(el: Element, g: GeometryRead): PathSeg[] | null {
       y = g('y') || 0,
       w = g('width'),
       h = g('height');
-    if (!(w > 0 && h > 0)) return [];
-    let rx = g('rx'),
-      ry = g('ry');
-    if (rx == null && ry == null) rx = ry = 0;
-    else if (rx == null) rx = ry;
-    else if (ry == null) ry = rx;
-    rx = Math.min(Math.max(rx, 0), w / 2);
-    ry = Math.min(Math.max(ry, 0), h / 2);
+    if (w == null || h == null || !(w > 0 && h > 0)) return [];
+    // rx、ry 只写一个时另一个取同值，都没写时为 0
+    const rxRead = g('rx'),
+      ryRead = g('ry');
+    const rx = Math.min(Math.max(rxRead ?? ryRead ?? 0, 0), w / 2),
+      ry = Math.min(Math.max(ryRead ?? rxRead ?? 0, 0), h / 2);
     return roundRect(x, y, w, h, rx, ry);
   }
   if (tag === 'circle' || tag === 'ellipse') {
     const cx = g('cx') || 0,
       cy = g('cy') || 0;
-    let rx = tag === 'circle' ? g('r') : g('rx'),
-      ry = tag === 'circle' ? rx : g('ry');
-    if (tag === 'ellipse') {
-      if (rx == null) rx = ry;
-      if (ry == null) ry = rx;
-    }
-    if (!(rx > 0 && ry > 0)) return [];
+    const rxRead = tag === 'circle' ? g('r') : g('rx'),
+      ryRead = tag === 'circle' ? rxRead : g('ry');
+    const rx = rxRead ?? ryRead,
+      ry = ryRead ?? rxRead;
+    if (rx == null || ry == null || !(rx > 0 && ry > 0)) return [];
     return toAbsolute([
       ['M', cx + rx, cy],
       ['A', rx, ry, 0, 0, 1, cx, cy + ry],
@@ -375,6 +369,10 @@ export const inv = (m: Matrix): Matrix => {
 };
 export const ID_M: Matrix = [1, 0, 0, 1, 0, 0];
 export const isId = (m: Matrix): boolean => m.every((value, i) => Math.abs(value - ID_M[i]) < 1e-9);
-export const fromDom = (m: DOMMatrixReadOnly | null): Matrix | null => (m ? [m.a, m.b, m.c, m.d, m.e, m.f] : null);
+export function fromDom(m: DOMMatrixReadOnly): Matrix;
+export function fromDom(m: DOMMatrixReadOnly | null): Matrix | null;
+export function fromDom(m: DOMMatrixReadOnly | null): Matrix | null {
+  return m ? [m.a, m.b, m.c, m.d, m.e, m.f] : null;
+}
 export const matrixAttr = (m: Matrix): string => `matrix(${m.map(fmt).join(' ')})`;
 export const num = fmt;

@@ -37,7 +37,7 @@ async function walk(entry: FileSystemEntry, base: string, out: RelFile[]) {
 export async function droppedFiles(
   transfer: DataTransfer,
 ): Promise<{ files: RelFile[]; name: string; single: boolean } | null> {
-  const entries = [...transfer.items].map(item => item.webkitGetAsEntry?.()).filter(Boolean);
+  const entries = [...transfer.items].map(item => item.webkitGetAsEntry?.()).filter(entry => entry != null);
   if (!entries.length) return null;
   const files: RelFile[] = [];
   if (entries.length === 1 && entries[0].isDirectory) {

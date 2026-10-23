@@ -1,4 +1,4 @@
-import { ID, isHtmlEl } from './util.ts';
+import { ID, isHtmlEl, viewOf } from './util.ts';
 import type { FindingSink } from './types.ts';
 
 // 粘贴后编辑器（ProseMirror）的实测行为：div 会被重建成 p 并丢掉容器样式，section 原样保留；
@@ -88,7 +88,7 @@ const JUNK = 'script,style,link,meta,title,base,noscript,template,slot';
 const BLOCKISH = /^(block|flex|grid|table|list-item|flow-root)/;
 
 function rename(doc: Document, el: Element, tag: string): HTMLElement {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   const before = win.getComputedStyle(el);
   const values = FREEZE.map(prop => before.getPropertyValue(prop));
   // 浏览器默认样式里只有链接自带颜色；其他标签此刻的颜色若和父级不同，只可能来自套上的微信正文样式，不能冻结
@@ -108,7 +108,7 @@ function rename(doc: Document, el: Element, tag: string): HTMLElement {
 }
 
 export function cleanStructure(doc: Document, root: Element, findings: FindingSink) {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   const computed = (el: Element) => win.getComputedStyle(el);
   root.querySelectorAll(JUNK).forEach(el => el.remove());
   root.querySelectorAll('picture').forEach(picture => {
@@ -176,7 +176,7 @@ const isTextContext = (win: Window, el: Element) => {
 
 /** 空元素（色块、圆点、线条）：文字环境里换成 svg，块环境里在 section 里塞一个零尺寸 svg 占位（秀米同款） */
 export function keepShapes(doc: Document, root: Element, findings: FindingSink) {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   let shapes = 0,
     dropped = 0;
   for (const el of [...root.querySelectorAll('*')].reverse()) {
@@ -221,7 +221,7 @@ export function keepShapes(doc: Document, root: Element, findings: FindingSink) 
 
 /** 标签之间的换行缩进在手机端会被渲染成额外高度；pre 类空白保留 */
 export function squashWhitespace(doc: Document, root: Element) {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   const walker = doc.createTreeWalker(root, 4 | 128);
   const nodes: CharacterData[] = [];
   while (walker.nextNode()) nodes.push(walker.currentNode as CharacterData);
@@ -235,13 +235,10 @@ export function squashWhitespace(doc: Document, root: Element) {
     /flex|grid/.test(win.getComputedStyle(el).display);
   /** 这一侧在行内流里挨着的是块边界吗：没有兄弟就往上找，直到碰到块容器 */
   const edge = (start: CharacterData, dir: 'previousSibling' | 'nextSibling') => {
-    let current: CharacterData | Element = start;
-    for (;;) {
-      const sibling = current[dir];
-      if (sibling) return isBlock(sibling);
-      current = current.parentElement;
-      if (!current || isBox(current)) return true;
-    }
+    if (start[dir]) return isBlock(start[dir]);
+    for (let parent = start.parentElement; parent && !isBox(parent); parent = parent.parentElement)
+      if (parent[dir]) return isBlock(parent[dir]);
+    return true;
   };
   let saved = 0;
   for (const node of nodes) {
@@ -270,7 +267,7 @@ export function squashWhitespace(doc: Document, root: Element) {
  */
 const WJ = '\u2060';
 export function keepNoWrap(doc: Document, root: Element) {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   const nowrap = (el: Element) => /^nowrap$/.test(win.getComputedStyle(el).whiteSpace);
   let count = 0;
   for (const el of [...root.querySelectorAll('*')]) {

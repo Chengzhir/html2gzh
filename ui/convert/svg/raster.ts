@@ -17,6 +17,7 @@ import {
 } from './dom.ts';
 import { inv, fromDom, mul, ID_M, isId, matrixAttr } from './path.ts';
 import { bakeStyleTransform } from './transform.ts';
+import { attrOf } from '../util.ts';
 import type { Report } from './dom.ts';
 
 /** convertSvgs 的 ctx 里本文件用到的部分 */
@@ -28,14 +29,13 @@ export interface RasterContext {
   copyText?: boolean;
 }
 /** 画好的位图（user units 里的位置与尺寸）；empty 表示画出来是空的 */
-export interface RasterHit {
-  empty?: boolean;
-  src?: string;
-  x?: number;
-  y?: number;
-  w?: number;
-  h?: number;
-}
+export type RasterHit = { empty: true } | { empty?: false; src: string; x: number; y: number; w: number; h: number };
+type ReadyContext = RasterContext & { raster: (dataUri: string) => Promise<string> };
+const context2d = (canvas: HTMLCanvasElement) => {
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('canvas 2d context unavailable');
+  return context;
+};
 interface Region {
   x: number;
   y: number;
@@ -211,7 +211,7 @@ function frozenClone(res: Element, win: SvgWindow): Element {
 
 const RIGID = new Set(['transform', 'opacity', 'visibility']);
 const rigidAnim = (a: Element) =>
-  a.localName === 'animateMotion' || a.localName === 'animateTransform' || RIGID.has(a.getAttribute('attributeName'));
+  a.localName === 'animateMotion' || a.localName === 'animateTransform' || RIGID.has(attrOf(a, 'attributeName'));
 
 /**
  * 自身只有整体动画（transform、位移路径、opacity、visibility）而内容静态、又依赖 id 的元素：
@@ -350,7 +350,7 @@ function region(run: Element[], win: Window): Region | null {
   })();
   // 祖先有动画（会把画面外的部分挪进来）时不按视口裁
   let still = true;
-  for (let ancestor: Element = parent; ancestor && isSvg(ancestor); ancestor = ancestor.parentElement)
+  for (let ancestor: Element | null = parent; ancestor && isSvg(ancestor); ancestor = ancestor.parentElement)
     if (ownAnims(ancestor).length) still = false;
   if (still && win.getComputedStyle(rootSvg).overflow !== 'visible') {
     const viewRect = rootSvg.getBoundingClientRect(),
@@ -396,7 +396,7 @@ async function dataUri(win: SvgWindow, url: string | null): Promise<string | nul
  */
 async function rasterize(
   run: Element[],
-  ctx: RasterContext,
+  ctx: ReadyContext,
   win: SvgWindow,
   ids: Map<string, Element>,
   rep: Report,
@@ -455,7 +455,7 @@ async function rasterize(
       const canvas = doc.createElement('canvas');
       canvas.width = pw;
       canvas.height = ph;
-      const context = canvas.getContext('2d');
+      const context = context2d(canvas);
       context.drawImage(img, 0, 0, pw, ph);
       const px = context.getImageData(0, 0, pw, ph).data;
       let x0 = pw,
@@ -484,7 +484,7 @@ async function rasterize(
           out = doc.createElement('canvas');
         out.width = cw;
         out.height = ch;
-        out.getContext('2d').drawImage(canvas, x0, y0, cw, ch, 0, 0, cw, ch);
+        context2d(out).drawImage(canvas, x0, y0, cw, ch, 0, 0, cw, ch);
         // 每边都画满（整块铺底）用 JPEG，体积小得多
         const full = opaque && x0 === 0 && y0 === 0 && x1 === pw - 1 && y1 === ph - 1;
         const src = await ctx.raster(full ? out.toDataURL('image/jpeg', 0.92) : out.toDataURL('image/png'));
@@ -564,7 +564,7 @@ function textCopies(run: Element[], parent: Element, win: SvgWindow) {
         target.removeAttribute(attr);
       // 只写与副本所在位置继承来的值不同的属性：副本的上一层是 parent，tspan 的上一层是副本里对应的元素
       const computed = win.getComputedStyle(el),
-        up = win.getComputedStyle(i ? el.parentElement : parent);
+        up = win.getComputedStyle(i ? (el.parentElement ?? parent) : parent);
       for (const prop of TEXT_PROPS) {
         const value = computed.getPropertyValue(prop);
         // baseline-shift 不继承，与初始值比
@@ -597,8 +597,9 @@ export async function rasterAll(
   ids: Map<string, Element>,
   rep: Report,
 ): Promise<number> {
-  if (!ctx.raster) return 0;
+  const raster = ctx.raster;
+  if (!raster) return 0;
   let n = 0;
-  for (const run of findUnits(root, win, ids)) if (await rasterize(run, ctx, win, ids, rep)) n++;
+  for (const run of findUnits(root, win, ids)) if (await rasterize(run, { ...ctx, raster }, win, ids, rep)) n++;
   return n;
 }

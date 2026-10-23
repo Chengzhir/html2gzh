@@ -43,7 +43,8 @@ const ACTS: [string, string][] = [
     'M12 20s-7-4.4-9-9c-1.2-2.8.6-6 3.8-6 2 0 3.4 1.2 4.2 2.6C11.8 6.2 13.2 5 15.2 5 18.4 5 20.2 8.2 19 11c-2 4.6-7 9-7 9z',
   ],
 ];
-const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+const esc = (s: string) => s.replace(/[&<>"]/g, c => ESC[c]);
 const label = (key: string) => esc(t(key));
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const timeText = (ms: number) => {
@@ -130,7 +131,7 @@ export async function darkHtml(
     if (e.source !== frame.contentWindow || reply?.type !== 'wxc-dark' || reply.nonce !== nonce) return;
     finish();
     if (reply.error) reject(new CodedError('convert.darkError', { msg: reply.error }));
-    else resolve(reply.html);
+    else resolve(reply.html ?? null);
   };
   cancelPending = () => {
     finish();

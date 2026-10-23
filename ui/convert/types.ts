@@ -18,6 +18,11 @@ export class CodedError extends Error {
     this.params = params;
   }
 }
+/** catch 到的任意值的说明文字 */
+export const messageOf = (error: unknown) => (Error.isError(error) && error.message) || String(error);
+/** Node 系统错误的代码（EADDRINUSE 等），没有时为空串 */
+export const errorCode = (error: unknown) =>
+  Error.isError(error) && 'code' in error && typeof error.code === 'string' ? error.code : '';
 
 // ---------- 检查结果 ----------
 export type FindingLevel = 'error' | 'warn' | 'fixed' | 'info';
@@ -243,15 +248,9 @@ export interface BoxRect {
   w: number;
   h: number;
 }
-export interface OutlineVerdict {
-  keep: boolean;
-  /** scale：随屏宽缩放；fixed：固定像素 */
-  mode?: 'scale' | 'fixed';
-  why?: string;
-  detail?: string[];
-  side?: 'B';
-  dev?: number[];
-}
+/** 一个单元保不保留轮廓：保留时 scale 随屏宽缩放、fixed 固定像素；不保留时 why 是原因代码，side 为 B 表示另一个宽度没做成 */
+export type OutlineVerdict =
+  { keep: true; mode: 'scale' | 'fixed' } | { keep: false; why: string; detail?: string[]; side?: 'B'; dev?: number[] };
 export interface ConvertResult {
   /** 去掉工具属性、供复制的成品 */
   payload: string;

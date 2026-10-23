@@ -1,4 +1,4 @@
-import { splitTop, parseDecls, ruleType, round, eachAuthorSheet } from './util.ts';
+import { splitTop, parseDecls, ruleType, round, eachAuthorSheet, viewOf } from './util.ts';
 import type { Declaration } from './util.ts';
 import { mobileFonts } from './fonts.ts';
 import type { FontRule } from './fonts.ts';
@@ -64,7 +64,7 @@ export interface StyleEnv extends UnitEnv {
 
 /** 按顺序收集作者样式规则；@media/@supports 按手机宽度当场求值 */
 export function collectRules(doc: Document, notes: CascadeNotes): CollectedRule[] {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   const rules: CollectedRule[] = [];
   let order = 0;
   const walk = (list: CSSRuleList) => {

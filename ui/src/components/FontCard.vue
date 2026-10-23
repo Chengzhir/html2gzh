@@ -39,7 +39,7 @@ function pickBig() {
   saveOpts({ paths: [...paths] });
 }
 const setMin = (size: number | null) => {
-  if (size > 0 && size <= 400) saveOpts({ svgMin: size }, 'none');
+  if (size != null && size > 0 && size <= 400) saveOpts({ svgMin: size }, 'none');
 };
 </script>
 

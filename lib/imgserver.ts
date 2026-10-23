@@ -7,7 +7,7 @@ import { send, wrap } from './http.ts';
 import { ASSET_ID } from '../ui/convert/assetid.ts';
 
 function imgRoute(req: IncomingMessage, res: ServerResponse) {
-  const url = new URL(req.url, 'http://x');
+  const url = new URL(req.url ?? '/', 'http://x');
   if (url.pathname === '/__ping') return send(res, 200, TOKEN);
   const id = url.pathname.startsWith('/a/') ? url.pathname.slice(3) : '';
   if ((req.method === 'GET' || req.method === 'HEAD') && ASSET_ID.test(id)) return serveAsset(req, res, id, true);

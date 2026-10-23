@@ -107,9 +107,10 @@ export async function shrink(
     over,
   });
 
-  let small: Encoded = null;
+  // 试过的编码都记下：哪一档都放不下时用其中最小的
+  const tried: Encoded[] = [];
   const keep = (candidate: Encoded) => {
-    if (!small || candidate.buf.length < small.buf.length) small = candidate;
+    tried.push(candidate);
     return candidate;
   };
   const fits = (candidate: Encoded) => candidate.buf.length <= max;
@@ -147,32 +148,28 @@ export async function shrink(
 
   // 二、最低一档画质下缩小尺寸（只有显示所需比读者拿到的尺寸小的背景图才有余地）：在放得下与放不下的两次结果之间插值
   const searchStep = full[full.length - 1];
-  let fitProbe: Probe = null,
-    overProbe: Probe = { factor: servedFactor, size: last.buf.length },
-    fitted: Encoded = null;
-  const record = (candidate: Encoded) => {
-    keep(candidate);
-    if (fits(candidate)) {
-      if (!fitProbe || candidate.factor > fitProbe.factor) {
-        fitProbe = { factor: candidate.factor, size: candidate.buf.length };
-        fitted = candidate;
-      }
-    } else if (candidate.factor < overProbe.factor)
-      overProbe = { factor: candidate.factor, size: candidate.buf.length };
-  };
+  const probeOf = (candidate: Encoded): Probe => ({ factor: candidate.factor, size: candidate.buf.length });
+  // fitted：放得下的最大尺寸；overProbe：放不下的最小尺寸
+  let fitted: Encoded | null = null,
+    overProbe = probeOf(last);
   const target = max * 0.97;
   for (let k = 0; k < 6 && floor < servedFactor - 1e-9; k++) {
+    const fitProbe = fitted && probeOf(fitted);
     if (fitProbe && (fitProbe.size >= max * GOOD || overProbe.factor / fitProbe.factor < CLOSE)) break;
     if (!fitProbe && overProbe.factor <= floor + 1e-9) break;
-    record(await encode(src, nextFactor(fitProbe, overProbe, target, floor), searchStep));
+    const candidate = keep(await encode(src, nextFactor(fitProbe, overProbe, target, floor), searchStep));
+    if (!fits(candidate)) {
+      if (candidate.factor < overProbe.factor) overProbe = probeOf(candidate);
+    } else if (!fitted || candidate.factor > fitted.factor) fitted = candidate;
   }
   if (fitted) return done(fitted, false);
   for (const step of plan.floor) {
     const candidate = keep(await encode(src, floor, step));
     if (fits(candidate)) return done(candidate, false);
   }
-  if (small.buf.length >= buf.length) return { skip: 'noGain' };
-  return done(small, true);
+  const smallest = tried.reduce((a, b) => (b.buf.length < a.buf.length ? b : a));
+  if (smallest.buf.length >= buf.length) return { skip: 'noGain' };
+  return done(smallest, true);
 }
 
 /** 一次尝试：尺寸（原图的 factor 倍）与编码后的字节数 */
@@ -182,7 +179,7 @@ interface Probe {
 }
 /** 下一次尝试的尺寸（原图的倍数） */
 function nextFactor(fitProbe: Probe | null, overProbe: Probe, target: number, floor: number) {
-  if (fitProbe && overProbe) {
+  if (fitProbe) {
     const fraction =
       (Math.log(target) - Math.log(fitProbe.size)) / (Math.log(overProbe.size) - Math.log(fitProbe.size));
     const factor = Math.exp(
@@ -191,7 +188,6 @@ function nextFactor(fitProbe: Probe | null, overProbe: Probe, target: number, fl
     const gap = overProbe.factor - fitProbe.factor;
     return Math.min(overProbe.factor - gap * 0.1, Math.max(fitProbe.factor + gap * 0.1, factor));
   }
-  if (fitProbe) return Math.min(overProbe.factor, fitProbe.factor * (target / fitProbe.size) ** (1 / SIZE_EXP));
   return Math.max(floor, overProbe.factor * (target / overProbe.size) ** (1 / SIZE_EXP));
 }
 

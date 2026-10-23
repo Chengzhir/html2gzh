@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, UI_DIR, stamp } from './config.ts';
+import { messageOf } from '../ui/convert/types.ts';
 
 const SOURCES = ['ui/src', 'ui/convert', 'ui/index.html', 'vite.config.ts', 'package.json'].map(entry =>
   path.join(ROOT, entry),
@@ -28,7 +29,7 @@ export async function ensureUi() {
     await build({ configFile: path.join(ROOT, 'vite.config.ts'), logLevel: 'warn' });
   } catch (error) {
     console.error(
-      `${stamp()}  构建页面失败（${error.message}）${built ? '，使用上次构建的页面' : '：请在本工具的目录中运行 npm install，再运行 npm run build'}`,
+      `${stamp()}  构建页面失败（${messageOf(error)}）${built ? '，使用上次构建的页面' : '：请在本工具的目录中运行 npm install，再运行 npm run build'}`,
     );
   }
 }

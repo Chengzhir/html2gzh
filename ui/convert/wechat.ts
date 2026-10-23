@@ -18,7 +18,7 @@ export function wechatClean(html: string) {
     el.removeAttribute('xmlns:xlink');
     el.removeAttributeNS('http://www.w3.org/1999/xlink', 'href');
     const tag = el.localName;
-    if ((tag === 'animate' || tag === 'set') && !WX_ANIM_OK.has(el.getAttribute('attributeName'))) {
+    if ((tag === 'animate' || tag === 'set') && !WX_ANIM_OK.has(el.getAttribute('attributeName') ?? '')) {
       el.remove();
       continue;
     }
@@ -29,7 +29,7 @@ export function wechatClean(html: string) {
     }
   }
   for (const el of box.querySelectorAll('[style]')) {
-    const decls = splitTop(el.getAttribute('style'), ';');
+    const decls = splitTop(el.getAttribute('style') ?? '', ';');
     const keep = decls.filter(decl => !MATH.test(decl));
     if (keep.length !== decls.length) {
       if (keep.length) el.setAttribute('style', keep.join(';'));

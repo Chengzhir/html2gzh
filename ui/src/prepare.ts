@@ -1,5 +1,6 @@
 // 读文章、把所有本地资源换成本机服务的地址：<img>、svg <image>、style 属性与 <style> 里的 url()、外链样式表（内联进来）
 import { t } from './i18n.ts';
+import { attrOf } from '../convert/util.ts';
 
 export const ORIGIN = location.origin;
 const dirOf = (p: string) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/') + 1) : '');
@@ -70,14 +71,14 @@ function iconRef(doc: Document) {
   let best = '',
     bestSize = -1;
   for (const link of doc.querySelectorAll('link[rel][href]')) {
-    if (!/(^|\s)(icon|apple-touch-icon)(\s|$)/i.test(link.getAttribute('rel'))) continue;
+    if (!/(^|\s)(icon|apple-touch-icon)(\s|$)/i.test(attrOf(link, 'rel'))) continue;
     const sizes = link.getAttribute('sizes') || '';
     const size =
       /any/i.test(sizes) || /svg/i.test(link.getAttribute('type') || '')
         ? Infinity
         : Math.max(0, ...sizes.split(/\s+/).map(s => parseInt(s, 10) || 0));
     if (size > bestSize) {
-      best = link.getAttribute('href').trim();
+      best = attrOf(link, 'href').trim();
       bestSize = size;
     }
   }
@@ -172,7 +173,7 @@ export async function prepare(
       return style;
     });
   for (const link of [...doc.querySelectorAll('link[rel~="stylesheet"][href]')]) {
-    const href = link.getAttribute('href'),
+    const href = attrOf(link, 'href'),
       media = link.getAttribute('media') || '';
     const sheet = await loadSheet(href, baseDir);
     if (!sheet) {
@@ -215,10 +216,10 @@ export async function prepare(
     parts.push([css.slice(at), false]);
     return parts;
   };
-  doc.querySelectorAll('img[src]').forEach(e => note(e.getAttribute('src'), baseDir));
-  doc.querySelectorAll('image').forEach(e => note(e.getAttribute('href') || e.getAttribute('xlink:href'), baseDir));
+  doc.querySelectorAll('img[src]').forEach(e => note(attrOf(e, 'src'), baseDir));
+  doc.querySelectorAll('image').forEach(e => note(attrOf(e, 'href') || attrOf(e, 'xlink:href'), baseDir));
   doc.querySelectorAll('[style]').forEach(e => {
-    for (const match of e.getAttribute('style').matchAll(URL_RE)) note(match[2], baseDir);
+    for (const match of attrOf(e, 'style').matchAll(URL_RE)) note(match[2], baseDir);
   });
   doc.querySelectorAll('style').forEach(style => {
     const base = style.dataset.base ?? baseDir;
@@ -298,13 +299,13 @@ export async function prepare(
   doc.querySelectorAll('img').forEach(e => {
     e.removeAttribute('srcset');
     e.removeAttribute('loading');
-    if (e.hasAttribute('src')) e.setAttribute('src', swap(e.getAttribute('src'), baseDir));
+    if (e.hasAttribute('src')) e.setAttribute('src', swap(attrOf(e, 'src'), baseDir));
   });
   doc.querySelectorAll('image').forEach(e => {
     for (const attr of ['href', 'xlink:href'])
-      if (e.hasAttribute(attr)) e.setAttribute(attr, swap(e.getAttribute(attr), baseDir, report.refs));
+      if (e.hasAttribute(attr)) e.setAttribute(attr, swap(attrOf(e, attr), baseDir, report.refs));
   });
-  doc.querySelectorAll('[style]').forEach(e => e.setAttribute('style', swapCss(e.getAttribute('style'), baseDir)));
+  doc.querySelectorAll('[style]').forEach(e => e.setAttribute('style', swapCss(attrOf(e, 'style'), baseDir)));
   // 打标记：转换时只认文章自己的样式表，浏览器扩展往 iframe 里注入的样式不算
   doc.querySelectorAll('style').forEach(style => {
     style.textContent = swapCss(style.textContent, style.dataset.base ?? baseDir);

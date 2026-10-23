@@ -2,6 +2,7 @@
 import {
   SVG_NS,
   XLINK_NS,
+  RESOURCE,
   isSvg,
   isAnim,
   hrefOf,
@@ -13,6 +14,7 @@ import {
   xyToTranslate,
 } from './dom.ts';
 import { shapeSegs, geometryReader, serializePath } from './path.ts';
+import { attrOf } from '../util.ts';
 import type { Report } from './dom.ts';
 import type { CssAnims } from './css.ts';
 
@@ -55,9 +57,9 @@ export function expandUse(doc: Document, ids: Map<string, Element>, anims: CssAn
     hidden = new Set<SVGElement>();
   let count = 0,
     bad = 0;
-  while (queue.length) {
-    const use = queue.shift(),
-      target = ids.get(refId(hrefOf(use)) || ''),
+  // 展开出来的嵌套 use 追加在队尾，for…of 会接着遍历到
+  for (const use of queue) {
+    const target = ids.get(refId(hrefOf(use)) || ''),
       useDepth = depth.get(use) || 0;
     if (!use.isConnected) continue;
     if (!isSvg(target) || useDepth > 8 || target.contains(use)) {
@@ -67,7 +69,8 @@ export function expandUse(doc: Document, ids: Map<string, Element>, anims: CssAn
     }
     const outer = mk(doc, 'g');
     for (const attr of use.attributes) if (!USE_SKIP.has(attr.name)) outer.setAttribute(attr.name, attr.value);
-    if (use.hasAttribute('data-wxc')) outer.setAttribute('data-wxc', use.getAttribute('data-wxc'));
+    const unit = use.getAttribute('data-wxc');
+    if (unit != null) outer.setAttribute('data-wxc', unit);
     const geom = geometryReader(use),
       x = geom('x') || 0,
       y = geom('y') || 0;
@@ -173,8 +176,8 @@ export function imagesToFo(doc: Document, rep: Report): number {
       continue;
     }
     const geom = geometryReader(im);
-    let w = geom('width'),
-      h = geom('height');
+    let w = geom('width') ?? 0,
+      h = geom('height') ?? 0;
     if (!(w > 0 && h > 0)) {
       try {
         const box = im.getBBox();
@@ -210,7 +213,7 @@ export function imagesToFo(doc: Document, rep: Report): number {
       const outer = mk(doc, 'g', { transform: fo.getAttribute('transform') });
       fo.removeAttribute('transform');
       let host: SVGElement = fo;
-      const xy = anims.filter(anim => /^(x|y)$/.test(anim.getAttribute('attributeName')));
+      const xy = anims.filter(anim => /^(x|y)$/.test(attrOf(anim, 'attributeName')));
       if (xy.length) {
         host = mk(doc, 'g');
         host.appendChild(fo);
@@ -246,12 +249,7 @@ export function imagesToFo(doc: Document, rep: Report): number {
 export function cleanup(doc: Document): void {
   for (const el of [...doc.getElementsByTagNameNS(SVG_NS, '*')]) {
     if (!el.isConnected) continue;
-    if (
-      el.localName === 'defs' ||
-      ['linearGradient', 'radialGradient', 'pattern', 'filter', 'mask', 'clipPath', 'marker', 'symbol'].includes(
-        el.localName,
-      )
-    ) {
+    if (el.localName === 'defs' || RESOURCE.has(el.localName)) {
       el.remove();
       continue;
     }

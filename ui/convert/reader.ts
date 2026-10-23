@@ -1,4 +1,4 @@
-import { ID, measure, round } from './util.ts';
+import { ID, idOf, measure, round, viewOf } from './util.ts';
 import type { BoxRect } from './types.ts';
 
 /** 微信手机端正文区的默认样式（抓自线上文章页 CSS），预览与校验都在它下面进行 */
@@ -30,8 +30,8 @@ export function previewDoc(fragment: string, extraCss = '') {
  */
 export function readerImages(doc = document, exact = false) {
   const win = doc.defaultView;
-  const content = doc.querySelector('.rich_media_content') as HTMLElement;
-  if (!content) return 0;
+  const content = doc.querySelector<HTMLElement>('.rich_media_content');
+  if (!win || !content) return 0;
   const num = (value: string) => parseFloat(value) || 0;
   const client = (parent: Element, computed: CSSStyleDeclaration) => {
     if (!exact) return parent.clientWidth;
@@ -114,10 +114,10 @@ export type ImagePins = Map<string, { w: boolean; h: boolean }>;
  * 处理方式由主宽度决定并记在 pins 里，另一个宽度照做，两边结构一致才能拟合。
  */
 export function pinImages(doc: Document, root: Element, pins: ImagePins) {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   const all = [...doc.querySelectorAll<HTMLImageElement>('.rich_media_content img')];
   const imgs = all.filter(img => img.naturalWidth && img.hasAttribute(ID) && root.contains(img));
-  if (imgs.some(img => !pins.has(img.getAttribute(ID)))) {
+  if (imgs.some(img => !pins.has(idOf(img)))) {
     const saved = all.map(img => img.getAttribute('style'));
     const before = measure(doc, true);
     readerImages(doc);
@@ -127,7 +127,7 @@ export function pinImages(doc: Document, root: Element, pins: ImagePins) {
       else img.setAttribute('style', saved[k]);
     });
     for (const img of imgs) {
-      const id = img.getAttribute(ID),
+      const id = idOf(img),
         boxBefore: BoxRect | undefined = before.get(id),
         boxAfter: BoxRect | undefined = after.get(id);
       if (pins.has(id)) continue;
@@ -141,8 +141,8 @@ export function pinImages(doc: Document, root: Element, pins: ImagePins) {
   const now = measure(doc, true);
   let n = 0;
   for (const img of imgs) {
-    const pin = pins.get(img.getAttribute(ID)),
-      box = now.get(img.getAttribute(ID));
+    const pin = pins.get(idOf(img)),
+      box = now.get(idOf(img));
     if (!pin || !box || !(pin.w || pin.h)) continue;
     const computed = win.getComputedStyle(img);
     const edge = computed.boxSizing === 'content-box' ? edges(computed) : { w: 0, h: 0 };

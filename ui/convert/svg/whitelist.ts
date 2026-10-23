@@ -3,11 +3,12 @@ import { SVG_NS, WX_ANIM_OK, isSvg, mk, targetOf, ownAnims } from './dom.ts';
 import { bakeStyleTransform } from './transform.ts';
 import { geometryReader } from './path.ts';
 import type { Report } from './dom.ts';
+import { viewOf } from '../util.ts';
 
 type FormKey = 'values' | 'from' | 'to' | 'by';
 // dash 先判断 getTotalLength 在不在，非几何元素上没有
 type FixTarget = SVGGraphicsElement & { getTotalLength?: () => number };
-type Fix = (anim: SVGAnimationElement, el: FixTarget) => boolean;
+type Fix = (anim: SVGAnimationElement, el: FixTarget, attrName: string) => boolean;
 
 const SHAPES = new Set(['rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'path']);
 const TIMING = [
@@ -29,9 +30,9 @@ const TIMING = [
 function mapForm(anim: Element, map: (value: string, k: FormKey) => string | null): Record<string, string> | null {
   const out: Record<string, string> = {};
   for (const k of ['values', 'from', 'to', 'by'] as const) {
-    if (!anim.hasAttribute(k)) continue;
-    const parts = anim
-      .getAttribute(k)
+    const value = anim.getAttribute(k);
+    if (value == null) continue;
+    const parts = value
       .split(';')
       .map(value => value.trim())
       .filter(Boolean);
@@ -44,7 +45,10 @@ function mapForm(anim: Element, map: (value: string, k: FormKey) => string | nul
 /** 换掉一条动画：新元素继承时间属性，放在原位置 */
 function replace(anim: Element, tag: string, attrs: Record<string, string>): SVGElement {
   const replacement = mk(anim.ownerDocument, tag, attrs);
-  for (const k of TIMING) if (anim.hasAttribute(k) && !(k in attrs)) replacement.setAttribute(k, anim.getAttribute(k));
+  for (const k of TIMING) {
+    const value = anim.getAttribute(k);
+    if (value != null && !(k in attrs)) replacement.setAttribute(k, value);
+  }
   anim.replaceWith(replacement);
   return replacement;
 }
@@ -61,18 +65,16 @@ export function displayToVisibility(el: SVGElement): boolean {
   return true;
 }
 
-function cxcy(anim: SVGAnimationElement, el: FixTarget): boolean {
+function cxcy(anim: SVGAnimationElement, el: FixTarget, attrName: string): boolean {
   if (!/^(circle|ellipse)$/.test(el.localName) || !bakeStyleTransform(el)) return false;
   if (ownAnims(el).some(other => other.localName === 'animateTransform' && other.getAttribute('additive') !== 'sum'))
     return false;
-  const attr = anim.getAttribute('attributeName'),
-    sum = anim.getAttribute('additive') === 'sum',
-    base = sum ? 0 : geometryReader(el)(attr) || 0;
+  const base = anim.getAttribute('additive') === 'sum' ? 0 : geometryReader(el)(attrName) || 0;
   const form = mapForm(anim, (value, k) => {
     const num = parseFloat(value);
     if (Number.isNaN(num)) return null;
     const delta = k === 'by' ? num : num - base;
-    return attr === 'cx' ? `${delta} 0` : `0 ${delta}`;
+    return attrName === 'cx' ? `${delta} 0` : `0 ${delta}`;
   });
   if (!form) return false;
   if (anim.localName === 'set') {
@@ -90,21 +92,20 @@ function display(anim: SVGAnimationElement, el: FixTarget): boolean {
   return true;
 }
 /** 只有填充（或只有描边）的形状：fill-opacity / stroke-opacity 等同于整体 opacity */
-function paintOpacity(anim: SVGAnimationElement, el: FixTarget): boolean {
-  const attr = anim.getAttribute('attributeName'),
-    computed = el.ownerDocument.defaultView.getComputedStyle(el);
+function paintOpacity(anim: SVGAnimationElement, el: FixTarget, attrName: string): boolean {
+  const computed = viewOf(el.ownerDocument).getComputedStyle(el);
   if (
     !SHAPES.has(el.localName) ||
-    (attr === 'fill-opacity' ? computed.stroke : computed.fill) !== 'none' ||
+    (attrName === 'fill-opacity' ? computed.stroke : computed.fill) !== 'none' ||
     +computed.opacity !== 1
   )
     return false;
   if (ownAnims(el).some(other => other !== anim && other.getAttribute('attributeName') === 'opacity')) return false;
   const form = mapForm(anim, value => (Number.isNaN(parseFloat(value)) ? null : value));
   if (!form) return false;
-  const still = attr === 'fill-opacity' ? computed.fillOpacity : computed.strokeOpacity;
-  el.style.removeProperty(attr);
-  el.removeAttribute(attr);
+  const still = attrName === 'fill-opacity' ? computed.fillOpacity : computed.strokeOpacity;
+  el.style.removeProperty(attrName);
+  el.removeAttribute(attrName);
   if (+still !== 1) el.setAttribute('opacity', still);
   replace(anim, anim.localName, { attributeName: 'opacity', ...form });
   return true;
@@ -123,10 +124,11 @@ function dash(anim: SVGAnimationElement, el: FixTarget): boolean {
   });
   if (!form0 || !pairs.length) return false;
   const period = pairs[0][0] + pairs[0][1];
-  const length = el.hasAttribute('pathLength') ? +el.getAttribute('pathLength') : el.getTotalLength();
+  const pathLength = el.getAttribute('pathLength');
+  const length = pathLength != null ? +pathLength : el.getTotalLength();
   if (pairs.some(([dashLen, gapLen]) => Math.abs(dashLen + gapLen - period) > 1e-6) || period < length - 1e-6)
     return false;
-  const computed = el.ownerDocument.defaultView.getComputedStyle(el);
+  const computed = viewOf(el.ownerDocument).getComputedStyle(el);
   const base = computed.strokeDasharray === 'none' ? null : computed.strokeDasharray.split(/[\s,]+/).map(parseFloat);
   if (
     parseFloat(computed.strokeDashoffset) !== 0 ||
@@ -158,13 +160,14 @@ export function fixWhitelist(root: Document | Element, ids: Map<string, Element>
   let fixed = 0;
   for (const anim of [...root.getElementsByTagNameNS(SVG_NS, '*')]) {
     if (anim.localName !== 'animate' && anim.localName !== 'set') continue;
-    const attr = anim.getAttribute('attributeName');
-    if (!attr || WX_ANIM_OK.has(attr)) continue;
+    const attrName = anim.getAttribute('attributeName');
+    if (!attrName || WX_ANIM_OK.has(attrName)) continue;
     // 渐变、图案连同其中的动画都会删掉，用到它们的图形按 0 秒时的值画成位图（报为 paint:frozen）
     if (anim.closest('linearGradient,radialGradient,pattern')) continue;
-    const el = targetOf(anim, ids);
-    if (el && FIX[attr] && FIX[attr](anim as SVGAnimationElement, el as FixTarget)) fixed++;
-    else rep('anim:' + attr, el || anim);
+    const el = targetOf(anim, ids),
+      fix = FIX[attrName];
+    if (el && fix && fix(anim as SVGAnimationElement, el as FixTarget, attrName)) fixed++;
+    else rep('anim:' + attrName, el || anim);
   }
   return fixed;
 }

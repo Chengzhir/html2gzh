@@ -13,7 +13,9 @@
     "allowJs": true,
     "checkJs": false,
     "skipLibCheck": true,
-    "strict": false,
+    "strict": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
     "noFallthroughCasesInSwitch": true
   },
   "include": ["server.ts", "lib/**/*.ts", "ui/convert/**/*.ts", "vite.config.ts"]

@@ -6,11 +6,12 @@ import { assets, ASSET_EXT, PUBLIC_EXT, MIME, register, registerFile, serveAsset
 import { article, openArticle } from './article.ts';
 import { checkHosts, checkIfStale, hostState, parseHostForm, applyHost } from './host.ts';
 import { changeImgPort } from './imgserver.ts';
-import { send, json, readBody, fail, failWith } from './http.ts';
+import { send, json, readBody, fail, failWith, isJsonObject, type JsonObject } from './http.ts';
 import { handleGlyphs } from './glyphs.ts';
 import { shrink } from './shrink.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { ApiState, ArticleResponse, ShrinkOutput, ShrinkResponse, ShrinkSkip } from '../ui/convert/types.ts';
+import { errorCode, messageOf } from '../ui/convert/types.ts';
+import type { ApiState, ArticleResponse, ShrinkResponse, ShrinkResult } from '../ui/convert/types.ts';
 
 const LOCAL_HOSTS = new Set([`127.0.0.1:${UI_PORT}`, `localhost:${UI_PORT}`]);
 
@@ -43,7 +44,7 @@ function apiArticle(req: IncomingMessage, res: ServerResponse) {
       html,
     } satisfies ArticleResponse);
   } catch (error) {
-    return failWith(res, 500, 'readFailed', { msg: error.message });
+    return failWith(res, 500, 'readFailed', { msg: messageOf(error) });
   }
 }
 function serveUi(res: ServerResponse, pathname: string) {
@@ -67,8 +68,8 @@ function apiBlob(res: ServerResponse, url: URL, body: Buffer) {
 
 /** "id|scale|max" → /api/shrink 的结果。同一张图同样的参数只压缩一次 */
 const shrunk = new Map<string, ShrinkResponse>();
-// 收 JSON 的接口：b 是解析好的请求体
-const POST: Record<string, (res: ServerResponse, body: any) => unknown> = {
+// 收 JSON 的接口：body 是解析好的请求体
+const POST: Record<string, (res: ServerResponse, body: JsonObject) => unknown> = {
   '/api/open': (res, body) => {
     try {
       openArticle(body.path);
@@ -82,8 +83,8 @@ const POST: Record<string, (res: ServerResponse, body: any) => unknown> = {
     if (!article.file) return failWith(res, 400, 'noArticle');
     const articleDir = path.dirname(article.file);
     const out: Record<string, string | null> = {};
-    for (const ref of body.refs || []) {
-      const filePath = path.resolve(articleDir, String(ref));
+    for (const ref of Array.isArray(body.refs) ? body.refs.map(String) : []) {
+      const filePath = path.resolve(articleDir, ref);
       const ext = path.extname(filePath).toLowerCase();
       // 只认文章所在文件夹里的文件（和拖入文件夹时一样）：别处的 HTML 不能借相对路径把电脑上其他文件放到取图口上
       const relative = path.relative(articleDir, filePath);
@@ -109,33 +110,33 @@ const POST: Record<string, (res: ServerResponse, body: any) => unknown> = {
     if (!asset || !PUBLIC_EXT.has(asset.ext)) return failWith(res, 404, 'noImage');
     if (!(maxBytes >= 1024) || (scale != null && !(scale > 0))) return failWith(res, 400, 'badParams');
     const key = `${body.id}|${scale}|${maxBytes}`;
-    if (!shrunk.has(key)) {
-      let result: Omit<Partial<ShrinkOutput>, 'skip'> & { skip?: ShrinkSkip };
+    let response = shrunk.get(key);
+    if (!response) {
+      let result: ShrinkResult;
       try {
         result = await shrink(asset.buf, { scale, max: maxBytes });
       } catch (error) {
-        return failWith(res, 500, 'shrinkFailed', { msg: error.message });
+        return failWith(res, 500, 'shrinkFailed', { msg: messageOf(error) });
       }
       const base = asset.name.replace(/\.[^.]+$/, '');
-      shrunk.set(
-        key,
-        result.skip
-          ? { skip: result.skip, size: asset.buf.length }
-          : {
-              id: register(result.buf, result.ext, `${base}（压缩）${result.ext}`),
-              size: result.buf.length,
-              srcSize: asset.buf.length,
-              how: result.how,
-              width: result.width,
-              height: result.height,
-              srcWidth: result.srcWidth,
-              srcHeight: result.srcHeight,
-              over: result.over,
-            },
-      );
-      if (shrunk.size > 200) shrunk.delete(shrunk.keys().next().value);
+      response = result.skip
+        ? { skip: result.skip, size: asset.buf.length }
+        : {
+            id: register(result.buf, result.ext, `${base}（压缩）${result.ext}`),
+            size: result.buf.length,
+            srcSize: asset.buf.length,
+            how: result.how,
+            width: result.width,
+            height: result.height,
+            srcWidth: result.srcWidth,
+            srcHeight: result.srcHeight,
+            over: result.over,
+          };
+      shrunk.set(key, response);
+      const oldest = shrunk.keys().next();
+      if (shrunk.size > 200 && !oldest.done) shrunk.delete(oldest.value);
     }
-    return json(res, 200, shrunk.get(key));
+    return json(res, 200, response);
   },
   '/api/glyphs': async (res, body) => {
     try {
@@ -167,9 +168,9 @@ const POST: Record<string, (res: ServerResponse, body: any) => unknown> = {
       try {
         await changeImgPort(config.imgPort);
       } catch (error) {
-        return error.code === 'EADDRINUSE'
+        return errorCode(error) === 'EADDRINUSE'
           ? failWith(res, 409, 'portBusy', { port: config.imgPort, old: IMG_PORT })
-          : failWith(res, 409, 'portFailed', { port: config.imgPort, msg: error.message, old: IMG_PORT });
+          : failWith(res, 409, 'portFailed', { port: config.imgPort, msg: messageOf(error), old: IMG_PORT });
       }
     }
     applyHost(config);
@@ -182,7 +183,7 @@ export async function uiRoute(req: IncomingMessage, res: ServerResponse) {
   if (!LOCAL_HOSTS.has(req.headers.host || '')) return send(res, 403, 'forbidden');
   if (req.method === 'POST' && !LOCAL_HOSTS.has(String(req.headers.origin || '').replace(/^https?:\/\//, '')))
     return send(res, 403, 'forbidden');
-  const url = new URL(req.url, 'http://x');
+  const url = new URL(req.url ?? '/', 'http://x');
   const pathname = decodeURIComponent(url.pathname);
   if (pathname === '/api/state') return apiState(req, res);
   if (pathname === '/api/article') return apiArticle(req, res);
@@ -198,11 +199,12 @@ export async function uiRoute(req: IncomingMessage, res: ServerResponse) {
   if (pathname === '/api/blob') return apiBlob(res, url, body);
   const handler = POST[pathname];
   if (!handler) return send(res, 404, 'not found');
-  let fields;
+  let fields: unknown;
   try {
     fields = JSON.parse(body.toString('utf8') || '{}');
   } catch {
     return failWith(res, 400, 'notJson');
   }
+  if (!isJsonObject(fields)) return failWith(res, 400, 'notJson');
   return handler(res, fields);
 }

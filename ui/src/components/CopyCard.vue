@@ -13,7 +13,7 @@ const widthOptions = WIDTHS.map(([os, screen]) => ({
 }));
 // 上限只在回车或离开输入框时生效：改一个数字重新压缩一遍图片，不要每按一个键都压一遍
 const setKb = (v: number | null) => {
-  if (Number.isInteger(v) && v >= 1 && v <= 20000) saveShrink({ kb: v });
+  if (v != null && Number.isInteger(v) && v >= 1 && v <= 20000) saveShrink({ kb: v });
 };
 </script>
 

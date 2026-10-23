@@ -17,7 +17,7 @@ import type {
 import { api } from './api.ts';
 import { t } from './i18n.ts';
 import { errText } from './fmt.ts';
-import { frames } from './frames.ts';
+import { frames, frame, frameDoc } from './frames.ts';
 import { readerDoc, darkHtml, SIDE } from './phone.ts';
 import { prepare, ORIGIN, EXT_OF_MIME } from './prepare.ts';
 import type { ArticleMeta, PrepIO, PrepReport } from './prepare.ts';
@@ -123,7 +123,7 @@ function loadShrink() {
     kb: typeof kb === 'number' && Number.isInteger(kb) && kb >= 1 && kb <= 20000 ? kb : SHRINK_DEFAULT.kb,
   };
 }
-const savedWidth = +localStorage.getItem(WIDTH_KEY);
+const savedWidth = Number(localStorage.getItem(WIDTH_KEY));
 
 // result 与 server 不做深层响应（markRaw），每次整个换掉：成品 HTML、字体表、检查结果都很大，
 // 而且测试脚本要从页面里原样读出它们（响应式代理传不出页面）
@@ -196,6 +196,12 @@ export function saveOpts(patch: Partial<Opts>, how: 'now' | 'soon' | 'none' = 'n
 }
 /* ---------- 读文件、登记文件 ---------- */
 const uploaded = new WeakMap<File, string>();
+const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
+/** 准备、转换期间一定已经选好了来源 */
+function currentSrc(): Src {
+  if (!state.src) throw new Error('no source');
+  return state.src;
+}
 const uploadBlob = async (body: Blob | ArrayBuffer, ext: string, name: string) =>
   (await api<{ id: string }>(`/api/blob?ext=${encodeURIComponent(ext)}&name=${encodeURIComponent(name)}`, body, true))
     .id;
@@ -208,7 +214,7 @@ const io: PrepIO = {
   async resolveRefs(rels) {
     const ids = new Map<string, string | null>();
     if (!rels.length) return ids;
-    const src = state.src;
+    const src = currentSrc();
     if (src.kind === 'path') {
       const found = await api<Record<string, string | null>>('/api/assets', { refs: rels });
       for (const rel of rels) ids.set(rel, found[rel] || null);
@@ -220,7 +226,7 @@ const io: PrepIO = {
         ids.set(rel, null);
         continue;
       }
-      let id = uploaded.get(file);
+      let id: string | null = uploaded.get(file) ?? null;
       if (!id) {
         try {
           id = await uploadBlob(file, (file.name.split('.').pop() || '').toLowerCase(), file.name);
@@ -235,7 +241,7 @@ const io: PrepIO = {
   },
   uploadDataUri,
   async readLocalText(rel) {
-    const src = state.src;
+    const src = currentSrc();
     if (src.kind === 'files') {
       const file = src.map.get(rel);
       return file ? file.text() : null;
@@ -261,10 +267,10 @@ const FONT_MAGIC = [
   ['ttcf', 'ttc'],
   ['\u0000\u0001\u0000\u0000', 'ttf'],
 ];
-function fontBytes(url: string) {
+function fontBytes(url: string): Promise<string | null> {
   const local = url.startsWith(ORIGIN + '/a/') ? url.slice(ORIGIN.length + 3) : '';
   if (ASSET_ID.test(local)) return Promise.resolve(local);
-  if (!fontIds.has(url)) {
+  return fontIds.getOrInsertComputed(url, () => {
     const job = (async () => {
       const response = await fetch(url, { mode: 'cors', credentials: 'omit' });
       if (!response.ok) return null;
@@ -277,9 +283,8 @@ function fontBytes(url: string) {
     job.then(id => {
       if (!id) fontIds.delete(url);
     });
-    fontIds.set(url, job);
-  }
-  return fontIds.get(url);
+    return job;
+  });
 }
 
 /* ---------- 大图 ---------- */
@@ -290,7 +295,7 @@ async function imageSizes(payload: string) {
   await Promise.all(
     assetIdsIn(payload).map(async id => {
       const response = await fetch('/a/' + id, { method: 'HEAD', cache: 'no-store' }).catch((): null => null);
-      sizes.set(id, response?.ok ? +response.headers.get('content-length') : 0);
+      sizes.set(id, response?.ok ? Number(response.headers.get('content-length')) : 0);
     }),
   );
   return sizes;
@@ -333,8 +338,7 @@ async function applyShrink({
     // 同时处理 4 张
     await Promise.all(
       Array.from({ length: Math.min(4, ids.length) }, async () => {
-        while (queue.length) {
-          const id = queue.shift();
+        for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
           const scale = scales.get(id) ?? null;
           responses.set(
             id,
@@ -348,7 +352,8 @@ async function applyShrink({
     );
     if (seq !== shrinkSeq) return null;
     for (const id of ids) {
-      const response = responses.get(id),
+      // 上面每个 id 都处理过一遍
+      const response = responses.get(id) ?? { error: 'missing' },
         size = sizes.get(id) || 0,
         name = names.get(id) || t('img.generated');
       if (!('id' in response)) {
@@ -424,19 +429,20 @@ async function run() {
     width = state.width;
   try {
     let html: string, entry: string, mtime: number;
-    const src = state.src;
+    const src = currentSrc();
     if (src.kind === 'path') {
       const article = await api<ArticleResponse>('/api/article');
       ({ html, mtime } = article);
-      entry = article.file.replace(/\\/g, '/').split('/').pop();
+      entry = baseName(article.file.replace(/\\/g, '/'));
       state.current = { name: entry, where: article.file };
     } else {
       entry = src.entry;
       const file = src.map.get(entry);
+      if (!file) throw new Error('entry file missing');
       html = await file.text();
       mtime = file.lastModified;
       state.current = {
-        name: entry.split('/').pop(),
+        name: baseName(entry),
         where: src.name ? t('src.droppedDir', { name: src.name }) : t('src.droppedFiles', { n: src.map.size }),
       };
     }
@@ -444,8 +450,8 @@ async function run() {
     if (opts.paths.length) notice('all', t('stage.convertingFonts'));
     const converted = await convert(prep.html, {
       width,
-      frame: frames.scratch,
-      verifyFrame: frames.verify,
+      frame: frame('scratch'),
+      verifyFrame: frame('verify'),
       opts,
       glyphs,
       raster,
@@ -453,7 +459,7 @@ async function run() {
     });
     // 转换结束时 #verify 停在所选宽度的成品上，并已跑过阅读页的图片脚本：在这里量每张图需要的分辨率
     const scales = assetIdsIn(converted.payload).length
-      ? await imageScales(frames.verify.contentDocument, width)
+      ? await imageScales(frameDoc('verify'), width)
       : new Map<string, number | null>();
     const draft: Result = markRaw({
       ...converted,
@@ -507,7 +513,7 @@ async function renderReader() {
   // 先让新宽度生效：深色算法按首屏判断背景，隐藏帧要和显示用的 iframe 一样高
   await nextTick();
   try {
-    const html = await darkHtml(frames.dark, doc, screenWidth, frames.paneB.clientHeight);
+    const html = await darkHtml(frame('dark'), doc, screenWidth, frame('paneB').clientHeight);
     if (html == null || seq !== readerSeq) return;
     state.reader.darkDoc = true;
     state.reader.html = html;
@@ -539,7 +545,7 @@ export async function pollNow() {
       src = state.src;
     if (article.file && article.rev !== state.seenRev) {
       state.seenRev = article.rev;
-      state.src = markRaw({ kind: 'path', file: article.file, rev: article.rev, mtime: article.mtime });
+      state.src = markRaw<Src>({ kind: 'path', file: article.file, rev: article.rev, mtime: article.mtime });
       rerun();
     } else if (src?.kind === 'path' && article.mtime && article.mtime !== src.mtime) {
       src.mtime = article.mtime;
@@ -574,7 +580,7 @@ export async function copy() {
     pick = state.server?.host.pick;
   if (!result) return;
   const html = pick ? result.payload.split(ORIGIN + '/a/').join(pick.base + '/a/') : result.payload;
-  const text = frames.verify.contentDocument.querySelector<HTMLElement>('.rich_media_content').innerText;
+  const text = frameDoc('verify').querySelector<HTMLElement>('.rich_media_content')?.innerText ?? '';
   state.copyDenied = false;
   try {
     await navigator.clipboard.write([
@@ -585,6 +591,7 @@ export async function copy() {
     ]);
   } catch {
     const fill = (e: ClipboardEvent) => {
+      if (!e.clipboardData) return;
       e.clipboardData.setData('text/html', html);
       e.clipboardData.setData('text/plain', text);
       e.preventDefault();
@@ -603,8 +610,8 @@ export async function copy() {
 
 /** 两边都标出这些元素；滚动原稿那边，阅读页跟着同步滚动 */
 export function highlight(ids: string[]) {
-  for (const frame of [frames.paneA, frames.paneB]) {
-    const doc = frame?.contentDocument;
+  for (const pane of [frames.paneA, frames.paneB]) {
+    const doc = pane?.contentDocument;
     if (!doc?.head) continue;
     let style = doc.getElementById('__wxc_hl');
     if (!style) {
@@ -615,7 +622,7 @@ export function highlight(ids: string[]) {
     style.textContent =
       ids.map(id => `[data-wxc="${id}"]`).join(',') + '{outline:2px solid #e8590c!important;outline-offset:1px}';
   }
-  frames.paneA.contentDocument?.querySelector(`[data-wxc="${ids[0]}"]`)?.scrollIntoView({ block: 'center' });
+  frames.paneA?.contentDocument?.querySelector(`[data-wxc="${ids[0]}"]`)?.scrollIntoView({ block: 'center' });
 }
 
 /* ---------- 输入 ---------- */
@@ -624,7 +631,7 @@ export function useFiles(files: RelFile[], name: string) {
   const map = new Map(files.map(({ rel, file }) => [rel, file]));
   const entry = entryOf([...map.keys()]);
   if (!entry) return srcNote(t('src.noHtml'), 'err');
-  state.src = markRaw({ kind: 'files', name, map, entry });
+  state.src = markRaw<Src>({ kind: 'files', name, map, entry });
   rerun();
 }
 export async function openPath(input: string) {

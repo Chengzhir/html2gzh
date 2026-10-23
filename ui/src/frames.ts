@@ -6,3 +6,15 @@ export const frames = {
   verify: null as HTMLIFrameElement | null,
   dark: null as HTMLIFrameElement | null,
 };
+type FrameName = keyof typeof frames;
+/** 转换、复制这类只在 Stage 挂载之后才会发生的操作用它取 iframe */
+export function frame(name: FrameName): HTMLIFrameElement {
+  const el = frames[name];
+  if (!el) throw new Error(`frame ${name} is not mounted`);
+  return el;
+}
+export function frameDoc(name: FrameName): Document {
+  const doc = frame(name).contentDocument;
+  if (!doc) throw new Error(`frame ${name} has no document`);
+  return doc;
+}

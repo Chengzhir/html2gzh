@@ -96,8 +96,17 @@ export function parseDecls(text: string | null | undefined) {
   return out;
 }
 
+/** 元素的 data-wxc；只对带这个属性的元素调用（没有时为空串） */
+/** 读属性，没有时为空串 */
+export const attrOf = (el: Element, name: string) => el.getAttribute(name) ?? '';
+export const idOf = (el: Element) => attrOf(el, ID);
 export const isHtmlEl = (node: Node | null | undefined): node is HTMLElement =>
   !!node && node.nodeType === 1 && (node as Element).namespaceURI === 'http://www.w3.org/1999/xhtml';
+/** 文档所在的窗口。转换只在装进 iframe 的文档上进行，取不到说明 iframe 已被移走 */
+export function viewOf(doc: Document): Window & typeof globalThis {
+  if (!doc.defaultView) throw new Error('document is not in a window');
+  return doc.defaultView;
+}
 export const round = (value: number) => Math.round(value * 1000) / 1000;
 
 /** 临时去掉所有变换，量布局位置用 */
@@ -118,14 +127,14 @@ export function measure(doc: Document, layout: boolean) {
     doc.head.appendChild(still);
   }
   const body = doc.body.getBoundingClientRect();
-  const bodyStyle = doc.defaultView.getComputedStyle(doc.body);
+  const bodyStyle = viewOf(doc).getComputedStyle(doc.body);
   const originX = body.left + parseFloat(bodyStyle.borderLeftWidth) + parseFloat(bodyStyle.paddingLeft);
   const originY = body.top + parseFloat(bodyStyle.borderTopWidth) + parseFloat(bodyStyle.paddingTop);
   const out = new Map<string, BoxRect>();
   for (const el of doc.querySelectorAll(`[${ID}]`)) {
     if (!el.getClientRects().length) continue;
     const rect = el.getBoundingClientRect();
-    out.set(el.getAttribute(ID), { x: rect.left - originX, y: rect.top - originY, w: rect.width, h: rect.height });
+    out.set(idOf(el), { x: rect.left - originX, y: rect.top - originY, w: rect.width, h: rect.height });
   }
   if (still) still.remove();
   return out;
@@ -157,11 +166,8 @@ export function loadFrame(frame: HTMLIFrameElement, html: string, width: number,
     frame.onload = async () => {
       clearTimeout(timer);
       const doc = frame.contentDocument;
-      try {
-        await Promise.race([doc.fonts.ready, sleep(4000)]);
-      } catch {
-        /* 无字体 API */
-      }
+      if (!doc) return reject(new Error('frame has no document'));
+      await Promise.race([doc.fonts.ready, sleep(4000)]);
       await Promise.race([
         Promise.all(
           [...doc.images].map(img =>

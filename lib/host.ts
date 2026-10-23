@@ -6,7 +6,8 @@ import { CodedError } from '../ui/convert/types.ts';
 import type { HostConfig, HostExit, HostState } from '../ui/convert/types.ts';
 import { settings, saveSettings, stamp, validPort, UI_PORT, IMG_PORT, TOKEN } from './config.ts';
 
-const validPublicPort = (port: number) => Number.isInteger(port) && port >= 1 && port <= 65535;
+const validPublicPort = (port: unknown): port is number =>
+  typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65535;
 const publicAddress: Omit<HostConfig, 'imgPort'> = {
   host: typeof settings.host === 'string' ? settings.host : '',
   port: validPublicPort(settings.port) ? settings.port : 0,
@@ -127,7 +128,7 @@ export async function checkHosts() {
     // 上一轮见过、这轮没探到的出口先留着（可能只是这轮没分到），标成 stale
     const missing = host.list.filter(exit => !seen.has(exit.ip)).map(exit => ({ ...exit, seen: 0, stale: true }));
     Object.assign(host, {
-      list: [...fresh, ...missing].sort((a: any, b: any) => b.ok - a.ok || b.seen - a.seen),
+      list: [...fresh, ...missing].sort((a, b) => Number(b.ok) - Number(a.ok) || b.seen - a.seen),
       manual: null,
       probes: jobs.length,
       checkedAt: Date.now(),

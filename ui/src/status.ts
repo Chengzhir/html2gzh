@@ -12,7 +12,7 @@ export const service = () => t(WIN ? 'app.serviceWin' : 'app.serviceTerm');
 
 const localIds = computed(() => (state.result ? assetIdsIn(state.result.payload) : []));
 const pick = () => state.server?.host.pick;
-const saveTwice = () => (/<img\b/.test(state.result.payload) ? t('copy.saveTwice') : '');
+const saveTwice = () => (/<img\b/.test(state.result?.payload ?? '') ? t('copy.saveTwice') : '');
 
 /** 复制按钮能不能点，以及按钮下的说明 */
 export const copyState = computed(() => {
@@ -47,14 +47,14 @@ function fetchState(times: number[] | undefined, since: number, now: number): Fe
   let burstStart = recent.length - 1;
   while (burstStart > 0 && recent[burstStart] - recent[burstStart - 1] < BURST_GAP) burstStart--;
   if (recent.length - burstStart >= 3) return 'fail';
-  return now - recent.at(-1) < SETTLE ? 'busy' : 'ok';
+  return now - recent[recent.length - 1] < SETTLE ? 'busy' : 'ok';
 }
 /** 复制后的下载进度：{ cls, text }；没复制、没有本地图片时为 null */
 export const fetchLine = computed(() => {
   const ids = localIds.value,
     result = state.result,
     copied = state.copiedAt;
-  if (!copied || !ids.length || !state.server) return null;
+  if (!copied || !result || !ids.length || !state.server) return null;
   const fetches = state.server.fetches || {},
     now = state.now;
   const states = ids.map(id => fetchState(fetches[id], copied.t, now));

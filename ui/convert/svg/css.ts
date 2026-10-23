@@ -10,6 +10,7 @@ import type { Matrix } from './path.ts';
 import { displayToVisibility } from './whitelist.ts';
 import { wrapRoot, rootDecorated, rootTransformed, rootBox, moveClip, moveOpacity } from './root.ts';
 import type { RootBox } from './root.ts';
+import { viewOf } from '../util.ts';
 
 /** captureCss 读到的一条 CSS 动画 */
 export interface CssAnimRecord {
@@ -27,6 +28,9 @@ interface RawFrame {
   raw: string;
   e: Easing | null;
 }
+/** easing 都认得出的帧 */
+type Frame = RawFrame & { e: Easing };
+const easingKnown = (frames: RawFrame[]): frames is Frame[] => frames.every(frame => frame.e);
 interface Timing {
   dur: number;
   delay: number;
@@ -35,7 +39,7 @@ interface Timing {
   fill: FillMode;
 }
 interface LayerAnim {
-  frames: RawFrame[];
+  frames: Frame[];
   tm: Timing;
 }
 type GetPropertyValue = Pick<CSSStyleDeclaration, 'getPropertyValue'>;
@@ -49,7 +53,7 @@ const LIN: Easing = { kind: 'linear' };
 
 /** 读下页面里 SVG 元素上正在跑的 CSS 动画（样式表删掉之前调用）。被 <use> 引用、自身不画出来的内容临时复制一份到页面里再读 */
 export function captureCss(doc: Document, ids: Map<string, Element>): CssAnims {
-  const win = doc.defaultView,
+  const win = viewOf(doc),
     out: CssAnims = new Map();
   const take = (resolve: (target: Element | null) => Element | null | undefined) => {
     for (const animation of doc.getAnimations()) {
@@ -57,8 +61,7 @@ export function captureCss(doc: Document, ids: Map<string, Element>): CssAnims {
       const effect = animation.effect as KeyframeEffect;
       const src = resolve(effect.target);
       if (!src || !isSvg(src)) continue;
-      let list = out.get(src);
-      if (!list) out.set(src, (list = []));
+      const list = out.getOrInsertComputed(src, () => []);
       if (list.some(record => record.name === animation.animationName)) continue;
       list.push({
         name: animation.animationName,
@@ -92,7 +95,7 @@ export function captureCss(doc: Document, ids: Map<string, Element>): CssAnims {
   }
   if (box.firstChild) {
     doc.body.appendChild(box);
-    take(target => back.get(target));
+    take(target => target && back.get(target));
     box.remove();
   }
   return out;
@@ -151,7 +154,7 @@ function simple(
   doc: Document,
   el: SVGElement,
   [attr, kind]: [attr: string, kind: keyof typeof KINDS],
-  frames: RawFrame[],
+  frames: Frame[],
   tm: Timing,
   spline: boolean,
 ) {
@@ -173,7 +176,7 @@ function simple(
   );
   return true;
 }
-function discrete(doc: Document, el: SVGElement, p: string, frames: RawFrame[], tm: Timing) {
+function discrete(doc: Document, el: SVGElement, p: string, frames: Frame[], tm: Timing) {
   if (p === 'display' && !displayToVisibility(el)) return false;
   const vis = (value: string) =>
     p === 'display' ? (value === 'none' ? 'hidden' : 'visible') : value === 'visible' ? 'visible' : 'hidden';
@@ -198,17 +201,13 @@ function discrete(doc: Document, el: SVGElement, p: string, frames: RawFrame[], 
   return true;
 }
 /** 圆心 cx/cy 不在白名单里：换成相对原位置的平移 */
-function shift(doc: Document, el: SVGCircleElement | SVGEllipseElement, p: string, frames: RawFrame[], tm: Timing) {
+function shift(doc: Document, el: SVGCircleElement | SVGEllipseElement, p: string, frames: Frame[], tm: Timing) {
   if (!bakeStyleTransform(el)) return false;
   const base = geometryReader(el)(p) || 0;
-  const parsed: Keyframe<number | null>[] = frames.map(frame => ({
-    off: frame.off,
-    v: KINDS.number.parse(frame.raw),
-    e: frame.e,
-  }));
-  if (parsed.some(frame => frame.v == null)) return false;
+  const values = frames.map(frame => KINDS.number.parse(frame.raw));
+  if (!values.every(value => value != null)) return false;
   const { kf, k } = directed(
-    parsed.map(frame => ({ ...frame, v: frame.v - base })),
+    frames.map((frame, i) => ({ off: frame.off, v: values[i] - base, e: frame.e })),
     tm.dir,
   );
   const str = (value: number) => (p === 'cx' ? `${r4(value)} 0` : `0 ${r4(value)}`);
@@ -244,7 +243,7 @@ function buildLayers(
     rep('css:mixed', el);
     return false;
   }
-  const computed = el.ownerDocument.defaultView.getComputedStyle(el);
+  const computed = viewOf(el.ownerDocument).getComputedStyle(el);
   const spec: { m: number[]; nodes?: Element[] }[] = [{ m: [1, 0, 0, 1, box.ox, box.oy] }];
   for (const layer of LAYERS) {
     const base = staticM(computed, layer, box, fontSize);
@@ -262,7 +261,7 @@ function buildLayers(
       const lists = frames.map(frame =>
         layer === 'transform' ? parseFns(frame.raw, box, fontSize) : parseProp(layer, frame.raw, box, fontSize),
       );
-      const aligned = !lists.includes(null) && align(lists);
+      const aligned = lists.every(list => list != null) && align(lists);
       if (!aligned) {
         rep('css:transform', el);
         return false;
@@ -330,7 +329,7 @@ function framesOf(keyframes: ComputedKeyframe[], p: string, computed: GetPropert
 
 /** 把 captureCss 读到的动画写成 SMIL；写不了的按原因记进 rep */
 export function cssToSmil(doc: Document, anims: CssAnims, { spline, rep }: { spline: boolean; rep: Report }): number {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   let done = 0;
   for (const [svgEl, recs] of anims) {
     if (!svgEl.isConnected || inResource(svgEl)) continue;
@@ -338,10 +337,10 @@ export function cssToSmil(doc: Document, anims: CssAnims, { spline, rep }: { spl
       fontSize = parseFloat(computed.fontSize) || 16;
     // 最外层 svg 上的动画写到包住它全部内容的 g 上（见 root.ts）；g 在第一次用到时才建
     const root = isSvg(svgEl.parentElement) ? null : (svgEl as SVGSVGElement);
-    const rootOpacity = root && computed.opacity;
-    let target: SVGElement | null = root ? null : svgEl,
+    const rootOpacity = computed.opacity;
+    let wrapped: SVGGElement | null = null,
       opacityMoved = false;
-    const host = () => (target ||= wrapRoot(root));
+    const host = (): SVGElement => (root ? (wrapped ??= wrapRoot(root)) : svgEl);
     const rootBlocked = (p: string) =>
       root &&
       (GEOM.has(p) ||
@@ -351,7 +350,7 @@ export function cssToSmil(doc: Document, anims: CssAnims, { spline, rep }: { spl
     let box: TransformBox | RootBox | null = null,
       ok = false;
     const layers = new Map<string, LayerAnim[]>(),
-      shifts: [p: string, frames: RawFrame[], tm: Timing][] = [];
+      shifts: [p: string, frames: Frame[], tm: Timing][] = [];
     // 最外层 svg 的静态透明度在写第一条透明度动画时挪到 g 上；之后各帧补的静态值仍取挪动前的
     const base: GetPropertyValue = root
       ? { getPropertyValue: (q: string) => (q === 'opacity' ? rootOpacity : computed.getPropertyValue(q)) }
@@ -367,11 +366,11 @@ export function cssToSmil(doc: Document, anims: CssAnims, { spline, rep }: { spl
       }
       const timing = record.timing;
       const tm: Timing = {
-        dur: (+timing.duration || 0) / 1000,
+        dur: (Number(timing.duration) || 0) / 1000,
         delay: (timing.delay || 0) / 1000,
-        iters: timing.iterations == null ? Infinity : timing.iterations,
-        dir: timing.direction,
-        fill: timing.fill,
+        iters: timing.iterations ?? Infinity,
+        dir: timing.direction ?? 'normal',
+        fill: timing.fill ?? 'auto',
       };
       if (!tm.iters) continue;
       if (!tm.dur) {
@@ -383,7 +382,7 @@ export function cssToSmil(doc: Document, anims: CssAnims, { spline, rep }: { spl
       );
       for (const p of props) {
         const frames = framesOf(record.kf, p, base);
-        if (frames.some(frame => !frame.e)) {
+        if (!easingKnown(frames)) {
           rep('css:easing', svgEl);
           continue;
         }
@@ -401,8 +400,7 @@ export function cssToSmil(doc: Document, anims: CssAnims, { spline, rep }: { spl
             rep(root ? 'css:root' : 'css:transform', svgEl);
             continue;
           }
-          if (!layers.has(p)) layers.set(p, []);
-          layers.get(p).push({ frames, tm });
+          layers.getOrInsertComputed(p, () => []).push({ frames, tm });
         } else if (SIMPLE[p]) {
           if (root && p === 'opacity' && !opacityMoved) {
             moveOpacity(root, host() as SVGGElement, computed);
@@ -418,7 +416,8 @@ export function cssToSmil(doc: Document, anims: CssAnims, { spline, rep }: { spl
         else rep('css:prop:' + p, svgEl);
       }
     }
-    if (layers.size) {
+    // 有 layers 时 box 一定量到了：root 时是 rootBox 的结果
+    if (layers.size && box) {
       if (root) moveClip(root, host() as SVGGElement, computed, box as RootBox);
       if (buildLayers(doc, host(), layers, box, fontSize, spline, rep)) ok = true;
     }

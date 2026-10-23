@@ -12,7 +12,7 @@ const dragging = ref(false);
 const pickDir = () => dirInput.value?.click();
 function onPicked(e: Event) {
   const input = e.target as HTMLInputElement,
-    picked = pickedFiles(input.files);
+    picked = input.files && pickedFiles(input.files);
   if (picked) useFiles(picked.files, picked.name);
   input.value = '';
 }
@@ -31,7 +31,7 @@ const onDragLeave = (e: DragEvent) => {
 async function onDrop(e: DragEvent) {
   e.preventDefault();
   dragging.value = false;
-  const dropped = await droppedFiles(e.dataTransfer);
+  const dropped = e.dataTransfer && (await droppedFiles(e.dataTransfer));
   if (!dropped) return;
   if (dropped.single) srcNote(t('src.singleHtml'), 'err');
   else useFiles(dropped.files, dropped.name);

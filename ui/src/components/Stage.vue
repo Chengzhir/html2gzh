@@ -9,6 +9,7 @@ import { frames } from '../frames.ts';
 import { WIN } from '../status.ts';
 import Toast from './Toast.vue';
 import HelpTip from './HelpTip.vue';
+import { viewOf } from '../../convert/util.ts';
 
 const { t } = useI18n();
 const paneA = useTemplateRef('pane-a'),
@@ -35,16 +36,16 @@ let originalTop = 0;
 let spacer: HTMLStyleElement | null = null;
 const contentTop = (doc: Document) => {
   const body = doc.body.getBoundingClientRect(),
-    style = doc.defaultView.getComputedStyle(doc.body);
-  return body.top + doc.defaultView.scrollY + parseFloat(style.borderTopWidth) + parseFloat(style.paddingTop);
+    style = viewOf(doc).getComputedStyle(doc.body);
+  return body.top + viewOf(doc).scrollY + parseFloat(style.borderTopWidth) + parseFloat(style.paddingTop);
 };
 async function alignPanes() {
-  const original = paneA.value.contentDocument,
-    reader = paneB.value.contentDocument;
+  const original = paneA.value?.contentDocument,
+    reader = paneB.value?.contentDocument;
   const content = reader?.getElementById('js_content');
-  if (!original?.body || !content) return;
+  if (!original?.body || !reader || !content) return;
   await reader.fonts.ready;
-  const header = content.getBoundingClientRect().top + reader.defaultView.scrollY;
+  const header = content.getBoundingClientRect().top + viewOf(reader).scrollY;
   if (!spacer || spacer.ownerDocument !== original) {
     originalTop = contentTop(original);
     spacer = original.createElement('style');
@@ -56,15 +57,19 @@ let syncing = false;
 function onLoad(which: 'A' | 'B') {
   const frame = which === 'A' ? paneA.value : paneB.value,
     other = which === 'A' ? paneB.value : paneA.value;
+  const win = frame?.contentWindow,
+    doc = frame?.contentDocument;
+  if (!frame || !win || !doc) return;
   // 深色的在隐藏 iframe 里已经照阅读页脚本改过图片尺寸
-  if (which === 'B' && !frame.dataset.dark) readerImages(frame.contentDocument);
+  if (which === 'B' && !frame.dataset.dark) readerImages(doc);
   alignPanes();
-  frame.contentWindow.addEventListener(
+  win.addEventListener(
     'scroll',
     () => {
-      if (syncing || !other.contentWindow) return;
+      const otherWin = other?.contentWindow;
+      if (syncing || !otherWin) return;
       syncing = true;
-      other.contentWindow.scrollTo(0, frame.contentWindow.scrollY);
+      otherWin.scrollTo(0, win.scrollY);
       requestAnimationFrame(() => {
         syncing = false;
       });

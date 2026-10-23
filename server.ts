@@ -10,6 +10,8 @@ import { imgServer, listenImg } from './lib/imgserver.ts';
 import { uiRoute } from './lib/uiroute.ts';
 import { wrap } from './lib/http.ts';
 import { ensureUi } from './lib/uibuild.ts';
+import { errorCode, messageOf } from './ui/convert/types.ts';
+import type { ApiState } from './ui/convert/types.ts';
 
 function openBrowser(url: string) {
   if (NO_OPEN) return;
@@ -26,7 +28,9 @@ function openBrowser(url: string) {
 async function handOver() {
   const base = `http://127.0.0.1:${UI_PORT}`;
   try {
-    const state = await (await fetch(base + '/api/state', { signal: AbortSignal.timeout(2000) })).json();
+    const state: Partial<ApiState> = await (
+      await fetch(base + '/api/state', { signal: AbortSignal.timeout(2000) })
+    ).json();
     if (state.app !== 'html2gzh') throw new Error();
   } catch {
     console.error(
@@ -40,7 +44,7 @@ async function handOver() {
       headers: { origin: base },
       body: JSON.stringify({ path: initialArg }),
     });
-    const reply = await response.json();
+    const reply: { file?: string; error?: string } = await response.json();
     console.log(response.ok ? '已在运行中的 html2gzh 里打开：' + reply.file : '打开失败：' + reply.error);
   } else console.log('html2gzh 已在运行。');
   openBrowser(base + '/');
@@ -58,7 +62,7 @@ uiServer.listen(UI_PORT, '127.0.0.1', async () => {
     try {
       openArticle(initialArg);
     } catch (error) {
-      console.error(error.message);
+      console.error(messageOf(error));
     }
   }
   const want = IMG_PORT;
@@ -66,7 +70,7 @@ uiServer.listen(UI_PORT, '127.0.0.1', async () => {
     await listenImg(want);
   } catch (error) {
     // 上次在页面里存的端口被占了：退回默认端口，页面里可以再改
-    const fallback = !PORT_ARG && savedImg && want !== DEFAULT_IMG && error.code === 'EADDRINUSE';
+    const fallback = !PORT_ARG && savedImg && want !== DEFAULT_IMG && errorCode(error) === 'EADDRINUSE';
     if (fallback) {
       console.error(`本机端口 ${want}（上次在页面中设置）已被其他程序占用，改用 ${DEFAULT_IMG}`);
       try {
@@ -77,9 +81,9 @@ uiServer.listen(UI_PORT, '127.0.0.1', async () => {
     }
     if (!imgServer.listening) {
       console.error(
-        error.code === 'EADDRINUSE'
+        errorCode(error) === 'EADDRINUSE'
           ? `本机端口 ${want} 已被其他程序占用。请改用其他端口启动，例如 ${LAUNCH} --port 40000（本机端口为 40000，页面端口为 40001）`
-          : error.message,
+          : messageOf(error),
       );
       process.exit(1);
     }

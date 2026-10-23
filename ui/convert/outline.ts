@@ -1,9 +1,9 @@
-import { ID, isHtmlEl, measure, diffBoxes, splitTop, unquote, NO_TRANSFORM } from './util.ts';
+import { ID, isHtmlEl, measure, diffBoxes, splitTop, unquote, NO_TRANSFORM, viewOf } from './util.ts';
 import { GLYPH_BATCH as BATCH, SNAP_BOX, SNAP_INHERITED, SNAP_INLINE, SNAP_TAGS } from './glyphapi.ts';
 import { faceKey } from './fonts.ts';
 import { annotateContainerWidths } from './responsive.ts';
 import { resolveWebFonts, usesMissing } from './webfonts.ts';
-import { CodedError, msg } from './types.ts';
+import { CodedError, messageOf, msg } from './types.ts';
 import type {
   FontPlanRow,
   GlyphFill,
@@ -54,7 +54,8 @@ export interface OutlineNotes {
 export interface OutlineCtx {
   glyphs: (req: GlyphRequest) => Promise<GlyphResponse>;
   web: Set<string> | null;
-  webUsed: Parameters<typeof resolveWebFonts>[0];
+  /** 与 web 同时读下；为 null 时 web 也是空的，没有字用网页字体 */
+  webUsed: Parameters<typeof resolveWebFonts>[0] | null;
   fontBytes: Parameters<typeof resolveWebFonts>[1];
   webResolved: ReturnType<typeof resolveWebFonts> | null;
   webSig: string;
@@ -65,7 +66,8 @@ interface CharStyle {
   family: string;
   web: string;
 }
-interface CharBox {
+/** 量出来的一个字；base 是基线（竖排为列中线），量完时非空白的字都有 */
+interface RawChar {
   t: Text;
   i: number;
   s: string;
@@ -78,28 +80,39 @@ interface CharBox {
   base?: number;
   trail?: boolean;
 }
-/** 转换中的单元：locate 找到后逐步补上各字段 */
-interface Unit {
+type CharBox = (RawChar & { space: true }) | (RawChar & { space: false; base: number });
+/** 找到的单元。box 是单元的块（一段行内内容包进的 span，或 outer 本身）；fail 记下后面哪一步没做成 */
+interface Located {
   d: UnitDesc;
-  fail?: string | null;
+  box: Element;
+  outer: Element;
+  nodes: ChildNode[];
+  fail: string | null;
   detail?: string[];
-  box?: Element;
-  nodes?: ChildNode[];
-  outer?: Element;
-  html?: string;
-  orig?: ChildNode[];
-  cw?: number;
-  w?: number;
-  h?: number;
-  vertical?: boolean;
-  rtl?: boolean;
-  chars?: CharBox[];
-  drawn?: Drawn;
-  lines?: number;
-  thick?: number;
-  svg?: SVGSVGElement;
-  ox?: number;
-  oy?: number;
+}
+/** 单元内容盒的尺寸与逐字的框 */
+interface Measured {
+  w: number;
+  h: number;
+  vertical: boolean;
+  rtl: boolean;
+  chars: CharBox[];
+}
+interface MeasuredUnit extends Located, Measured {
+  /** 原文，还原用 */
+  html: string;
+  orig: ChildNode[];
+  cw: number;
+}
+/** 换上轮廓的单元：ox、oy 是 svg 相对内容盒的偏移，drawSvg 量出 */
+type Ink = Extract<Drawn, { glyphs: unknown }>;
+interface DrawnUnit extends MeasuredUnit {
+  ink: Ink;
+  svg: SVGSVGElement;
+  lines: number;
+  thick: number;
+  ox: number;
+  oy: number;
 }
 interface CopyLine {
   base: number;
@@ -118,20 +131,21 @@ interface CopyColumn {
   text: string;
   bottom: number;
 }
-/** outline() 对每个单元的结果，供两个宽度比对；ok 为 false 时只有 fail 与 detail */
-export interface OutlineResult {
-  ok: boolean;
-  fail?: string;
-  detail?: string[];
-  cw?: number;
-  w?: number;
-  h?: number;
-  html?: string;
-  vertical?: boolean;
-  chars?: number;
-  sig?: number[][];
-  bytes?: number;
-}
+/** outline() 对每个单元的结果，供两个宽度比对 */
+export type OutlineResult =
+  | { ok: false; fail: string; detail?: string[] }
+  | {
+      ok: true;
+      cw: number;
+      w: number;
+      h: number;
+      /** 原文，不保留时换回 */
+      html: string;
+      vertical: boolean;
+      chars: number;
+      sig: number[][];
+      bytes: number;
+    };
 
 const isFloat = (node: Node) => node.nodeType === 1 && (node as Element).hasAttribute('data-wxc-float');
 const f3 = (value: number) => String(Math.round(value * 1000) / 1000);
@@ -237,7 +251,7 @@ const boxWhy = (style: CSSStyleDeclaration, el: Element) =>
         : '';
 const blockOf = (win: Window, el: Element, root: Element) => {
   let block = el;
-  while (block !== root && /^inline/.test(win.getComputedStyle(block).display)) block = block.parentElement;
+  while (block !== root && /^inline/.test(win.getComputedStyle(block).display)) block = block.parentElement ?? root;
   return block;
 };
 
@@ -278,7 +292,7 @@ function ineligible(win: Window, box: Element, nodes: ChildNode[], root: Element
   for (const node of nodes) {
     if (node.nodeType === 3 || node.nodeType === 8) continue;
     if (isFloat(node)) {
-      if (node.textContent.trim()) return 'other';
+      if (node.textContent?.trim()) return 'other';
       continue;
     }
     if (!plainInline(win, node)) return 'inline';
@@ -288,13 +302,12 @@ function ineligible(win: Window, box: Element, nodes: ChildNode[], root: Element
   const seen = new Set<Element>();
   const writingMode = win.getComputedStyle(box).writingMode;
   for (const t of texts) {
-    const style = win.getComputedStyle(t.parentElement);
+    // 文字节点都在单元里，父元素至少是 box
+    const parent = t.parentElement ?? box;
+    const style = win.getComputedStyle(parent);
     const reason = textWhy(style);
     if (reason) return reason;
-    if (
-      style.writingMode !== writingMode ||
-      ('currentCSSZoom' in t.parentElement && t.parentElement.currentCSSZoom !== 1)
-    )
+    if (style.writingMode !== writingMode || ('currentCSSZoom' in parent && parent.currentCSSZoom !== 1))
       return 'other';
     // 下划线等装饰会从祖先块传到子孙文字上
     for (
@@ -343,10 +356,11 @@ export function planFonts(
   root: Element,
   { picked, web, sizeAt }: { picked: Set<string>; web: Set<string>; sizeAt: (el: Element) => number },
 ): FontPlan {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   const rows = new Map<string, FontPlanRow & { last: Element | null }>(),
     rowOf = new Map<Text, FontPlanRow>(),
     charCount = new Map<Text, number>();
+  const charsIn = (t: Text) => charCount.get(t) ?? 0;
   const range = doc.createRange();
   const walker = doc.createTreeWalker(root, 4);
   while (walker.nextNode()) {
@@ -408,8 +422,8 @@ export function planFonts(
     for (const t of textNodes(nodes)) {
       const row = rowOf.get(t);
       if (row) {
-        all += charCount.get(t);
-        if (isPicked(row)) yes += charCount.get(t);
+        all += charsIn(t);
+        if (isPicked(row)) yes += charsIn(t);
       }
     }
     return all > 0 && yes * 2 >= all;
@@ -419,7 +433,7 @@ export function planFonts(
     const counts: Record<string, number> = {};
     for (const t of textNodes(nodes)) {
       const row = rowOf.get(t);
-      if (row) counts[row.key] = (counts[row.key] || 0) + charCount.get(t);
+      if (row) counts[row.key] = (counts[row.key] || 0) + charsIn(t);
     }
     const desc: UnitDesc = { id, text: unitText(nodes), rows: counts };
     if (from != null) Object.assign(desc, { from, to: from + nodes.length });
@@ -449,7 +463,7 @@ export function planFonts(
       const nodes = from < 0 ? [] : run.slice(from, to + 1);
       if (nodes.length) {
         const why = !id ? 'other' : bad ? 'inline' : ineligible(win, el, nodes, root);
-        if (why) mark(nodes, why);
+        if (why || !id) mark(nodes, why || 'other');
         else if (vote(nodes)) take(id, nodes, [...el.childNodes].indexOf(nodes[0]));
         else mark(nodes, 'vote');
       }
@@ -466,7 +480,7 @@ export function planFonts(
         isHtmlEl(node) || (node as Element).localName === 'svg' ? win.getComputedStyle(node as Element) : null;
       if (!nodeStyle || nodeStyle.display === 'none') continue;
       if (isFloat(node) && !itemized) {
-        if (node.textContent.trim()) {
+        if (node.textContent?.trim()) {
           flush();
           visit(node);
         } else if (run.length) run.push(node);
@@ -494,26 +508,29 @@ export function planFonts(
   for (const [t, row] of rowOf) {
     const state = status.get(t) || 'other';
     if (!isPicked(row) || typeof state !== 'string') continue;
-    if (!skip.has(row.key)) skip.set(row.key, new Map());
-    const reasons = skip.get(row.key),
+    const reasons = skip.getOrInsertComputed(row.key, () => new Map()),
       why = whyCode(state);
-    reasons.set(why, (reasons.get(why) || 0) + charCount.get(t));
+    reasons.set(why, (reasons.get(why) || 0) + charsIn(t));
   }
   return { rows: list, units, skip };
 }
 /** 按描述在本次转换的 DOM 里找到单元；文字对不上或在这个宽度下不再合格就返回原因 */
-function locate(doc: Document, root: Element, d: UnitDesc): Unit {
-  const win = doc.defaultView;
+function locate(
+  doc: Document,
+  root: Element,
+  d: UnitDesc,
+): Located | { d: UnitDesc; fail: string; detail?: undefined } {
+  const win = viewOf(doc);
   const box = root.querySelector(`[${ID}="${d.id}"]`) || (root.getAttribute(ID) === d.id ? root : null);
   if (!box) return { d, fail: 'missing' };
   const nodes = d.from == null ? [...box.childNodes] : [...box.childNodes].slice(d.from, d.to);
   if (unitText(nodes) !== d.text) return { d, fail: 'mismatch' };
   if (ineligible(win, box, nodes, root)) return { d, fail: 'ineligible' };
-  return { d, box, nodes, outer: box };
+  return { d, box, nodes, outer: box, fail: null };
 }
 
 /** 一段行内内容包进块级 span：在块容器里等同匿名块，在弹性容器里等同匿名弹性项 */
-function wrapRun(doc: Document, unit: Unit) {
+function wrapRun(doc: Document, unit: Located) {
   if (unit.d.from == null) return;
   const wrapper = doc.createElement('span');
   wrapper.setAttribute('data-wxc-wrap', '');
@@ -522,7 +539,7 @@ function wrapRun(doc: Document, unit: Unit) {
   for (const node of unit.nodes) wrapper.appendChild(node);
   unit.box = wrapper;
 }
-function unwrapRun(unit: Unit) {
+function unwrapRun(unit: Located) {
   if (unit.d.from == null || unit.box === unit.outer) return;
   unit.box.replaceWith(...unit.box.childNodes);
   unit.box = unit.outer;
@@ -533,7 +550,7 @@ function unwrapRun(unit: Unit) {
  * 直接相减会差 1/64px，换上的 svg 就会让弹性列收窄。临时塞一个空的块级子元素量它的框，得到的就是布局值
  */
 function exactContentBox(doc: Document, el: Element): BoxRect {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   const vertical = win.getComputedStyle(el).writingMode !== 'horizontal-tb';
   const probe = doc.createElement('span');
   // 竖排时块的起始边在右（vertical-rl）或左（vertical-lr），空块是一条竖线：它的高就是内容盒的行向长度，左边是坐标原点
@@ -550,27 +567,18 @@ function exactContentBox(doc: Document, el: Element): BoxRect {
 /**
  * 逐字（字素簇）量位置，坐标相对单元内容盒的原点（竖排 rl 在右上角，与服务端的取法相同）。web：原稿用上的网页字体名
  */
-function measureChars(doc: Document, unit: Unit, web: Set<string>) {
-  const win = doc.defaultView;
+function measureChars(doc: Document, unit: Located, web: Set<string>): Measured | string {
+  const win = viewOf(doc);
   const content = exactContentBox(doc, unit.box);
-  unit.w = content.w;
-  unit.h = content.h;
-  unit.vertical = win.getComputedStyle(unit.box).writingMode !== 'horizontal-tb';
-  unit.rtl = win.getComputedStyle(unit.box).direction === 'rtl';
+  const vertical = win.getComputedStyle(unit.box).writingMode !== 'horizontal-tb';
   // 每个字记下字号（透明复制层用）与原稿用上的网页字体（缺文件时整段不转）
   const styleOf = new Map<Element, CharStyle>();
-  const charStyle = (el: Element) => {
-    let cached = styleOf.get(el);
-    if (!cached) {
+  const charStyle = (el: Element) =>
+    styleOf.getOrInsertComputed(el, () => {
       const style = win.getComputedStyle(el);
-      styleOf.set(
-        el,
-        (cached = { size: parseFloat(style.fontSize), family: style.fontFamily, web: webIn(style.fontFamily, web) }),
-      );
-    }
-    return cached;
-  };
-  unit.chars = [];
+      return { size: parseFloat(style.fontSize), family: style.fontFamily, web: webIn(style.fontFamily, web) };
+    });
+  const chars: RawChar[] = [];
   const range = doc.createRange();
   for (const t of textNodes(unit.nodes)) {
     for (const { segment, index } of segmenter.segment(t.data)) {
@@ -578,12 +586,12 @@ function measureChars(doc: Document, unit: Unit, web: Set<string>) {
       range.setStart(t, index);
       range.setEnd(t, index + segment.length);
       const rect = range.getClientRects()[0];
-      if (!rect || (!(unit.vertical ? rect.height : rect.width) && !segment.trim())) {
+      if (!rect || (!(vertical ? rect.height : rect.width) && !segment.trim())) {
         // 行末折行处的空格不占位置（没有矩形），但复制出来的文字里要有它，记在前一个字上
-        if (!segment.trim() && unit.chars.length) unit.chars[unit.chars.length - 1].trail = true;
+        if (!segment.trim() && chars.length) chars[chars.length - 1].trail = true;
         continue;
       }
-      const char: CharBox = {
+      const char: RawChar = {
         t,
         i: index,
         s: segment,
@@ -591,36 +599,40 @@ function measureChars(doc: Document, unit: Unit, web: Set<string>) {
         y: rect.top - content.y,
         w: rect.width,
         h: rect.height,
-        st: charStyle(t.parentElement),
+        st: charStyle(t.parentElement ?? unit.box),
         space: !segment.trim() || segment === '\u00a0',
       };
       // 竖排的"基线"是列的中线：直立的字在字框里左右居中（实测与字框中线差不到 0.3px）
-      if (unit.vertical) Object.assign(char, { base: char.x + char.w / 2 });
-      unit.chars.push(char);
+      if (vertical) char.base = char.x + char.w / 2;
+      chars.push(char);
     }
   }
-  unit.fail = !unit.chars.some(char => !char.space) ? 'empty' : unit.vertical ? null : baselines(doc, unit, content);
+  if (!chars.some(char => !char.space)) return 'empty';
+  if (!vertical && !baselines(doc, chars, content)) return 'baseline';
+  if (!chars.every((char): char is CharBox => char.space || char.base != null)) return 'baseline';
+  const rtl = win.getComputedStyle(unit.box).direction === 'rtl';
+  return { w: content.w, h: content.h, vertical, rtl, chars };
 }
 /**
  * 基线：同一行里首尾相接的字分成一段，在段末最后一个非空白字后面临时插一个零尺寸行内块，它的底边就是这一行的基线。
  * 标记插在本来就断行（或不断行）的位置之后、宽度为零，不改变断行；插入前后字的纵向位置不变才采信。
  */
-function baselines(doc: Document, unit: Unit, content: BoxRect) {
-  const segments: CharBox[][] = [];
-  let current: CharBox[] | null = null;
-  for (const char of unit.chars) {
-    const prev = current && current[current.length - 1];
+function baselines(doc: Document, chars: RawChar[], content: BoxRect): boolean {
+  const segments: RawChar[][] = [];
+  for (const char of chars) {
+    const current = segments.at(-1),
+      prev = current?.at(-1);
     // 首尾相接：从左到右的字接在前一个字的右边，从右到左的接在左边
     const same =
       prev &&
       (Math.abs(char.x - (prev.x + prev.w)) < 0.6 || Math.abs(char.x + char.w - prev.x) < 0.6) &&
       char.y < prev.y + prev.h &&
       prev.y < char.y + char.h;
-    if (same) current.push(char);
-    else segments.push((current = [char]));
+    if (current && same) current.push(char);
+    else segments.push([char]);
   }
   const range = doc.createRange();
-  const rectOf = (char: CharBox) => {
+  const rectOf = (char: RawChar) => {
     range.setStart(char.t, char.i);
     range.setEnd(char.t, char.i + char.s.length);
     return range.getClientRects()[0];
@@ -639,18 +651,17 @@ function baselines(doc: Document, unit: Unit, content: BoxRect) {
     rest.remove();
     t.data = data;
     const rect = rectOf(last);
-    if (!rect || Math.abs(rect.top - content.y - last.y) > 0.5 || Math.abs(rect.height - last.h) > 0.5)
-      return 'baseline';
+    if (!rect || Math.abs(rect.top - content.y - last.y) > 0.5 || Math.abs(rect.height - last.h) > 0.5) return false;
     for (const char of segment) char.base = base;
   }
-  return unit.chars.some(char => !char.space && char.base == null) ? 'baseline' : null;
+  return true;
 }
 
 /**
  * 单元的快照：服务端照它重排版。块写明继承属性与几项块级属性；子孙元素只写与父元素不同的继承属性、与初始值不同的行内属性；
  * 零占位的浮动元素不带（它们留在原处，不进轮廓）。chars 是逐字的框，下标按快照里全部文字连起来计
  */
-function snapshot(win: Window, unit: Unit): { unit: GlyphUnit; elements: number; text: number } {
+function snapshot(win: Window, unit: MeasuredUnit): { unit: GlyphUnit; elements: number; text: number } {
   const boxStyle = win.getComputedStyle(unit.box);
   const style: Record<string, string> = {};
   for (const prop of [...SNAP_INHERITED, ...SNAP_BOX]) {
@@ -687,7 +698,8 @@ function snapshot(win: Window, unit: Unit): { unit: GlyphUnit; elements: number;
           style: diff,
           kids: walk(computed, [...el.childNodes]),
         };
-        if (el.hasAttribute('lang')) node.lang = el.getAttribute('lang');
+        const lang = el.getAttribute('lang');
+        if (lang != null) node.lang = lang;
         out.push(node);
       }
     }
@@ -705,14 +717,29 @@ function snapshot(win: Window, unit: Unit): { unit: GlyphUnit; elements: number;
 }
 
 /**
- * 各单元的字形分批问服务端，结果记在 unit.drawn。用到网页字体时先取字体文件（只取一次）；文件取不到的字体，用到它的单元不转。
- * 没装 Chrome 之类的错误整体抛出，由 outline 记下
+ * 各单元的字形分批问服务端，返回取到字形的单元；没转成的记下 unit.fail。用到网页字体时先取字体文件（只取一次）；
+ * 文件取不到的字体，用到它的单元不转。没装 Chrome 之类的错误整体抛出，由 outline 记下
  */
-async function fetchOutlines(win: Window, units: Unit[], ctx: OutlineCtx, notes: OutlineNotes) {
-  const glyphs: (req: GlyphRequest) => Promise<GlyphResponse> = ctx.glyphs;
+async function fetchOutlines(
+  win: Window,
+  units: MeasuredUnit[],
+  ctx: OutlineCtx,
+  notes: OutlineNotes,
+): Promise<Map<MeasuredUnit, Ink>> {
+  const glyphs = ctx.glyphs;
+  // 服务端的原因 → 本模块的原因代码（文案 why.<代码>）：排版对不上是 relayout，读不出轮廓归到 font 并记下 miss.render
+  const WHY: Record<string, string> = { mismatch: 'relayout', color: 'color', effect: 'effect', render: 'font' };
+  const inks = new Map<MeasuredUnit, Ink>();
+  const settle = (unit: MeasuredUnit, drawn: Drawn) => {
+    if (drawn.fail == null) return void inks.set(unit, drawn);
+    unit.fail = WHY[drawn.fail] || 'font';
+    if (unit.fail === 'font') noteMiss(notes, 'render');
+    if (drawn.detail) unit.detail = [drawn.detail];
+  };
   let fonts: GlyphFont[] = [];
-  if (units.some(unit => !unit.fail && unit.chars.some(char => !char.space && char.st.web))) {
-    ctx.webResolved ??= resolveWebFonts(ctx.webUsed, ctx.fontBytes);
+  const webUsed = ctx.webUsed;
+  if (webUsed && units.some(unit => !unit.fail && unit.chars.some(char => !char.space && char.st.web))) {
+    ctx.webResolved ??= resolveWebFonts(webUsed, ctx.fontBytes);
     const resolved = await ctx.webResolved;
     fonts = resolved.fonts;
     for (const unit of units)
@@ -728,7 +755,7 @@ async function fetchOutlines(win: Window, units: Unit[], ctx: OutlineCtx, notes:
   }
   const dpr = win.devicePixelRatio || 1;
   const cacheSig = JSON.stringify([dpr, ctx.webSig || '']);
-  const todo: { u: Unit; key: string; unit: GlyphUnit; elements: number; text: number }[] = [];
+  const todo: { u: MeasuredUnit; key: string; unit: GlyphUnit; elements: number; text: number }[] = [];
   for (const unit of units) {
     if (unit.fail) continue;
     let snap: ReturnType<typeof snapshot>;
@@ -743,7 +770,8 @@ async function fetchOutlines(win: Window, units: Unit[], ctx: OutlineCtx, notes:
       continue;
     }
     const key = cacheSig + JSON.stringify(snap.unit);
-    if (unitCache.has(key)) unit.drawn = unitCache.get(key);
+    const cached = unitCache.get(key);
+    if (cached) settle(unit, cached);
     else todo.push({ u: unit, key, ...snap });
   }
   for (let i = 0; i < todo.length;) {
@@ -778,19 +806,15 @@ async function fetchOutlines(win: Window, units: Unit[], ctx: OutlineCtx, notes:
             ]),
             fills: result.fills,
           };
-      if (unitCache.size > 4000) unitCache.delete(unitCache.keys().next().value);
+      if (unitCache.size > 4000) {
+        const oldest = unitCache.keys().next();
+        if (!oldest.done) unitCache.delete(oldest.value);
+      }
       unitCache.set(item.key, drawn);
-      item.u.drawn = drawn;
+      settle(item.u, drawn);
     });
   }
-  // 服务端的原因 → 本模块的原因代码（文案 why.<代码>）：排版对不上是 relayout，读不出轮廓归到 font 并记下 miss.render
-  const WHY: Record<string, string> = { mismatch: 'relayout', color: 'color', effect: 'effect', render: 'font' };
-  for (const unit of units)
-    if (!unit.fail && unit.drawn.fail) {
-      unit.fail = WHY[unit.drawn.fail] || 'font';
-      if (unit.fail === 'font') noteMiss(notes, 'render');
-      if (unit.drawn.detail) unit.detail = [unit.drawn.detail];
-    }
+  return inks;
 }
 
 /**
@@ -799,22 +823,22 @@ async function fetchOutlines(win: Window, units: Unit[], ctx: OutlineCtx, notes:
  * 几个轮廓累积起来就把下文挤动。所以 svg 做成第一行里的行内块，比一行矮（不撑高行盒），其余各行由 <br> + 连接符撑出，
  * 字形画在 svg 的溢出区里。行向长度加 1/256px：截断和四舍五入都落回原值。竖排时"行"是列，宽高对调
  */
-function shellSvg(doc: Document, unit: Unit) {
-  const lines = new Set(unit.chars.filter(char => !char.space).map(char => Math.round(char.base * 100))).size;
-  const lineHeight = parseFloat(doc.defaultView.getComputedStyle(unit.box).lineHeight);
-  unit.lines = lines;
-  unit.thick = Math.max(
+function shellSvg(doc: Document, unit: MeasuredUnit, ink: Ink): DrawnUnit {
+  const lines = new Set(unit.chars.flatMap(char => (char.space ? [] : [Math.round(char.base * 100)]))).size;
+  const lineHeight = parseFloat(viewOf(doc).getComputedStyle(unit.box).lineHeight);
+  const thick = Math.max(
     1,
     Math.min(lineHeight > 0 ? lineHeight : Infinity, (unit.vertical ? unit.w : unit.h) / lines) - 1 / 32,
   );
   const svg = doc.createElementNS(SVG, 'svg');
-  sizeSvg(svg, unit, 0);
+  const drawn: DrawnUnit = Object.assign(unit, { ink, svg, lines, thick, ox: 0, oy: 0 });
+  sizeSvg(svg, drawn, 0);
   svg.setAttribute('role', 'img');
   svg.setAttribute('aria-label', unit.d.text.slice(0, 500));
-  return svg;
+  return drawn;
 }
 /** inset：svg 在行向上离内容盒起始边的距离（首行缩进等），行向长度扣掉它，免得伸出内容盒 */
-function sizeSvg(svg: SVGSVGElement, unit: Unit, inset: number) {
+function sizeSvg(svg: SVGSVGElement, unit: DrawnUnit, inset: number) {
   const len = f3((unit.vertical ? unit.h : unit.w) - inset + 1 / 256),
     thick = f3(unit.thick);
   const [boxW, boxH] = unit.vertical ? [thick, len] : [len, thick];
@@ -829,7 +853,7 @@ function sizeSvg(svg: SVGSVGElement, unit: Unit, inset: number) {
  * 放进版面后的空壳里画字：服务端给的字形按颜色、不透明度、描边与矩阵的线性部分分组，每组拼成一条 path
  * （变换只写一次，各字首点按自己的原点偏移），外加透明复制层。字形坐标相对内容盒，减去 svg 相对内容盒的偏移（竖排的列、首行缩进）
  */
-function drawSvg(doc: Document, unit: Unit, opts: OutlineCtx['o']) {
+function drawSvg(doc: Document, unit: DrawnUnit, opts: OutlineCtx['o']) {
   const svg = unit.svg,
     rect = svg.getBoundingClientRect(),
     content = exactContentBox(doc, unit.box);
@@ -838,8 +862,7 @@ function drawSvg(doc: Document, unit: Unit, opts: OutlineCtx['o']) {
   unit.oy = near0(rect.top - content.y);
   sizeSvg(svg, unit, unit.vertical ? unit.oy : unit.ox);
   const groups = new Map<string, { m: number[]; fill: string; alpha: number; w: number; d: string }>();
-  // 只给没失败的单元画：fetchOutlines 已把 drawn.fail 记到 unit.fail
-  const drawn = unit.drawn as Extract<Drawn, { glyphs: unknown }>;
+  const drawn = unit.ink;
   for (const [path, matrix, fill, alpha, w] of drawn.glyphs) {
     const [a, b, c, d] = matrix,
       e = matrix[4] - unit.ox,
@@ -847,8 +870,7 @@ function drawSvg(doc: Document, unit: Unit, opts: OutlineCtx['o']) {
     const det = a * d - b * c;
     if (!det) continue;
     const key = [fill, alpha, w, a, b, c, d].join('|');
-    let group = groups.get(key);
-    if (!group) groups.set(key, (group = { m: [a, b, c, d, e, f], fill, alpha, w, d: '' }));
+    const group = groups.getOrInsertComputed(key, () => ({ m: [a, b, c, d, e, f], fill, alpha, w, d: '' }));
     // 组矩阵 (a b c d E F) 把字体单位 (x, y) 映到 (E + a·x + c·y, F + b·x + d·y)：这个字的原点在组里的坐标是 (e − E, f − F) 反解出来的
     const dx = e - group.m[4],
       dy = f - group.m[5];
@@ -897,11 +919,11 @@ function keepInside(svg: SVGSVGElement, content: BoxRect, vertical: boolean) {
     const start = vertical ? rect.top : rect.left,
       end = vertical ? rect.bottom : rect.right;
     const shift = start < lo ? lo - start + 0.25 : end > hi ? hi - end - 0.25 : 0;
-    if (shift)
+    const positions = t.getAttribute(attr);
+    if (shift && positions)
       t.setAttribute(
         attr,
-        t
-          .getAttribute(attr)
+        positions
           .split(' ')
           .map(v => f3(+v + shift))
           .join(' '),
@@ -913,7 +935,7 @@ function keepInside(svg: SVGSVGElement, content: BoxRect, vertical: boolean) {
  * 透明复制层：每行一个 <text>，逐字给 x；空格写成不换行空格，免得被 SVG 的空白折叠吃掉、错开后面的位置。
  * 从右到左的段落里 <text> 继承 rtl，每个字以右边对准 x，所以 x 取字框的右边；字的先后照原文，复制出来的顺序不变
  */
-function copyLines(unit: Unit): ((doc: Document) => SVGTextElement)[] {
+function copyLines(unit: DrawnUnit): ((doc: Document) => SVGTextElement)[] {
   const lines: CopyLine[] = [];
   let line: CopyLine | null = null,
     pending = false;
@@ -956,22 +978,20 @@ function copyLines(unit: Unit): ((doc: Document) => SVGTextElement)[] {
  * 竖排的透明复制层：每列一个 <text>，逐字给 x（列中线）、y（字框上沿）。svg 从单元的块继承竖排，
  * 竖排的 <text> 以中线定横向位置、以字的上沿定纵向位置，透明的字逐个落在原来的字框里
  */
-function copyColumns(unit: Unit): ((doc: Document) => SVGTextElement)[] {
+function copyColumns(unit: DrawnUnit): ((doc: Document) => SVGTextElement)[] {
   const columns: CopyColumn[] = [];
   let column: CopyColumn | null = null,
     pending = false;
   for (const char of unit.chars) {
-    if (
-      !column ||
-      Math.abs(char.base - column.base) > 0.5 ||
-      char.st.size !== column.size ||
-      char.y < column.bottom - 0.6
-    )
-      columns.push((column = { base: char.base, size: char.st.size, xs: [], ys: [], text: '', bottom: 0 }));
+    // 竖排时每个字（含空白）都量了列中线
+    const base = char.base ?? char.x + char.w / 2;
+    if (!column || Math.abs(base - column.base) > 0.5 || char.st.size !== column.size || char.y < column.bottom - 0.6)
+      columns.push((column = { base, size: char.st.size, xs: [], ys: [], text: '', bottom: 0 }));
+    const current = column;
     const at = (count: number) => {
       for (let i = 0; i < count; i++) {
-        column.xs.push(f3(char.base - unit.ox));
-        column.ys.push(f3(char.y - unit.oy));
+        current.xs.push(f3(base - unit.ox));
+        current.ys.push(f3(char.y - unit.oy));
       }
     };
     if (pending) {
@@ -998,13 +1018,13 @@ function copyColumns(unit: Unit): ((doc: Document) => SVGTextElement)[] {
 }
 /** svg 的 cqw 基准：从它的父级（单元的块）往上找最近的查询容器，和 annotateContainerWidths 的取法一致 */
 const nearestCw = (win: Window, box: Element, root: Element) => {
-  let container = box;
+  let container: Element | null = box;
   while (container && container !== root && win.getComputedStyle(container).containerType === 'normal')
     container = container.parentElement;
   return contentBox(win, container || root).w;
 };
 const esc = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const originalHtml = (unit: Unit) =>
+const originalHtml = (unit: Located) =>
   unit.d.from == null
     ? unit.box.innerHTML
     : unit.nodes
@@ -1024,61 +1044,64 @@ export async function outline(
   ctx: OutlineCtx,
   notes: OutlineNotes,
 ): Promise<OutlineResult[]> {
-  const win = doc.defaultView;
+  const win = viewOf(doc);
   const base = measure(doc, true);
   const noTransformStyle = doc.createElement('style');
   noTransformStyle.setAttribute('data-wxc-tool', '');
   noTransformStyle.textContent = NO_TRANSFORM;
   doc.head.appendChild(noTransformStyle);
   const units = descs.map(desc => locate(doc, root, desc));
+  const located = units.filter(unit => 'box' in unit);
   const web = ctx.web || new Set<string>();
-  for (const unit of units)
-    if (!unit.fail) {
-      unit.html = originalHtml(unit);
-      unit.orig = [...unit.nodes];
-      wrapRun(doc, unit);
-      measureChars(doc, unit, web);
-      unit.cw = nearestCw(win, unit.box, root);
-    }
-  if (units.some(unit => !unit.fail)) {
+  const measured: MeasuredUnit[] = [];
+  for (const unit of located) {
+    const html = originalHtml(unit),
+      orig = [...unit.nodes];
+    wrapRun(doc, unit);
+    const result = measureChars(doc, unit, web);
+    if (typeof result === 'string') unit.fail = result;
+    else measured.push(Object.assign(unit, result, { html, orig, cw: nearestCw(win, unit.box, root) }));
+  }
+  let inks = new Map<MeasuredUnit, Ink>();
+  if (measured.length) {
     try {
-      await fetchOutlines(win, units, ctx, notes);
+      inks = await fetchOutlines(win, measured, ctx, notes);
     } catch (e) {
-      notes.server =
-        e instanceof CodedError ? msg(e.key, e.params) : msg('common.raw', { msg: String((e && e.message) || e) });
-      for (const unit of units) if (!unit.fail) unit.fail = 'server';
+      notes.server = e instanceof CodedError ? msg(e.key, e.params) : msg('common.raw', { msg: messageOf(e) });
+      for (const unit of measured) unit.fail = 'server';
     }
   }
-  const apply = (unit: Unit) => {
+  const apply = (unit: DrawnUnit) => {
     if (unit.d.from != null && unit.box === unit.outer) wrapRun(doc, unit);
     const rest: Node[] = [];
     for (let i = 1; i < unit.lines; i++) rest.push(doc.createElement('br'), doc.createTextNode(WJ));
     unit.box.replaceChildren(...unit.orig.filter(node => isFloat(node)), unit.svg, ...rest);
   };
-  const revert = (unit: Unit) => {
+  const revert = (unit: DrawnUnit) => {
     unit.box.replaceChildren(...unit.orig);
     unwrapRun(unit);
   };
-  for (const unit of units) {
-    if (unit.fail) {
-      unwrapRun(unit);
-      continue;
-    }
-    unit.svg = shellSvg(doc, unit);
-    unit.svg.setAttribute('data-wxc-unit', String(descs.indexOf(unit.d)));
-    apply(unit);
+  // 没取到字形的单元（含 measured 里后来失败的）还原包装
+  for (const unit of located) if (unit.fail) unwrapRun(unit);
+  const applied: DrawnUnit[] = [];
+  for (const unit of measured) {
+    const ink = inks.get(unit);
+    if (unit.fail || !ink) continue;
+    const drawn = shellSvg(doc, unit, ink);
+    drawn.svg.setAttribute('data-wxc-unit', String(descs.indexOf(unit.d)));
+    apply(drawn);
+    applied.push(drawn);
   }
   // 全部换上之后再量各 svg 的位置、画字：前面的单元换上后，后面单元的块可能挪位，但 svg 相对自己内容盒的偏移不变
-  for (const unit of units) if (!unit.fail) drawSvg(doc, unit, ctx.o);
+  for (const unit of applied) drawSvg(doc, unit, ctx.o);
   noTransformStyle.remove();
-  const applied = units.filter(unit => !unit.fail);
   // 被换掉的内层元素不在新的测量里，diffBoxes 会跳过它们；其余所有元素都不许动，连 1/64px 也不行（会翻转下文的整像素取整）
   const moved = () => {
     const now = measure(doc, true);
-    return diffBoxes(base, now, 0.01).map(id => {
+    return diffBoxes(base, now, 0.01).flatMap(id => {
       const a = base.get(id),
         b = now.get(id);
-      return `${id} ${(['x', 'y', 'w', 'h'] as const).map(k => (b[k] - a[k]).toFixed(4)).join(',')}`;
+      return a && b ? [`${id} ${(['x', 'y', 'w', 'h'] as const).map(k => (b[k] - a[k]).toFixed(4)).join(',')}`] : [];
     });
   };
   if (applied.length && moved().length) {
@@ -1095,28 +1118,28 @@ export async function outline(
     }
   }
   if (applied.length) annotateContainerWidths(doc, root);
-  return units.map((unit): OutlineResult =>
-    unit.fail
-      ? { ok: false, fail: unit.fail, detail: unit.detail }
-      : {
-          ok: true,
-          cw: unit.cw,
-          w: unit.w,
-          h: unit.h,
-          html: unit.html,
-          vertical: unit.vertical,
-          chars: unit.chars.filter(char => !char.space).length,
-          // 相对 svg 的 [行向位置, 行（列）的位置, 字号]
-          sig: unit.chars
-            .filter(char => !char.space)
-            .map(char =>
-              unit.vertical
-                ? [char.y - unit.oy, char.base - unit.ox, char.st.size]
-                : [char.x - unit.ox, char.base - unit.oy, char.st.size],
-            ),
-          bytes: unit.svg.outerHTML.length - unit.html.length,
-        },
-  );
+  const drawnOf = new Map(applied.map(unit => [unit.d, unit]));
+  return units.map((unit): OutlineResult => {
+    const drawn = drawnOf.get(unit.d);
+    if (!drawn || drawn.fail) return { ok: false, fail: unit.fail || 'other', detail: unit.detail };
+    const glyphs = drawn.chars.filter(char => !char.space);
+    return {
+      ok: true,
+      cw: drawn.cw,
+      w: drawn.w,
+      h: drawn.h,
+      html: drawn.html,
+      vertical: drawn.vertical,
+      chars: glyphs.length,
+      // 相对 svg 的 [行向位置, 行（列）的位置, 字号]
+      sig: glyphs.map(char =>
+        drawn.vertical
+          ? [char.y - drawn.oy, char.base - drawn.ox, char.st.size]
+          : [char.x - drawn.ox, char.base - drawn.oy, char.st.size],
+      ),
+      bytes: drawn.svg.outerHTML.length - drawn.html.length,
+    };
+  });
 }
 
 /** 两个宽度的结果比一比：逐字位置按容器宽度等比缩放的写 viewBox（随屏宽缩放），完全不变的去掉 viewBox（固定像素） */
@@ -1170,10 +1193,13 @@ export function finalize(html: string, results: OutlineResult[], verdicts: Outli
       if (verdict.mode === 'fixed') svg.removeAttribute('viewBox');
       return;
     }
+    // 片段里有这个 svg，说明这个宽度换上了轮廓、结果是 ok 的
+    const result = results[i],
+      box = svg.parentElement;
+    if (!result.ok || !box) return;
     const template = parser.createElement('template');
-    template.innerHTML = results[i].html.replace(/\sdata-wxc-float=""/g, '');
+    template.innerHTML = result.html.replace(/\sdata-wxc-float=""/g, '');
     // 原文里已含被提到 svg 前面的浮动元素，整体换回即可
-    const box = svg.parentElement;
     if (box.hasAttribute('data-wxc-wrap')) box.replaceWith(template.content);
     else box.replaceChildren(template.content);
   });

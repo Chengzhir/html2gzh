@@ -49,28 +49,39 @@ export function parseFns(str: string | null | undefined, box: PercentBox, fontSi
   if (text.replace(re, '').trim()) return null;
   const out: TransformFn[] = [];
   for (const [, name, body] of text.matchAll(re)) {
-    const args = body.split(',').map(part => part.trim());
-    const lengthOf = (value: string, axis: 'x' | 'y') => length(value, axis, box, fontSize);
-    let fn: TransformFn | null = null;
-    if (name === 'translate')
-      fn = { t: 'translate', a: [lengthOf(args[0], 'x'), args[1] != null ? lengthOf(args[1], 'y') : 0] };
-    else if (name === 'translateX') fn = { t: 'translate', a: [lengthOf(args[0], 'x'), 0] };
-    else if (name === 'translateY') fn = { t: 'translate', a: [0, lengthOf(args[0], 'y')] };
-    else if (name === 'scale')
-      fn = { t: 'scale', a: [factor(args[0]), args[1] != null ? factor(args[1]) : factor(args[0])] };
-    else if (name === 'scaleX') fn = { t: 'scale', a: [factor(args[0]), 1] };
-    else if (name === 'scaleY') fn = { t: 'scale', a: [1, factor(args[0])] };
-    else if (name === 'rotate' || name === 'rotateZ') fn = { t: 'rotate', a: [angle(args[0])] };
-    else if (name === 'skewX' || name === 'skewY') fn = { t: name, a: [angle(args[0])] };
-    else if (name === 'skew') {
-      const x = angle(args[0]),
-        y = args[1] != null ? angle(args[1]) : 0;
-      fn = y === 0 ? { t: 'skewX', a: [x] } : x === 0 ? { t: 'skewY', a: [y] } : null;
-    }
-    if (!fn || fn.a.some(value => value == null || !Number.isFinite(value))) return null;
-    out.push(fn);
+    const fn = readFn(
+      name,
+      body.split(',').map(part => part.trim()),
+      (value, axis) => length(value, axis, box, fontSize),
+    );
+    if (!fn) return null;
+    const [type, args] = fn;
+    if (!args.every((value): value is number => value != null && Number.isFinite(value))) return null;
+    out.push({ t: type, a: args });
   }
   return out;
+}
+/** 一个 CSS 变换函数 → [类型, 参数]；参数读不出来的是 null，SMIL 表达不了的函数返回 null */
+function readFn(
+  name: string,
+  args: string[],
+  lengthOf: (value: string, axis: 'x' | 'y') => number | null,
+): [TransformType, (number | null)[]] | null {
+  if (name === 'translate')
+    return ['translate', [lengthOf(args[0], 'x'), args[1] != null ? lengthOf(args[1], 'y') : 0]];
+  if (name === 'translateX') return ['translate', [lengthOf(args[0], 'x'), 0]];
+  if (name === 'translateY') return ['translate', [0, lengthOf(args[0], 'y')]];
+  if (name === 'scale') return ['scale', [factor(args[0]), args[1] != null ? factor(args[1]) : factor(args[0])]];
+  if (name === 'scaleX') return ['scale', [factor(args[0]), 1]];
+  if (name === 'scaleY') return ['scale', [1, factor(args[0])]];
+  if (name === 'rotate' || name === 'rotateZ') return ['rotate', [angle(args[0])]];
+  if (name === 'skewX' || name === 'skewY') return [name, [angle(args[0])]];
+  if (name === 'skew') {
+    const x = angle(args[0]),
+      y = args[1] != null ? angle(args[1]) : 0;
+    return y === 0 ? ['skewX', [x]] : x === 0 ? ['skewY', [y]] : null;
+  }
+  return null;
 }
 /** 单独的 translate / rotate / scale 属性值（空格分隔） */
 export function parseProp(
@@ -113,13 +124,9 @@ export function align(lists: TransformFn[][]): { types: TransformType[]; args: n
   const n = Math.max(0, ...lists.map(list => list.length)),
     types: TransformType[] = [];
   for (let i = 0; i < n; i++) {
-    let type: TransformType | null = null;
-    for (const list of lists)
-      if (list[i]) {
-        if (type && type !== list[i].t) return null;
-        type = list[i].t;
-      }
-    types.push(type);
+    const present = lists.filter(list => list[i]).map(list => list[i].t);
+    if (present.some(type => type !== present[0])) return null;
+    types.push(present[0]);
   }
   return { types, args: lists.map(list => types.map((type, i) => (list[i] ? list[i].a : IDENT[type]))) };
 }

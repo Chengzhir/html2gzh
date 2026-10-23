@@ -20,6 +20,7 @@ import type { CssAnims } from './css.ts';
 import { fixRefs } from './paint.ts';
 import { msg } from '../types.ts';
 import type { FindingLevel, FindingPart, Msg, Param } from '../types.ts';
+import { viewOf } from '../util.ts';
 
 /** SVG 转换的检查结果：文案 finding.svg.<code>，els 是要标出的最外层 svg */
 export interface SvgFinding {
@@ -43,7 +44,7 @@ export interface SvgContext extends RasterContext {
 /** 样式表删掉之前调用：建 id 表，读下 SVG 上的 CSS 动画 */
 export function prepareSvgs(doc: Document): SvgState | null {
   const ids = new Map<string, Element>();
-  for (const el of doc.querySelectorAll('[id]')) if (!ids.has(el.id)) ids.set(el.id, el);
+  for (const el of doc.querySelectorAll('[id]')) ids.getOrInsert(el.id, el);
   if (!doc.getElementsByTagNameNS(SVG_NS, 'svg').length) return null;
   return { ids, anims: captureCss(doc, ids) };
 }
@@ -80,7 +81,7 @@ export async function convertSvgs(
   ctx: SvgContext,
 ): Promise<{ stat?: SvgStat; findings: SvgFinding[] }> {
   if (!st) return { findings: [] };
-  const win = doc.defaultView,
+  const win = viewOf(doc),
     counts = tally(),
     rep = counts.add;
   const stat: SvgStat = {};
@@ -145,7 +146,10 @@ function findings(stat: SvgStat, counts: ReturnType<typeof tally>): SvgFinding[]
     els: Element[] = [],
     parts: FindingPart[] = [],
   ) => out.push({ level, code: 'svg.' + code, params, parts, els });
-  const done = DONE.filter(k => stat[k]).map(k => msg('finding.svg.done.' + k, { n: stat[k] }));
+  const done = DONE.flatMap(k => {
+    const n = stat[k];
+    return n ? [msg('finding.svg.done.' + k, { n })] : [];
+  });
   if (done.length) add('fixed', 'done', { n: done.length }, [], [{ items: done }]);
   const timing = keys.filter(k => k === 'timing');
   if (timing.length) add('warn', 'timing', { n: sum(timing) }, roots(timing));

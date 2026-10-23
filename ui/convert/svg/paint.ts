@@ -1,5 +1,5 @@
 // 有动画、不能画成位图的元素：裁切改写成嵌套 svg 视口或 CSS clip-path:path()，滤镜改写成 CSS 滤镜函数，渐变取平均色
-import { SVG_NS, isSvg, isAnim, isGraphics, inResource, ownAnims, URL_REF, mk, wrapG } from './dom.ts';
+import { SVG_NS, hrefOf, refId, isSvg, isAnim, isGraphics, inResource, ownAnims, URL_REF, mk, wrapG } from './dom.ts';
 import {
   shapeSegs,
   geometryReader,
@@ -14,6 +14,7 @@ import {
 } from './path.ts';
 import type { Matrix, PathSeg } from './path.ts';
 import { bakeStyleTransform } from './transform.ts';
+import { attrOf } from '../util.ts';
 import type { Report } from './dom.ts';
 
 type Rgba = number[];
@@ -36,17 +37,17 @@ const ownTf = (el: Element): Matrix => {
 /** 渐变的平均色（按色标区间加权）；跟着 href 继承色标 */
 function averageStops(gradient: Element, ids: Map<string, Element>, win: Window): Rgba | null {
   let stops: Element[] = [];
-  for (let node = gradient, i = 0; node && !stops.length && i < 8; i++) {
+  for (let node: Element | undefined = gradient, i = 0; node && !stops.length && i < 8; i++) {
     stops = [...node.children].filter(stop => stop.localName === 'stop');
-    const href = (node.getAttribute('href') || '').replace(/^#/, '');
-    node = href ? ids.get(href) : null;
+    const href: string | null = refId(hrefOf(node));
+    node = href ? ids.get(href) : undefined;
   }
   if (!stops.length) return null;
   const points = stops.map(stop => {
     const computed = win.getComputedStyle(stop),
       color = parseColor(computed.stopColor) || [0, 0, 0, 1];
     return {
-      o: Math.min(1, Math.max(0, parseFloat(stop.getAttribute('offset')) || 0)),
+      o: Math.min(1, Math.max(0, parseFloat(attrOf(stop, 'offset')) || 0)),
       c: [...color.slice(0, 3), color[3] * +computed.stopOpacity],
     };
   });
@@ -201,14 +202,13 @@ function rectClip(doc: Document, el: SVGGraphicsElement, shapes: ClipShape[]): b
     anims.some(
       a =>
         !/^(animate|set)$/.test(a.localName) ||
-        !/^(x|y|width|height)$/.test(a.getAttribute('attributeName')) ||
+        !/^(x|y|width|height)$/.test(attrOf(a, 'attributeName')) ||
         a.hasAttribute('by') ||
         a.getAttribute('additive') === 'sum',
     )
   )
     return false;
-  if (anims.filter(a => /^(x|y)$/.test(a.getAttribute('attributeName'))).length > 1 || !bakeStyleTransform(el))
-    return false;
+  if (anims.filter(a => /^(x|y)$/.test(attrOf(a, 'attributeName'))).length > 1 || !bakeStyleTransform(el)) return false;
   const x = m[0] * (g('x') || 0) + m[4],
     y = m[3] * (g('y') || 0) + m[5];
   // 裁切区域在元素自身变换之后的坐标系里：元素的变换（含变换动画）挪到最外层
@@ -236,8 +236,7 @@ function rectClip(doc: Document, el: SVGGraphicsElement, shapes: ClipShape[]): b
       if (copy.hasAttribute(k))
         copy.setAttribute(
           k,
-          copy
-            .getAttribute(k)
+          attrOf(copy, k)
             .split(';')
             .map(value => map(value.trim()))
             .join(';'),
@@ -247,19 +246,18 @@ function rectClip(doc: Document, el: SVGGraphicsElement, shapes: ClipShape[]): b
     // 视口挪动时内容要反向平移，才能留在原处
     const translate = mk(doc, 'animateTransform', { attributeName: 'transform', type: 'translate' });
     for (const k of a.getAttributeNames())
-      if (!/^(attributeName|values|from|to|additive|accumulate)$/.test(k)) translate.setAttribute(k, a.getAttribute(k));
+      if (!/^(attributeName|values|from|to|additive|accumulate)$/.test(k)) translate.setAttribute(k, attrOf(a, k));
     for (const k of ['values', 'from', 'to'])
       if (copy.hasAttribute(k))
         translate.setAttribute(
           k,
-          copy
-            .getAttribute(k)
+          attrOf(copy, k)
             .split(';')
             .map(v => (attrName === 'x' ? `${-v} ${-y}` : `${-x} ${-v}`))
             .join(';'),
         );
     if (a.localName === 'set') {
-      translate.setAttribute('values', translate.getAttribute('to'));
+      translate.setAttribute('values', attrOf(translate, 'to'));
       translate.removeAttribute('to');
     }
     inner.appendChild(translate);
