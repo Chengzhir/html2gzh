@@ -1,6 +1,6 @@
-import { ID, idOf, isHtmlEl, measure, diffBoxes, loadFrame, sleep, NO_TRANSFORM, viewOf } from './util.ts';
+import { ID, idOf, isHtmlEl, measure, diffBoxes, loadFrame, sleep, NO_TRANSFORM, tempStyle, viewOf } from './util.ts';
 import { collectRules, matchRules, cascadeOrder, toStyle } from './cascade.ts';
-import type { CascadeNotes, StyleEnv, UnitHits } from './cascade.ts';
+import type { CascadeNotes, MatchedSlots, StyleEnv, UnitHits } from './cascade.ts';
 import { convertPositions, correctOffsets, INHERITED } from './position.ts';
 import { cleanStructure, keepShapes, squashWhitespace, keepNoWrap, cleanAttributes } from './structure.ts';
 import { mergeWidths, annotateContainerWidths, stripTool, markIgnoreWidth } from './responsive.ts';
@@ -56,7 +56,6 @@ interface ConvertContext {
   svg: {
     raster: ((uri: string) => Promise<string>) | null;
     rasterCache: Map<string, RasterHit>;
-    spline: boolean;
     copyText: boolean;
   };
 }
@@ -128,10 +127,9 @@ export async function convert(
     webResolved: null,
     pins: new Map(),
     notes: { miss: new Map(), kinds: new Set(), server: null as Msg | null },
-    // spline：白名单属性的 <animate> 带 calcMode="spline" 存得住（2026-10-21 实测），缓动直接写成 keySplines
     sizes: { A: null, B: null },
     // copyText：画成位图的文字上方放透明文字，与转为路径的字共用一个选项
-    svg: { raster, rasterCache: new Map(), spline: true, copyText: options.svgCopy },
+    svg: { raster, rasterCache: new Map(), copyText: options.svgCopy },
   };
   const widthB = width < 400 ? width + 64 : width - 64;
   // 字体表的字号按 335px 正文宽折算：在两个转换宽度下量原稿字号，线性插值。主宽度就是 335 时不用量
@@ -490,6 +488,225 @@ interface ConvertAtResult {
   pageBg: string | undefined;
 }
 
+/** 层叠结果换算成内联样式时要的环境：rem、视口宽、最近查询容器与包含块的尺寸；hit 记各类换算的次数 */
+function styleEnv(doc: Document, fontRules: FontRule[]) {
+  const win = viewOf(doc),
+    computedStyleOf = (el: Element) => win.getComputedStyle(el);
+  const hit: UnitHits = { cq: 0, rem: 0, vw: 0, pct: 0, badVar: 0, font: 0 };
+  const rem = parseFloat(computedStyleOf(doc.documentElement).fontSize) || 16;
+  const layoutBox = (el: Element) => {
+    using _noTransform = tempStyle(doc, NO_TRANSFORM);
+    return el.getBoundingClientRect();
+  };
+  // 用布局盒（不含 transform）的小数尺寸；clientWidth 会取整，换算出的 px 就差 1
+  const box = (el: Element) => {
+    const rect = layoutBox(el),
+      computed = computedStyleOf(el);
+    return {
+      pw: rect.width - parseFloat(computed.borderLeftWidth) - parseFloat(computed.borderRightWidth),
+      ph: rect.height - parseFloat(computed.borderTopWidth) - parseFloat(computed.borderBottomWidth),
+      c: computed,
+    };
+  };
+  const contentW = (el: Element) => {
+    const { pw, c: computed } = box(el);
+    return pw - parseFloat(computed.paddingLeft) - parseFloat(computed.paddingRight);
+  };
+  const envFor = (el: Element, pseudoAbs?: boolean): StyleEnv => ({
+    hit,
+    rem,
+    vw: win.innerWidth,
+    fontRules,
+    svg: el.namespaceURI === 'http://www.w3.org/2000/svg' && pseudoAbs === undefined,
+    cq: () => {
+      for (
+        let ancestor = pseudoAbs !== undefined ? el : el.parentElement;
+        ancestor;
+        ancestor = ancestor.parentElement
+      ) {
+        if (computedStyleOf(ancestor).containerType !== 'normal') {
+          const { ph, c: computed } = box(ancestor);
+          return {
+            w: contentW(ancestor),
+            h: ph - parseFloat(computed.paddingTop) - parseFloat(computed.paddingBottom),
+          };
+        }
+      }
+      return { w: win.innerWidth, h: win.innerHeight };
+    },
+    // 只有绝对定位元素的 % 要换算：它改成浮动后包含块变了；其余元素的 % 在成品里照样相对原来的父级
+    cbw: () => {
+      const abs = pseudoAbs !== undefined ? pseudoAbs : /absolute|fixed/.test(computedStyleOf(el).position);
+      if (!abs) return null;
+      let ancestor = pseudoAbs !== undefined ? el : el.parentElement;
+      while (ancestor && ancestor !== doc.body && computedStyleOf(ancestor).position === 'static')
+        ancestor = ancestor.parentElement;
+      return ancestor && ancestor !== doc.body ? box(ancestor).pw : win.innerWidth;
+    },
+  });
+  return { hit, envFor };
+}
+
+/** 逐元素（含 ::before/::after）把层叠结果写成内联样式；want 记下原稿中 FORCED 各属性的计算值，供补回 */
+function planStyles(
+  doc: Document,
+  matched: Map<Element, MatchedSlots>,
+  envFor: (el: Element, pseudoAbs?: boolean) => StyleEnv,
+  scratch: HTMLElement,
+  notes: CascadeNotes,
+) {
+  const win = viewOf(doc);
+  const forcedOf = (computed: CSSStyleDeclaration) =>
+    Object.fromEntries(FORCED.map(prop => [prop, computed.getPropertyValue(prop)]));
+  const want = new Map<string, Record<string, string>>();
+  const plans: [Element, string][] = [],
+    pseudos: PseudoPlan[] = [];
+  for (const el of doc.body.querySelectorAll('*')) {
+    const slots = matched.get(el);
+    const inline = el.getAttribute('style');
+    const id = el.getAttribute(ID);
+    if (id) want.set(id, forcedOf(win.getComputedStyle(el)));
+    if (slots || inline)
+      plans.push([
+        el,
+        toStyle(cascadeOrder(slots ? slots.self : [], inline), win.getComputedStyle(el), envFor(el), scratch),
+      ]);
+    if (
+      !slots ||
+      !isHtmlEl(el) ||
+      /^(img|input|video|iframe|canvas|br|hr|textarea|select|object|embed)$/.test(el.localName)
+    )
+      continue;
+    for (const slot of ['before', 'after'] as const) {
+      if (!slots[slot].length) continue;
+      const pseudoComputed = win.getComputedStyle(el, '::' + slot);
+      if (pseudoComputed.content === 'none' || pseudoComputed.content === 'normal' || pseudoComputed.display === 'none')
+        continue;
+      const text = contentText(pseudoComputed.content, el, notes);
+      if (text == null) continue;
+      const style = toStyle(
+        cascadeOrder(slots[slot]),
+        pseudoComputed,
+        envFor(el, /absolute|fixed/.test(pseudoComputed.position)),
+        scratch,
+      );
+      pseudos.push({ el, slot, text, style, forced: forcedOf(pseudoComputed) });
+    }
+  }
+  return { want, plans, pseudos };
+}
+
+/** 根容器要带上的继承属性：作者在 html/body 上声明过的，外加行高、字号、对齐（否则会被微信默认值顶掉） */
+function rootDeclarations(
+  doc: Document,
+  matched: Map<Element, MatchedSlots>,
+  envFor: (el: Element) => StyleEnv,
+  scratch: HTMLElement,
+): [string, string][] {
+  const win = viewOf(doc),
+    bodyComputed = win.getComputedStyle(doc.body);
+  const declared = new Set(['line-height', 'font-size', 'text-align']);
+  for (const el of [doc.documentElement, doc.body]) {
+    const slots = matched.get(el);
+    for (const decl of cascadeOrder(slots ? slots.self : [], el.getAttribute('style'))) {
+      declared.add(decl.prop);
+      if (decl.prop === 'font')
+        ['font-family', 'font-size', 'font-weight', 'font-style', 'line-height'].forEach(prop => declared.add(prop));
+    }
+  }
+  // 取声明值而不是计算值：line-height:1.7 的计算值是 px，会让字号不同的子孙行高全错。
+  // 书写方向取计算值：它可能来自 html、body 上的 dir 属性，样式表里没有声明
+  if (bodyComputed.direction !== 'ltr') declared.add('direction');
+  const rootScratch = doc.createElement('span');
+  for (const el of [doc.documentElement, doc.body]) {
+    const slots = matched.get(el);
+    const styleText = toStyle(
+      cascadeOrder(slots ? slots.self : [], el.getAttribute('style')),
+      win.getComputedStyle(el),
+      envFor(el),
+      scratch,
+    );
+    for (const prop of (scratch.removeAttribute('style'), scratch.setAttribute('style', styleText), [...scratch.style]))
+      rootScratch.style.setProperty(prop, scratch.style.getPropertyValue(prop));
+  }
+  return INHERITED.filter(prop => declared.has(prop)).map(prop => [
+    prop,
+    (prop !== 'font-size' && prop !== 'direction' && rootScratch.style.getPropertyValue(prop)) ||
+      bodyComputed.getPropertyValue(prop),
+  ]);
+}
+
+/** 伪元素改成真实的 span；pseudoSrc 记下每个 span 来自哪个元素的哪个伪元素 */
+function insertPseudos(pseudos: PseudoPlan[], want: Map<string, Record<string, string>>) {
+  const pseudoSrc = new Map<string, string>();
+  pseudos.forEach((pseudo, i) => {
+    const span = pseudo.el.ownerDocument.createElement('span');
+    const id = 'p' + i;
+    pseudoSrc.set(id, `${pseudo.el.getAttribute(ID)}::${pseudo.slot}`);
+    span.setAttribute(ID, id);
+    span.setAttribute('data-wxc-pseudo', pseudo.slot);
+    if (pseudo.style) span.setAttribute('style', pseudo.style);
+    if (pseudo.text) span.textContent = pseudo.text;
+    else span.setAttribute('aria-hidden', 'true');
+    if (pseudo.slot === 'before') pseudo.el.prepend(span);
+    else pseudo.el.append(span);
+    want.set(id, pseudo.forced);
+  });
+  return pseudoSrc;
+}
+
+/** 正文包进根容器：根容器自身是查询容器，原稿里没有容器祖先的 cqw 相对视口，成品里相对正文宽度，两者一致 */
+function wrapRoot(doc: Document, rootDecl: [string, string][], pageBg: string | undefined) {
+  const bodyComputed = viewOf(doc).getComputedStyle(doc.body);
+  const root = doc.createElement('section');
+  root.setAttribute(ID, 'root');
+  root.setAttribute('data-ignore-width', '');
+  while (doc.body.firstChild) root.appendChild(doc.body.firstChild);
+  doc.body.appendChild(root);
+  for (const [prop, value] of rootDecl) root.style.setProperty(prop, value);
+  // 阅读页正文区还给这几项设了值（字距 0.544px、自动断词等），原稿没声明的元素会继承过去，换行全变；根容器写回原稿的值
+  for (const prop of [
+    'letter-spacing',
+    'hyphens',
+    'text-underline-position',
+    'text-underline-offset',
+    'text-decoration-skip-ink',
+  ]) {
+    if (!root.style.getPropertyValue(prop)) root.style.setProperty(prop, bodyComputed.getPropertyValue(prop));
+  }
+  if (pageBg) root.style.setProperty('background-color', pageBg);
+  root.style.setProperty('container-type', 'inline-size');
+  return root;
+}
+
+/** 套上阅读页的默认样式后，把被它顶掉、因而让元素挪位的 FORCED 属性逐个补回（最多四轮）；返回补回的属性数 */
+function forceReaderProps(doc: Document, target: Map<string, BoxRect>, want: Map<string, Record<string, string>>) {
+  const win = viewOf(doc);
+  let forced = 0;
+  for (let pass = 0; pass < 4; pass++) {
+    let changed = 0;
+    for (const id of diffBoxes(target, measure(doc, true))) {
+      const el = doc.querySelector<HTMLElement | SVGElement>(`[${ID}="${id}"]`),
+        wanted = want.get(id);
+      if (!el || !wanted) continue;
+      const computed = win.getComputedStyle(el);
+      for (const prop of FORCED) {
+        if (prop === 'height' && el.localName !== 'img') continue;
+        if (prop === 'box-sizing' && el.hasAttribute('data-wxc-float')) continue;
+        if (prop === 'max-width' && el.style.maxWidth === '100%') continue;
+        if (computed.getPropertyValue(prop) === wanted[prop]) continue;
+        const pri = READER_IMPORTANT.has(prop) ? 'important' : '';
+        if (el.style.getPropertyValue(prop) === wanted[prop] && el.style.getPropertyPriority(prop) === pri) continue;
+        el.style.setProperty(prop, wanted[prop], pri);
+        changed++;
+        forced++;
+      }
+    }
+    if (!changed) break;
+  }
+  return forced;
+}
+
 async function convertAt(
   html: string,
   width: number,
@@ -527,104 +744,12 @@ async function convertAt(
   };
   const rules = collectRules(doc, notes);
   const matched = matchRules(doc, rules, notes);
-  const hit: UnitHits = { cq: 0, rem: 0, vw: 0, pct: 0, badVar: 0, font: 0 };
-  const rem = parseFloat(computedStyleOf(doc.documentElement).fontSize) || 16;
+  const { hit, envFor } = styleEnv(doc, ctx.fontRules);
   const scratch = doc.createElement('span');
-  const noTf = doc.createElement('style');
-  noTf.setAttribute('data-wxc-tool', '');
-  noTf.textContent = NO_TRANSFORM;
-  const layoutBox = (el: Element) => {
-    doc.head.appendChild(noTf);
-    const rect = el.getBoundingClientRect();
-    noTf.remove();
-    return rect;
-  };
-  // 用布局盒（不含 transform）的小数尺寸；clientWidth 会取整，换算出的 px 就差 1
-  const box = (el: Element) => {
-    const rect = layoutBox(el),
-      computed = computedStyleOf(el);
-    return {
-      pw: rect.width - parseFloat(computed.borderLeftWidth) - parseFloat(computed.borderRightWidth),
-      ph: rect.height - parseFloat(computed.borderTopWidth) - parseFloat(computed.borderBottomWidth),
-      c: computed,
-    };
-  };
-  const contentW = (el: Element) => {
-    const { pw, c: computed } = box(el);
-    return pw - parseFloat(computed.paddingLeft) - parseFloat(computed.paddingRight);
-  };
-  const envFor = (el: Element, pseudoAbs?: boolean): StyleEnv => ({
-    hit,
-    rem,
-    vw: win.innerWidth,
-    fontRules: ctx.fontRules,
-    svg: el.namespaceURI === 'http://www.w3.org/2000/svg' && pseudoAbs === undefined,
-    cq: () => {
-      for (
-        let ancestor = pseudoAbs !== undefined ? el : el.parentElement;
-        ancestor;
-        ancestor = ancestor.parentElement
-      ) {
-        if (computedStyleOf(ancestor).containerType !== 'normal') {
-          const { ph, c: computed } = box(ancestor);
-          return {
-            w: contentW(ancestor),
-            h: ph - parseFloat(computed.paddingTop) - parseFloat(computed.paddingBottom),
-          };
-        }
-      }
-      return { w: win.innerWidth, h: win.innerHeight };
-    },
-    // 只有绝对定位元素的 % 要换算：它改成浮动后包含块变了；其余元素的 % 在成品里照样相对原来的父级
-    cbw: () => {
-      const abs = pseudoAbs !== undefined ? pseudoAbs : /absolute|fixed/.test(computedStyleOf(el).position);
-      if (!abs) return null;
-      let ancestor = pseudoAbs !== undefined ? el : el.parentElement;
-      while (ancestor && ancestor !== doc.body && computedStyleOf(ancestor).position === 'static')
-        ancestor = ancestor.parentElement;
-      return ancestor && ancestor !== doc.body ? box(ancestor).pw : win.innerWidth;
-    },
-  });
-  const forcedOf = (computed: CSSStyleDeclaration) =>
-    Object.fromEntries(FORCED.map(prop => [prop, computed.getPropertyValue(prop)]));
-  const want = new Map<string, Record<string, string>>();
   const selfColor = new Map<HTMLElement, string>();
   for (const el of doc.body.querySelectorAll(SELF_COLORED))
     if (isHtmlEl(el)) selfColor.set(el, computedStyleOf(el).color);
-  const plans: [Element, string][] = [],
-    pseudos: PseudoPlan[] = [];
-  for (const el of doc.body.querySelectorAll('*')) {
-    const slots = matched.get(el);
-    const inline = el.getAttribute('style');
-    const id = el.getAttribute(ID);
-    if (id) want.set(id, forcedOf(computedStyleOf(el)));
-    if (slots || inline)
-      plans.push([
-        el,
-        toStyle(cascadeOrder(slots ? slots.self : [], inline), computedStyleOf(el), envFor(el), scratch),
-      ]);
-    if (
-      !slots ||
-      !isHtmlEl(el) ||
-      /^(img|input|video|iframe|canvas|br|hr|textarea|select|object|embed)$/.test(el.localName)
-    )
-      continue;
-    for (const slot of ['before', 'after'] as const) {
-      if (!slots[slot].length) continue;
-      const pseudoComputed = win.getComputedStyle(el, '::' + slot);
-      if (pseudoComputed.content === 'none' || pseudoComputed.content === 'normal' || pseudoComputed.display === 'none')
-        continue;
-      const text = contentText(pseudoComputed.content, el, notes);
-      if (text == null) continue;
-      const style = toStyle(
-        cascadeOrder(slots[slot]),
-        pseudoComputed,
-        envFor(el, /absolute|fixed/.test(pseudoComputed.position)),
-        scratch,
-      );
-      pseudos.push({ el, slot, text, style, forced: forcedOf(pseudoComputed) });
-    }
-  }
+  const { want, plans, pseudos } = planStyles(doc, matched, envFor, scratch, notes);
   // 编辑器把 dir="rtl" 改成 dir="auto"（按首个有方向的字判断）：dir 属性与 bdo、bdi 标签带来的书写方向写成内联样式
   const bidi = [...doc.body.querySelectorAll('[dir],bdo,bdi')]
     .filter(isHtmlEl)
@@ -642,37 +767,7 @@ async function convertAt(
       .map(a => a.effect.target),
   ).size;
 
-  // 根容器只带上作者在 html/body 上声明过的继承属性，外加行高/字号/对齐（否则会被微信默认值顶掉）
-  const declared = new Set(['line-height', 'font-size', 'text-align']);
-  for (const el of [doc.documentElement, doc.body]) {
-    const slots = matched.get(el);
-    for (const decl of cascadeOrder(slots ? slots.self : [], el.getAttribute('style'))) {
-      declared.add(decl.prop);
-      if (decl.prop === 'font')
-        ['font-family', 'font-size', 'font-weight', 'font-style', 'line-height'].forEach(prop => declared.add(prop));
-    }
-  }
-  // 取声明值而不是计算值：line-height:1.7 的计算值是 px，会让字号不同的子孙行高全错。
-  // 书写方向取计算值：它可能来自 html、body 上的 dir 属性，样式表里没有声明
-  const bodyComputed = computedStyleOf(doc.body);
-  if (bodyComputed.direction !== 'ltr') declared.add('direction');
-  const rootScratch = doc.createElement('span');
-  for (const el of [doc.documentElement, doc.body]) {
-    const slots = matched.get(el);
-    const styleText = toStyle(
-      cascadeOrder(slots ? slots.self : [], el.getAttribute('style')),
-      computedStyleOf(el),
-      envFor(el),
-      scratch,
-    );
-    for (const prop of (scratch.removeAttribute('style'), scratch.setAttribute('style', styleText), [...scratch.style]))
-      rootScratch.style.setProperty(prop, scratch.style.getPropertyValue(prop));
-  }
-  const rootDecl = INHERITED.filter(prop => declared.has(prop)).map(prop => [
-    prop,
-    (prop !== 'font-size' && prop !== 'direction' && rootScratch.style.getPropertyValue(prop)) ||
-      bodyComputed.getPropertyValue(prop),
-  ]);
+  const rootDecl = rootDeclarations(doc, matched, envFor, scratch);
   // 页面底色：宽屏上版心两侧露出来的那一块
   const pageBg = [doc.body, doc.documentElement]
     .map(el => computedStyleOf(el).backgroundColor)
@@ -703,21 +798,7 @@ async function convertAt(
     if (style.length > countBefore) bidiFixed++;
   }
   doc.body.querySelectorAll('[class]').forEach(el => el.removeAttribute('class'));
-  let pseudoCount = 0;
-  const pseudoSrc = new Map<string, string>();
-  for (const pseudo of pseudos) {
-    const span = doc.createElement('span');
-    const id = 'p' + pseudoCount++;
-    pseudoSrc.set(id, `${pseudo.el.getAttribute(ID)}::${pseudo.slot}`);
-    span.setAttribute(ID, id);
-    span.setAttribute('data-wxc-pseudo', pseudo.slot);
-    if (pseudo.style) span.setAttribute('style', pseudo.style);
-    if (pseudo.text) span.textContent = pseudo.text;
-    else span.setAttribute('aria-hidden', 'true');
-    if (pseudo.slot === 'before') pseudo.el.prepend(span);
-    else pseudo.el.append(span);
-    want.set(id, pseudo.forced);
-  }
+  const pseudoSrc = insertPseudos(pseudos, want);
   let colorFixed = 0;
   for (const [el, color] of selfColor) {
     if (!el.isConnected || el.style.color) continue;
@@ -727,25 +808,7 @@ async function convertAt(
   dropVisuallyHidden(doc, findings);
   const svg = await convertSvgs(doc, svgState, ctx.svg);
   for (const { level, code, params, parts, els } of svg.findings) findings[level](code, params, { parts, els });
-  // 根容器自身是查询容器：原稿里没有容器祖先的 cqw 相对视口，成品里相对正文宽度，两者一致
-  const root = doc.createElement('section');
-  root.setAttribute(ID, 'root');
-  root.setAttribute('data-ignore-width', '');
-  while (doc.body.firstChild) root.appendChild(doc.body.firstChild);
-  doc.body.appendChild(root);
-  for (const [prop, value] of rootDecl) root.style.setProperty(prop, value);
-  // 阅读页正文区还给这几项设了值（字距 0.544px、自动断词等），原稿没声明的元素会继承过去，换行全变；根容器写回原稿的值
-  for (const prop of [
-    'letter-spacing',
-    'hyphens',
-    'text-underline-position',
-    'text-underline-offset',
-    'text-decoration-skip-ink',
-  ]) {
-    if (!root.style.getPropertyValue(prop)) root.style.setProperty(prop, bodyComputed.getPropertyValue(prop));
-  }
-  if (pageBg) root.style.setProperty('background-color', pageBg);
-  root.style.setProperty('container-type', 'inline-size');
+  const root = wrapRoot(doc, rootDecl, pageBg);
   const capped = keepMaxWidth(doc, root);
 
   const layoutAfter = measure(doc, true),
@@ -772,32 +835,7 @@ async function convertAt(
   wrap.className = 'rich_media_content';
   root.before(wrap);
   wrap.appendChild(root);
-  let forcedN = 0;
-  const fixReader = () => {
-    for (let pass = 0; pass < 4; pass++) {
-      const bad = diffBoxes(target, measure(doc, true));
-      let changed = 0;
-      for (const id of bad) {
-        const el = doc.querySelector(`[${ID}="${id}"]`) as HTMLElement,
-          wanted = want.get(id);
-        if (!el || !wanted) continue;
-        const computed = computedStyleOf(el);
-        for (const prop of FORCED) {
-          if (prop === 'height' && el.localName !== 'img') continue;
-          if (prop === 'box-sizing' && el.hasAttribute('data-wxc-float')) continue;
-          if (prop === 'max-width' && el.style.maxWidth === '100%') continue;
-          if (computed.getPropertyValue(prop) === wanted[prop]) continue;
-          const pri = READER_IMPORTANT.has(prop) ? 'important' : '';
-          if (el.style.getPropertyValue(prop) === wanted[prop] && el.style.getPropertyPriority(prop) === pri) continue;
-          el.style.setProperty(prop, wanted[prop], pri);
-          changed++;
-          forcedN++;
-        }
-      }
-      if (!changed) break;
-    }
-  };
-  fixReader();
+  let forcedN = forceReaderProps(doc, target, want);
 
   const layers = convertPositions(doc, root, findings);
   cleanStructure(doc, root, findings);
@@ -805,7 +843,7 @@ async function convertAt(
   const squashed = squashWhitespace(doc, root);
   const noWrapped = ctx.o.noWrap ? keepNoWrap(doc, root) : 0;
   cleanAttributes(root);
-  fixReader();
+  forcedN += forceReaderProps(doc, target, want);
   const { moved, stuck } = correctOffsets(doc, root, target, layers);
   const pinned = pinImages(doc, root, ctx.pins);
   annotateContainerWidths(doc, root);
@@ -824,7 +862,7 @@ async function convertAt(
   });
   const preview = root.outerHTML;
 
-  if (pseudoCount) findings.fixed('pseudo', { n: pseudoCount });
+  if (pseudos.length) findings.fixed('pseudo', { n: pseudos.length });
   if (bidiFixed) findings.fixed('bidi', { n: bidiFixed });
   if (capped) findings.fixed('maxWidth', { n: capped });
   if (colorFixed) findings.fixed('linkColor', { n: colorFixed });

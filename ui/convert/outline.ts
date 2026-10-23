@@ -1,4 +1,4 @@
-import { ID, idOf, isHtmlEl, measure, diffBoxes, splitTop, unquote, NO_TRANSFORM, viewOf } from './util.ts';
+import { ID, idOf, isHtmlEl, measure, diffBoxes, splitTop, unquote, NO_TRANSFORM, tempStyle, viewOf } from './util.ts';
 import { GLYPH_BATCH as BATCH, SNAP_BOX, SNAP_INHERITED, SNAP_INLINE, SNAP_TAGS } from './glyphapi.ts';
 import { faceKey } from './fonts.ts';
 import { annotateContainerWidths } from './responsive.ts';
@@ -1052,10 +1052,7 @@ export async function outline(
 ): Promise<OutlineResult[]> {
   const win = viewOf(doc);
   const base = measure(doc, true);
-  const noTransformStyle = doc.createElement('style');
-  noTransformStyle.setAttribute('data-wxc-tool', '');
-  noTransformStyle.textContent = NO_TRANSFORM;
-  doc.head.appendChild(noTransformStyle);
+  using _noTransform = tempStyle(doc, NO_TRANSFORM);
   const units = descs.map(desc => locate(doc, root, desc));
   const located = units.filter(unit => 'box' in unit);
   const web = ctx.web || new Set<string>();
@@ -1100,7 +1097,6 @@ export async function outline(
   }
   // 全部换上之后再量各 svg 的位置、画字：前面的单元换上后，后面单元的块可能挪位，但 svg 相对自己内容盒的偏移不变
   for (const unit of applied) drawSvg(doc, unit, ctx.o);
-  noTransformStyle.remove();
   // 被换掉的内层元素不在新的测量里，diffBoxes 会跳过它们；其余所有元素都不许动，连 1/64px 也不行（会翻转下文的整像素取整）
   const moved = () => {
     const now = measure(doc, true);

@@ -36,11 +36,6 @@ export interface SvgState {
   ids: Map<string, Element>;
   anims: CssAnims;
 }
-/** convertSvgs 的 ctx：位图化用的部分见 RasterContext */
-export interface SvgContext extends RasterContext {
-  spline?: boolean;
-}
-
 /** 样式表删掉之前调用：建 id 表，读下 SVG 上的 CSS 动画 */
 export function prepareSvgs(doc: Document): SvgState | null {
   const ids = new Map<string, Element>();
@@ -72,13 +67,13 @@ const freeze = (doc: Document) => {
 };
 
 /**
- * 层叠已内联、样式表已删掉之后调用。ctx: { raster(dataUri) → 地址, rasterCache: Map, spline, copyText }。
+ * 层叠已内联、样式表已删掉之后调用。ctx: { raster(dataUri) → 地址, rasterCache: Map, copyText }。
  * 返回 { stat, findings: SvgFinding[] }
  */
 export async function convertSvgs(
   doc: Document,
   st: SvgState | null,
-  ctx: SvgContext,
+  ctx: RasterContext,
 ): Promise<{ stat?: SvgStat; findings: SvgFinding[] }> {
   if (!st) return { findings: [] };
   const win = viewOf(doc),
@@ -96,7 +91,7 @@ export async function convertSvgs(
   const timing = resolveTiming(doc, st.ids);
   stat.timing = timing.fixed;
   for (const anim of timing.broken) rep('timing', anim);
-  stat.css = cssToSmil(doc, st.anims, { spline: !!ctx.spline, rep });
+  stat.css = cssToSmil(doc, st.anims, rep);
   stat.whitelist = fixWhitelist(doc, st.ids, rep);
   stat.touch = touchToClick(doc);
   freeze(doc);

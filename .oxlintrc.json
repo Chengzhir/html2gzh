@@ -6,7 +6,7 @@
     "eslint/no-useless-escape": "off",
     "eslint/no-control-regex": "off",
     "typescript/restrict-template-expressions": "off",
-    "eslint/no-unused-vars": ["warn", { "ignoreRestSiblings": true }],
+    "eslint/no-unused-vars": ["warn", { "ignoreRestSiblings": true, "ignoreUsingDeclarations": true }],
     "typescript/no-floating-promises": "error",
     "typescript/no-misused-promises": "error",
     "typescript/await-thenable": "error",

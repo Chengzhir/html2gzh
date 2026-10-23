@@ -1,5 +1,5 @@
 // CSS 关键帧（每段各自的 easing）→ SMIL 的 keyTimes/values（+ keySplines）。
-// steps() 用相同的 keyTimes 做跳变；超出 [0,1] 的贝塞尔（回弹）和不用 spline 的场合按 16 点线性采样
+// steps() 用相同的 keyTimes 做跳变；超出 [0,1] 的贝塞尔（回弹）按 16 点线性采样
 
 const NAMED: Record<string, number[]> = {
   ease: [0.25, 0.1, 0.25, 1],
@@ -93,13 +93,9 @@ function stepLevel(easing: StepsEasing, k: number): number {
 
 /**
  * keyframes: [{ off, v, e }]（off 从 0 到 1，e 是从这一帧到下一帧的 easing），lerp(a, b, p) 给出插值后的值。
- * spline=true 时三次贝塞尔写成 keySplines，否则采样。返回 { times, values, splines|null }
+ * 三次贝塞尔写成 keySplines。返回 { times, values, splines|null }
  */
-export function compile<V>(
-  keyframes: Keyframe<V>[],
-  lerp: (a: V, b: V, p: number) => V,
-  spline: boolean,
-): CompiledSeries<V> {
+export function compile<V>(keyframes: Keyframe<V>[], lerp: (a: V, b: V, p: number) => V): CompiledSeries<V> {
   const times = [keyframes[0].off],
     values = [keyframes[0].v],
     splines: string[] = [];
@@ -118,7 +114,7 @@ export function compile<V>(
       continue;
     }
     if (easing.kind === 'linear') push(b.off, b.v);
-    else if (easing.kind === 'cubic' && spline && easing.p.every(x => x >= 0 && x <= 1))
+    else if (easing.kind === 'cubic' && easing.p.every(x => x >= 0 && x <= 1))
       push(b.off, b.v, easing.p.map(x => Math.round(x * 1e4) / 1e4).join(' '));
     else if (easing.kind === 'cubic')
       for (let j = 1; j <= SAMPLES; j++) {
@@ -136,7 +132,7 @@ export function compile<V>(
       push(b.off, b.v);
     }
   }
-  return { times, values, splines: spline && splines.some(text => text !== '0 0 1 1') ? splines : null };
+  return { times, values, splines: splines.some(text => text !== '0 0 1 1') ? splines : null };
 }
 
 /** 离散属性（visibility）：两帧之间取 CSS 的插值规则——有一端可见，中间就可见 */

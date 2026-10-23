@@ -115,17 +115,21 @@ export const NO_TRANSFORM =
 // measure 还要停住伪元素与过渡、动画：量的是每个元素的静止布局
 const STILL_LAYOUT = `*,*::before,*::after{transform:none!important;translate:none!important;rotate:none!important;scale:none!important;transition:none!important;animation:none!important}`;
 
+/** 临时加一张样式表，离开 using 所在的作用域时移除 */
+export function tempStyle(doc: Document, css: string): Disposable {
+  const style = doc.createElement('style');
+  style.setAttribute('data-wxc-tool', '');
+  style.textContent = css;
+  doc.head.appendChild(style);
+  return { [Symbol.dispose]: () => style.remove() };
+}
+
 /**
  * 量每个带 ID 的元素相对 body 内容区原点的盒子。layout=true 时临时去掉 transform，得到的是布局位置。
  * 只量 HTML 元素与最外层 svg；svg 内部不参与。
  */
 export function measure(doc: Document, layout: boolean) {
-  let still: HTMLStyleElement | undefined;
-  if (layout) {
-    still = doc.createElement('style');
-    still.textContent = STILL_LAYOUT;
-    doc.head.appendChild(still);
-  }
+  using _still = layout ? tempStyle(doc, STILL_LAYOUT) : null;
   const body = doc.body.getBoundingClientRect();
   const bodyStyle = viewOf(doc).getComputedStyle(doc.body);
   const originX = body.left + parseFloat(bodyStyle.borderLeftWidth) + parseFloat(bodyStyle.paddingLeft);
@@ -136,7 +140,6 @@ export function measure(doc: Document, layout: boolean) {
     const rect = el.getBoundingClientRect();
     out.set(idOf(el), { x: rect.left - originX, y: rect.top - originY, w: rect.width, h: rect.height });
   }
-  if (still) still.remove();
   return out;
 }
 

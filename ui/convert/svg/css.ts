@@ -156,7 +156,6 @@ function simple(
   [attr, kind]: [attr: string, kind: keyof typeof KINDS],
   frames: Frame[],
   tm: Timing,
-  spline: boolean,
 ) {
   // 三种值各自的 parse/lerp/str 互相配套，这里按同一个未知值类型统一处理
   const K = KINDS[kind] as unknown as ValueKind<unknown>;
@@ -172,7 +171,7 @@ function simple(
   if (leadIn(tm))
     el.appendChild(mk(doc, 'set', { attributeName: attr, to: K.str(kf[0].v), begin: '0s', dur: sec(tm.delay) }));
   el.appendChild(
-    mk(doc, 'animate', { attributeName: attr, ...series(compile(kf, K.lerp, spline), K.str), ...smilTiming(tm, k) }),
+    mk(doc, 'animate', { attributeName: attr, ...series(compile(kf, K.lerp), K.str), ...smilTiming(tm, k) }),
   );
   return true;
 }
@@ -215,7 +214,7 @@ function shift(doc: Document, el: SVGCircleElement | SVGEllipseElement, p: strin
   if (leadIn(tm))
     el.appendChild(mk(doc, 'animateTransform', { ...T, values: str(kf[0].v), begin: '0s', dur: sec(tm.delay) }));
   el.appendChild(
-    mk(doc, 'animateTransform', { ...T, ...series(compile(kf, KINDS.number.lerp, true), str), ...smilTiming(tm, k) }),
+    mk(doc, 'animateTransform', { ...T, ...series(compile(kf, KINDS.number.lerp), str), ...smilTiming(tm, k) }),
   );
   return true;
 }
@@ -236,7 +235,6 @@ function buildLayers(
   layers: Map<string, LayerAnim[]>,
   box: TransformBox,
   fontSize: number,
-  spline: boolean,
   rep: Report,
 ) {
   if (ownAnims(el).some(anim => anim.localName === 'animateTransform' || anim.localName === 'animateMotion')) {
@@ -282,7 +280,7 @@ function buildLayers(
         nodes.push(
           mk(doc, 'animateTransform', {
             ...attrs,
-            ...series(compile(kf, lerp, true), str),
+            ...series(compile(kf, lerp), str),
             ...smilTiming(tm, k),
           }),
         );
@@ -328,7 +326,7 @@ function framesOf(keyframes: ComputedKeyframe[], p: string, computed: GetPropert
 }
 
 /** 把 captureCss 读到的动画写成 SMIL；写不了的按原因记进 rep */
-export function cssToSmil(doc: Document, anims: CssAnims, { spline, rep }: { spline: boolean; rep: Report }): number {
+export function cssToSmil(doc: Document, anims: CssAnims, rep: Report): number {
   const win = viewOf(doc);
   let done = 0;
   for (const [svgEl, recs] of anims) {
@@ -406,7 +404,7 @@ export function cssToSmil(doc: Document, anims: CssAnims, { spline, rep }: { spl
             moveOpacity(root, host() as SVGGElement, computed);
             opacityMoved = true;
           }
-          if (simple(doc, host(), SIMPLE[p], frames, tm, spline)) ok = true;
+          if (simple(doc, host(), SIMPLE[p], frames, tm)) ok = true;
           else rep('css:prop:' + p, svgEl);
         } else if (p === 'visibility' || p === 'display') {
           if (discrete(doc, host(), p, frames, tm)) ok = true;
@@ -419,7 +417,7 @@ export function cssToSmil(doc: Document, anims: CssAnims, { spline, rep }: { spl
     // 有 layers 时 box 一定量到了：root 时是 rootBox 的结果
     if (layers.size && box) {
       if (root) moveClip(root, host() as SVGGElement, computed, box as RootBox);
-      if (buildLayers(doc, host(), layers, box, fontSize, spline, rep)) ok = true;
+      if (buildLayers(doc, host(), layers, box, fontSize, rep)) ok = true;
     }
     // 平移放在最后：建层之后元素自己的 transform 属性就是最内层的静态矩阵，平移叠加在它后面，等同于挪圆心
     for (const [p, frames, tm] of shifts)

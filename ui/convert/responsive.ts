@@ -1,4 +1,4 @@
-import { round, NO_TRANSFORM, viewOf } from './util.ts';
+import { round, NO_TRANSFORM, tempStyle, viewOf } from './util.ts';
 
 // 微信存储会删掉含 calc() 的声明，但 cqw 与 container-type 原样保留。
 // 同一篇文章按两个版心宽度各转一遍，逐个 px 数值拟合 v = k·W + b（W 是该元素查询容器的内容宽度）：
@@ -177,9 +177,7 @@ export function mergeWidths(A: string, B: string) {
 /** 每个元素记下自己的 cqw 基准：最近的查询容器（不含自身）的内容宽度，没有就用根容器 */
 export function annotateContainerWidths(doc: Document, root: Element) {
   const win = viewOf(doc);
-  const noTf = doc.createElement('style');
-  noTf.textContent = NO_TRANSFORM;
-  doc.head.appendChild(noTf);
+  using _noTransform = tempStyle(doc, NO_TRANSFORM);
   const cache = new Map<Element, number>();
   const cw = (el: Element) => {
     let w = cache.get(el);
@@ -204,7 +202,6 @@ export function annotateContainerWidths(doc: Document, root: Element) {
     if (el === root) container = root.parentElement ?? root;
     el.setAttribute('data-wxc-cw', String(round(cw(container))));
   }
-  noTf.remove();
 }
 
 export const stripTool = (html: string) => html.replace(/\sdata-wxc(?:-[a-z]+)?="[^"]*"/g, '');
