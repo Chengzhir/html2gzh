@@ -3,10 +3,10 @@ import fs from 'node:fs';
 
 const CANDIDATES =
   process.platform === 'win32'
-    ? ['Google/Chrome/Application/chrome.exe', 'Microsoft/Edge/Application/msedge.exe'].flatMap(p =>
+    ? ['Google/Chrome/Application/chrome.exe', 'Microsoft/Edge/Application/msedge.exe'].flatMap(suffix =>
         [process.env.PROGRAMFILES, process.env['PROGRAMFILES(X86)'], process.env.LOCALAPPDATA]
           .filter(Boolean)
-          .map(b => `${b}/${p}`),
+          .map(base => `${base}/${suffix}`),
       )
     : process.platform === 'darwin'
       ? [
@@ -26,5 +26,5 @@ const CANDIDATES =
 /** → 可执行文件路径；找不到返回 null */
 export function findChrome() {
   if (process.env.CHROME_PATH) return fs.existsSync(process.env.CHROME_PATH) ? process.env.CHROME_PATH : null;
-  return CANDIDATES.find(p => fs.existsSync(p)) || null;
+  return CANDIDATES.find(candidate => fs.existsSync(candidate)) || null;
 }

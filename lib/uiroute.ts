@@ -23,7 +23,7 @@ function apiState(req: IncomingMessage, res: ServerResponse) {
     /* 文件被删 */
   }
   const fetches: ApiState['fetches'] = {};
-  for (const [id, a] of assets) if (a.fetches.length) fetches[id] = a.fetches;
+  for (const [id, asset] of assets) if (asset.fetches.length) fetches[id] = asset.fetches;
   return json(res, 200, {
     app: 'html2gzh',
     article: { ...article, mtime },
@@ -42,14 +42,14 @@ function apiArticle(req: IncomingMessage, res: ServerResponse) {
       mtime: fs.statSync(article.file).mtimeMs,
       html,
     } satisfies ArticleResponse);
-  } catch (e) {
-    return failWith(res, 500, 'readFailed', { msg: e.message });
+  } catch (error) {
+    return failWith(res, 500, 'readFailed', { msg: error.message });
   }
 }
-function serveUi(res: ServerResponse, p: string) {
+function serveUi(res: ServerResponse, pathname: string) {
   if (!fs.existsSync(path.join(UI_DIR, 'index.html')))
     return send(res, 503, '页面还没有构建：请在本工具的目录中运行 npm run build，然后刷新本页。');
-  const file = path.resolve(UI_DIR, p === '/' ? 'index.html' : p.slice(1));
+  const file = path.resolve(UI_DIR, pathname === '/' ? 'index.html' : pathname.slice(1));
   if (!file.startsWith(UI_DIR + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile())
     return send(res, 404, 'not found');
   return send(res, 200, fs.readFileSync(file), MIME[path.extname(file)] || 'application/octet-stream');
@@ -68,32 +68,33 @@ function apiBlob(res: ServerResponse, url: URL, body: Buffer) {
 /** "id|scale|max" → /api/shrink 的结果。同一张图同样的参数只压缩一次 */
 const shrunk = new Map<string, ShrinkResponse>();
 // 收 JSON 的接口：b 是解析好的请求体
-const POST: Record<string, (res: ServerResponse, b: any) => unknown> = {
-  '/api/open': (res, b) => {
+const POST: Record<string, (res: ServerResponse, body: any) => unknown> = {
+  '/api/open': (res, body) => {
     try {
-      openArticle(b.path);
+      openArticle(body.path);
       return json(res, 200, { file: article.file, rev: article.rev });
-    } catch (e) {
-      return fail(res, 400, e);
+    } catch (error) {
+      return fail(res, 400, error);
     }
   },
   // refs 是相对文章所在目录的路径；只认白名单扩展名
-  '/api/assets': (res, b) => {
+  '/api/assets': (res, body) => {
     if (!article.file) return failWith(res, 400, 'noArticle');
-    const dir = path.dirname(article.file);
+    const articleDir = path.dirname(article.file);
     const out: Record<string, string | null> = {};
-    for (const ref of b.refs || []) {
-      const abs = path.resolve(dir, String(ref));
-      const ext = path.extname(abs).toLowerCase();
+    for (const ref of body.refs || []) {
+      const filePath = path.resolve(articleDir, String(ref));
+      const ext = path.extname(filePath).toLowerCase();
       // 只认文章所在文件夹里的文件（和拖入文件夹时一样）：别处的 HTML 不能借相对路径把电脑上其他文件放到取图口上
-      const rel = path.relative(dir, abs);
-      const inside = rel && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
+      const relative = path.relative(articleDir, filePath);
+      const inside =
+        relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
       try {
-        if (!inside || !ASSET_EXT.has(ext) || !fs.statSync(abs).isFile()) {
+        if (!inside || !ASSET_EXT.has(ext) || !fs.statSync(filePath).isFile()) {
           out[ref] = null;
           continue;
         }
-        out[ref] = registerFile(abs);
+        out[ref] = registerFile(filePath);
       } catch {
         out[ref] = null;
       }
@@ -101,53 +102,53 @@ const POST: Record<string, (res: ServerResponse, b: any) => unknown> = {
     return json(res, 200, out);
   },
   // { id, scale, max }：处理已登记的图片，结果另行登记（原文件与原 id 不变）
-  '/api/shrink': async (res, b) => {
-    const a = assets.get(String(b.id || ''));
-    const max = Math.floor(Number(b.max));
-    const scale = b.scale == null ? null : Number(b.scale);
-    if (!a || !PUBLIC_EXT.has(a.ext)) return failWith(res, 404, 'noImage');
-    if (!(max >= 1024) || (scale != null && !(scale > 0))) return failWith(res, 400, 'badParams');
-    const key = `${b.id}|${scale}|${max}`;
+  '/api/shrink': async (res, body) => {
+    const asset = assets.get(String(body.id || ''));
+    const maxBytes = Math.floor(Number(body.max));
+    const scale = body.scale == null ? null : Number(body.scale);
+    if (!asset || !PUBLIC_EXT.has(asset.ext)) return failWith(res, 404, 'noImage');
+    if (!(maxBytes >= 1024) || (scale != null && !(scale > 0))) return failWith(res, 400, 'badParams');
+    const key = `${body.id}|${scale}|${maxBytes}`;
     if (!shrunk.has(key)) {
-      let r: Omit<Partial<ShrinkOutput>, 'skip'> & { skip?: ShrinkSkip };
+      let result: Omit<Partial<ShrinkOutput>, 'skip'> & { skip?: ShrinkSkip };
       try {
-        r = await shrink(a.buf, { scale, max });
-      } catch (e) {
-        return failWith(res, 500, 'shrinkFailed', { msg: e.message });
+        result = await shrink(asset.buf, { scale, max: maxBytes });
+      } catch (error) {
+        return failWith(res, 500, 'shrinkFailed', { msg: error.message });
       }
-      const base = a.name.replace(/\.[^.]+$/, '');
+      const base = asset.name.replace(/\.[^.]+$/, '');
       shrunk.set(
         key,
-        r.skip
-          ? { skip: r.skip, size: a.buf.length }
+        result.skip
+          ? { skip: result.skip, size: asset.buf.length }
           : {
-              id: register(r.buf, r.ext, `${base}（压缩）${r.ext}`),
-              size: r.buf.length,
-              srcSize: a.buf.length,
-              how: r.how,
-              width: r.width,
-              height: r.height,
-              srcWidth: r.srcWidth,
-              srcHeight: r.srcHeight,
-              over: r.over,
+              id: register(result.buf, result.ext, `${base}（压缩）${result.ext}`),
+              size: result.buf.length,
+              srcSize: asset.buf.length,
+              how: result.how,
+              width: result.width,
+              height: result.height,
+              srcWidth: result.srcWidth,
+              srcHeight: result.srcHeight,
+              over: result.over,
             },
       );
       if (shrunk.size > 200) shrunk.delete(shrunk.keys().next().value);
     }
     return json(res, 200, shrunk.get(key));
   },
-  '/api/glyphs': async (res, b) => {
+  '/api/glyphs': async (res, body) => {
     try {
       return json(
         res,
         200,
-        await handleGlyphs(b, id => {
-          const a = assets.get(id);
-          return a ? a.buf : null;
+        await handleGlyphs(body, id => {
+          const asset = assets.get(id);
+          return asset ? asset.buf : null;
         }),
       );
-    } catch (e) {
-      return fail(res, 400, e);
+    } catch (error) {
+      return fail(res, 400, error);
     }
   },
   '/api/recheck': async res => {
@@ -155,23 +156,23 @@ const POST: Record<string, (res: ServerResponse, b: any) => unknown> = {
     return json(res, 200, { ok: true });
   },
   // { imgPort, host, port, proto }：先全部校验，再换绑本机端口，最后存设置、重测
-  '/api/host': async (res, b) => {
-    let cfg;
+  '/api/host': async (res, body) => {
+    let config;
     try {
-      cfg = parseHostForm(b);
-    } catch (e) {
-      return fail(res, 400, e);
+      config = parseHostForm(body);
+    } catch (error) {
+      return fail(res, 400, error);
     }
-    if (cfg.imgPort !== IMG_PORT) {
+    if (config.imgPort !== IMG_PORT) {
       try {
-        await changeImgPort(cfg.imgPort);
-      } catch (e) {
-        return e.code === 'EADDRINUSE'
-          ? failWith(res, 409, 'portBusy', { port: cfg.imgPort, old: IMG_PORT })
-          : failWith(res, 409, 'portFailed', { port: cfg.imgPort, msg: e.message, old: IMG_PORT });
+        await changeImgPort(config.imgPort);
+      } catch (error) {
+        return error.code === 'EADDRINUSE'
+          ? failWith(res, 409, 'portBusy', { port: config.imgPort, old: IMG_PORT })
+          : failWith(res, 409, 'portFailed', { port: config.imgPort, msg: error.message, old: IMG_PORT });
       }
     }
-    applyHost(cfg);
+    applyHost(config);
     return json(res, 200, { host: hostState() });
   },
 };
@@ -182,25 +183,26 @@ export async function uiRoute(req: IncomingMessage, res: ServerResponse) {
   if (req.method === 'POST' && !LOCAL_HOSTS.has(String(req.headers.origin || '').replace(/^https?:\/\//, '')))
     return send(res, 403, 'forbidden');
   const url = new URL(req.url, 'http://x');
-  const p = decodeURIComponent(url.pathname);
-  if (p === '/api/state') return apiState(req, res);
-  if (p === '/api/article') return apiArticle(req, res);
-  if (req.method !== 'POST') return p.startsWith('/a/') ? serveAsset(req, res, p.slice(3), false) : serveUi(res, p);
+  const pathname = decodeURIComponent(url.pathname);
+  if (pathname === '/api/state') return apiState(req, res);
+  if (pathname === '/api/article') return apiArticle(req, res);
+  if (req.method !== 'POST')
+    return pathname.startsWith('/a/') ? serveAsset(req, res, pathname.slice(3), false) : serveUi(res, pathname);
 
   let body: Buffer;
   try {
     body = await readBody(req);
-  } catch (e) {
-    return fail(res, 413, e);
+  } catch (error) {
+    return fail(res, 413, error);
   }
-  if (p === '/api/blob') return apiBlob(res, url, body);
-  const handler = POST[p];
+  if (pathname === '/api/blob') return apiBlob(res, url, body);
+  const handler = POST[pathname];
   if (!handler) return send(res, 404, 'not found');
-  let b;
+  let fields;
   try {
-    b = JSON.parse(body.toString('utf8') || '{}');
+    fields = JSON.parse(body.toString('utf8') || '{}');
   } catch {
     return failWith(res, 400, 'notJson');
   }
-  return handler(res, b);
+  return handler(res, fields);
 }

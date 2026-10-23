@@ -11,14 +11,14 @@ import { uiRoute } from './lib/uiroute.ts';
 import { wrap } from './lib/http.ts';
 import { ensureUi } from './lib/uibuild.ts';
 
-function openBrowser(u: string) {
+function openBrowser(url: string) {
   if (NO_OPEN) return;
   const [cmd, args] =
     process.platform === 'win32'
-      ? ['cmd', ['/c', 'start', '""', u]]
+      ? ['cmd', ['/c', 'start', '""', url]]
       : process.platform === 'darwin'
-        ? ['open', [u]]
-        : ['xdg-open', [u]];
+        ? ['open', [url]]
+        : ['xdg-open', [url]];
   spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
 }
 
@@ -26,8 +26,8 @@ function openBrowser(u: string) {
 async function handOver() {
   const base = `http://127.0.0.1:${UI_PORT}`;
   try {
-    const s = await (await fetch(base + '/api/state', { signal: AbortSignal.timeout(2000) })).json();
-    if (s.app !== 'html2gzh') throw new Error();
+    const state = await (await fetch(base + '/api/state', { signal: AbortSignal.timeout(2000) })).json();
+    if (state.app !== 'html2gzh') throw new Error();
   } catch {
     console.error(
       `页面端口 ${UI_PORT} 已被其他程序占用。请改用其他端口启动，例如 ${LAUNCH} --port 40000（本机端口为 40000，页面端口为 40001）`,
@@ -35,13 +35,13 @@ async function handOver() {
     process.exit(1);
   }
   if (initialArg) {
-    const r = await fetch(base + '/api/open', {
+    const response = await fetch(base + '/api/open', {
       method: 'POST',
       headers: { origin: base },
       body: JSON.stringify({ path: initialArg }),
     });
-    const j = await r.json();
-    console.log(r.ok ? '已在运行中的 html2gzh 里打开：' + j.file : '打开失败：' + j.error);
+    const reply = await response.json();
+    console.log(response.ok ? '已在运行中的 html2gzh 里打开：' + reply.file : '打开失败：' + reply.error);
   } else console.log('html2gzh 已在运行。');
   openBrowser(base + '/');
   process.exit(0);
@@ -49,24 +49,24 @@ async function handOver() {
 
 await ensureUi();
 const uiServer = http.createServer(wrap(uiRoute));
-uiServer.once('error', (e: NodeJS.ErrnoException) => {
-  if (e.code === 'EADDRINUSE') handOver();
-  else throw e;
+uiServer.once('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE') handOver();
+  else throw error;
 });
 uiServer.listen(UI_PORT, '127.0.0.1', async () => {
   if (initialArg) {
     try {
       openArticle(initialArg);
-    } catch (e) {
-      console.error(e.message);
+    } catch (error) {
+      console.error(error.message);
     }
   }
   const want = IMG_PORT;
   try {
     await listenImg(want);
-  } catch (e) {
+  } catch (error) {
     // 上次在页面里存的端口被占了：退回默认端口，页面里可以再改
-    const fallback = !PORT_ARG && savedImg && want !== DEFAULT_IMG && e.code === 'EADDRINUSE';
+    const fallback = !PORT_ARG && savedImg && want !== DEFAULT_IMG && error.code === 'EADDRINUSE';
     if (fallback) {
       console.error(`本机端口 ${want}（上次在页面中设置）已被其他程序占用，改用 ${DEFAULT_IMG}`);
       try {
@@ -77,9 +77,9 @@ uiServer.listen(UI_PORT, '127.0.0.1', async () => {
     }
     if (!imgServer.listening) {
       console.error(
-        e.code === 'EADDRINUSE'
+        error.code === 'EADDRINUSE'
           ? `本机端口 ${want} 已被其他程序占用。请改用其他端口启动，例如 ${LAUNCH} --port 40000（本机端口为 40000，页面端口为 40001）`
-          : e.message,
+          : error.message,
       );
       process.exit(1);
     }

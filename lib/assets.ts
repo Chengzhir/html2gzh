@@ -67,37 +67,37 @@ export function register(buf: Buffer, ext: string, name: string) {
   if (!assets.has(id)) assets.set(id, { buf, ext, name, fetches: [], lastUA: '' });
   return id;
 }
-export function registerFile(abs: string) {
-  const st = fs.statSync(abs);
-  const c = pathCache.get(abs);
-  if (c && c.mtime === st.mtimeMs && c.size === st.size && assets.has(c.id)) return c.id;
-  const id = register(fs.readFileSync(abs), path.extname(abs).toLowerCase(), path.basename(abs));
-  pathCache.set(abs, { id, mtime: st.mtimeMs, size: st.size });
+export function registerFile(filePath: string) {
+  const stats = fs.statSync(filePath);
+  const cached = pathCache.get(filePath);
+  if (cached && cached.mtime === stats.mtimeMs && cached.size === stats.size && assets.has(cached.id)) return cached.id;
+  const id = register(fs.readFileSync(filePath), path.extname(filePath).toLowerCase(), path.basename(filePath));
+  pathCache.set(filePath, { id, mtime: stats.mtimeMs, size: stats.size });
   return id;
 }
 
 /** countHit：取图口来的请求，只给图片，并记下取图时刻 */
 export function serveAsset(req: IncomingMessage, res: ServerResponse, id: string, countHit: boolean) {
-  const a = assets.get(id);
-  if (!a || (countHit && !PUBLIC_EXT.has(a.ext))) return send(res, 404, 'not found');
+  const asset = assets.get(id);
+  if (!asset || (countHit && !PUBLIC_EXT.has(asset.ext))) return send(res, 404, 'not found');
   if (countHit) {
     // 记下时刻而不只是次数：微信服务器下载一张图超时（约 0.5 秒）会隔 0.5 秒再试，共三次，页面据此区分成功与失败
-    a.fetches.push(Date.now());
-    if (a.fetches.length > 12) a.fetches.shift();
-    a.lastUA = String(req.headers['user-agent'] || '');
+    asset.fetches.push(Date.now());
+    if (asset.fetches.length > 12) asset.fetches.shift();
+    asset.lastUA = String(req.headers['user-agent'] || '');
     // 取图口对外网开放，请求头里的控制字符（终端转义序列等）不原样打进日志
     const safe = (text: string) => text.replace(/[\x00-\x1f\x7f]/g, '');
     console.log(
-      `${stamp()}  取图  ${a.name}  经 ${safe(req.headers.host || '?')}  ← ${req.socket.remoteAddress}  ${safe(a.lastUA).slice(0, 50)}`,
+      `${stamp()}  取图  ${asset.name}  经 ${safe(req.headers.host || '?')}  ← ${req.socket.remoteAddress}  ${safe(asset.lastUA).slice(0, 50)}`,
     );
   }
   // 文章里的 SVG 可能带脚本：直接打开这个地址时不让它在本页同源下运行（内嵌的字体和图片照常显示）
   res.writeHead(200, {
-    'Content-Type': MIME[a.ext] || 'application/octet-stream',
-    'Content-Length': a.buf.length,
+    'Content-Type': MIME[asset.ext] || 'application/octet-stream',
+    'Content-Length': asset.buf.length,
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
     'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; sandbox",
   });
-  res.end(req.method === 'HEAD' ? undefined : a.buf);
+  res.end(req.method === 'HEAD' ? undefined : asset.buf);
 }
