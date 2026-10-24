@@ -93,6 +93,21 @@ const STRUCTURE_WIDTHS = [375, 585, 677];
 const CHECK_WIDTHS = [320, 335, 353, 372, 374, 375, 460, 585, 677];
 const FLOW = /^(block|flow-root|list-item)$/;
 
+// 原稿在各比对宽度下的盒子，跨次转换复用：转换帧不运行脚本，图片与字体按内容编号引用，同一份 HTML 同一宽度量出的盒子相同。
+// 只换勾选、字号下限时不必在每个宽度下重新装载原稿
+let originalBoxes: { html: string; byWidth: Map<number, Map<string, BoxRect>> } = { html: '', byWidth: new Map() };
+async function originalBoxesAt(frame: HTMLIFrameElement, html: string, width: number) {
+  if (originalBoxes.html !== html) originalBoxes = { html, byWidth: new Map() };
+  const known = originalBoxes.byWidth.get(width);
+  if (known) return known;
+  const doc = await loadFrame(frame, html, width);
+  const boxes = measure(doc, false);
+  // 字体或图片没在时限内加载完时量出的盒子不记，下次转换再量
+  if (doc.fonts.status === 'loaded' && [...doc.images].every(img => img.complete))
+    originalBoxes.byWidth.set(width, boxes);
+  return boxes;
+}
+
 type CssAnim = CSSAnimation & { effect: KeyframeEffect };
 export interface ConvertOptions {
   width: number;
@@ -188,7 +203,7 @@ export async function convert(
     verified = 0,
     verifyBoxes = new Map<string, BoxRect>();
   for (const w of widths) {
-    const target = w === width ? A.targetV : measure(await loadFrame(frame, A.original, w), false);
+    const target = w === width ? A.targetV : await originalBoxesAt(frame, A.original, w);
     const verifyDoc = await loadFrame(verifyFrame, previewDoc(merged), w);
     readerImages(verifyDoc);
     verifyBoxes = measure(verifyDoc, false);
