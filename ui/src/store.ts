@@ -502,6 +502,9 @@ async function run() {
     else if (shrinkAgain) {
       shrinkAgain = false;
       void reshrink();
+    } else if (state.result && state.reader.dark !== state.dark) {
+      // 转换中途切换了深色模式而这次转换失败：右栏没重画，这里补上
+      void renderReader();
     }
   }
 }
