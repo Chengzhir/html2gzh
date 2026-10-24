@@ -870,6 +870,21 @@ function sizeSvg(svg: SVGSVGElement, unit: DrawnUnit, inset: number) {
 }
 
 /**
+ * Chrome 画文字时按字色的亮度加重边缘像素的覆盖率，画路径时不加，转为路径的字因此偏细，浅色字更明显。
+ * 在路径下面垫一层同色、不偏移、不模糊的阴影：边缘像素的覆盖率 a 变为 a + k·a·(1 − a)，内部不变，
+ * 加重的量按设备像素计，屏幕越清晰越小，与文字的情形一致。k 按 Windows 上的 Chrome 实测拟合，
+ * 安卓版 Chromium 加重得少（SK_GAMMA_CONTRAST=0），WebKit 不画 SVG 子元素上的 CSS 滤镜。
+ * 写成 filter 属性：公众号删 style 里的 filter，留 filter 属性
+ */
+function edgeBoost(fill: string) {
+  const channels = [1, 3, 5].map(at => parseInt(fill.slice(at, at + 2), 16));
+  const luma = (0.299 * channels[0] + 0.587 * channels[1] + 0.114 * channels[2]) / 255;
+  const k = 0.65 + 1.3 * luma ** 3;
+  const shadow = (alpha: number) => `drop-shadow(0 0 0 rgba(${channels.join(',')},${f3(alpha)}))`;
+  return k <= 1 ? shadow(k) : `${shadow(1)} ${shadow(k - 1)}`;
+}
+
+/**
  * 放进版面后的空壳里画字：服务端给的字形按颜色、不透明度、描边与矩阵的线性部分分组，每组拼成一条 path
  * （变换只写一次，各字首点按自己的原点偏移），外加透明复制层。字形坐标相对内容盒，减去 svg 相对内容盒的偏移（竖排的列、首行缩进）
  */
@@ -902,7 +917,9 @@ function drawSvg(doc: Document, unit: DrawnUnit, opts: OutlineCtx['o']) {
     const pathEl = doc.createElementNS(SVG, 'path');
     pathEl.setAttribute('transform', `matrix(${group.m.slice(0, 4).join(' ')} ${f3(group.m[4])} ${f3(group.m[5])})`);
     pathEl.setAttribute('fill', group.fill);
+    // 半透明的字垫阴影会让内部也变深，不加
     if (group.alpha < 0.999) pathEl.setAttribute('fill-opacity', f3(group.alpha));
+    else pathEl.setAttribute('filter', edgeBoost(group.fill));
     if (group.w) {
       pathEl.setAttribute('stroke', group.fill);
       pathEl.setAttribute('stroke-width', f3(group.w));

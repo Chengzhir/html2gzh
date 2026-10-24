@@ -32,7 +32,7 @@ async function grab(pg, b) {
   });
 }
 
-/** → [{ unit, dx, dy, ink, rotated }]，dx/dy 是成品相对原稿的偏移（CSS px），ink 是成品墨量 / 原稿墨量 */
+/** → [{ unit, dx, dy, ink, bg, rotated }]，dx/dy 是成品相对原稿的偏移（CSS px），ink 是成品墨量 / 原稿墨量，bg 是背景亮度（0–255） */
 export async function alignUnits(browser, original, preview, width, dpr, origin) {
   const pc = await load(browser, preview, width, dpr, true, origin);
   // svg 只占第一行，后面几行的字画在它的溢出区：取它所在块的框（文档坐标）。
@@ -129,7 +129,7 @@ export async function alignUnits(browser, original, preview, width, dpr, origin)
         const sum = a => a.reduce((s, v) => s + v, 0);
         const ox = prof(A, 0),
           cx = prof(B, 0);
-        out.push({ dx: shift(ox, cx), dy: shift(prof(A, 1), prof(B, 1)), ink: sum(cx) / sum(ox) });
+        out.push({ dx: shift(ox, cx), dy: shift(prof(A, 1), prof(B, 1)), ink: sum(cx) / sum(ox), bg });
       }
       return out;
     },
@@ -142,6 +142,7 @@ export async function alignUnits(browser, original, preview, width, dpr, origin)
     dx: +(res[n].dx / dpr).toFixed(3),
     dy: +(res[n].dy / dpr).toFixed(3),
     ink: +res[n].ink.toFixed(3),
+    bg: res[n].bg,
     rotated: b.rotated,
   }));
 }
