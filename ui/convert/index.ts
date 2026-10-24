@@ -496,16 +496,19 @@ function styleEnv(doc: Document, fontRules: FontRule[]) {
     computedStyleOf = (el: Element) => win.getComputedStyle(el);
   const hit: UnitHits = { cq: 0, rem: 0, vw: 0, pct: 0, badVar: 0, font: 0 };
   const rem = parseFloat(computedStyleOf(doc.documentElement).fontSize) || 16;
-  // 用布局盒（不含 transform）的小数尺寸；clientWidth 会取整，换算出的 px 就差 1
-  const box = (el: Element) => {
-    const rect = layoutRect(doc, el),
-      computed = computedStyleOf(el);
-    return {
-      pw: rect.width - parseFloat(computed.borderLeftWidth) - parseFloat(computed.borderRightWidth),
-      ph: rect.height - parseFloat(computed.borderTopWidth) - parseFloat(computed.borderBottomWidth),
-      c: computed,
-    };
-  };
+  // 用布局盒（不含 transform）的小数尺寸；clientWidth 会取整，换算出的 px 就差 1。
+  // 每量一次都要加、删一张样式表，整页重排一遍；用到 envFor 的几步都不改版面，同一个容器只量一次
+  const boxes = new Map<Element, { pw: number; ph: number; c: CSSStyleDeclaration }>();
+  const box = (el: Element) =>
+    boxes.getOrInsertComputed(el, () => {
+      const rect = layoutRect(doc, el),
+        computed = computedStyleOf(el);
+      return {
+        pw: rect.width - parseFloat(computed.borderLeftWidth) - parseFloat(computed.borderRightWidth),
+        ph: rect.height - parseFloat(computed.borderTopWidth) - parseFloat(computed.borderBottomWidth),
+        c: computed,
+      };
+    });
   const contentW = (el: Element) => {
     const { pw, c: computed } = box(el);
     return pw - parseFloat(computed.paddingLeft) - parseFloat(computed.paddingRight);
