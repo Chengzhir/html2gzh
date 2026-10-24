@@ -420,6 +420,9 @@ async function reshrink() {
 let again = false;
 /** 转换进行中又改了设置：等这一轮结束再按新设置转一次 */
 export function rerun() {
+  // 还没到点的延时转换（勾选停手后、原文件改动后）并进这一次
+  clearTimeout(rerunTimer);
+  clearTimeout(reloadTimer);
   if (state.busy) again = true;
   else void run();
 }
