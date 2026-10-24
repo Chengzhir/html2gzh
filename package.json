@@ -4,6 +4,12 @@
   "private": true,
   "description": "把 HTML 页面转成公众号编辑器能保留的格式，粘贴为公众号图文；本地图片临时提供给微信取走",
   "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Chengzhir/html2gzh.git"
+  },
+  "bugs": "https://github.com/Chengzhir/html2gzh/issues",
+  "homepage": "https://github.com/Chengzhir/html2gzh#readme",
   "type": "module",
   "engines": {
     "node": ">=26.0.0"
