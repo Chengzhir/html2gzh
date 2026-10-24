@@ -1,4 +1,4 @@
-import { ID, idOf, isHtmlEl, isText, round, measure, layoutRects, tempStyle, NO_TRANSFORM, viewOf } from './util.ts';
+import { ID, idOf, isHtmlEl, isText, round, measure, layoutRects, tempStyle, STILL_LAYOUT, viewOf } from './util.ts';
 import { msg } from './types.ts';
 import type { BoxRect, FindingSink } from './types.ts';
 
@@ -71,7 +71,7 @@ export function convertPositions(doc: Document, root: Element, findings: Finding
   ).forEach((rect, i) => Object.assign(plan[i], { w: rect.width, h: rect.height }));
   // 宽度先全部量完：转换一个元素会改变别的元素的包含块
   {
-    using _noTransform = tempStyle(doc, NO_TRANSFORM);
+    using _still = tempStyle(doc, STILL_LAYOUT);
     for (const item of plan) {
       if (item.pos !== 'absolute' && item.pos !== 'fixed') continue;
       const style = item.el.style;

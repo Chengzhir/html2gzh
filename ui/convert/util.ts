@@ -113,7 +113,7 @@ export const round = (value: number) => Math.round(value * 1000) / 1000;
 export const NO_TRANSFORM =
   '*{transform:none!important;translate:none!important;rotate:none!important;scale:none!important}';
 // measure 还要停住伪元素与过渡、动画：量的是每个元素的静止布局
-const STILL_LAYOUT = `*,*::before,*::after{transform:none!important;translate:none!important;rotate:none!important;scale:none!important;transition:none!important;animation:none!important}`;
+export const STILL_LAYOUT = `*,*::before,*::after{transform:none!important;translate:none!important;rotate:none!important;scale:none!important;transition:none!important;animation:none!important}`;
 
 /** 临时加一张样式表，离开 using 所在的作用域时移除 */
 export function tempStyle(doc: Document, css: string): Disposable {
@@ -124,9 +124,12 @@ export function tempStyle(doc: Document, css: string): Disposable {
   return { [Symbol.dispose]: () => style.remove() };
 }
 
-/** 不含 transform 的布局盒。加、删样式表各要整页重排一次，要量好几个元素时一起量 */
+/**
+ * 静止的布局盒：去掉变换，停住动画与过渡，与 measure(doc, true) 量的是同一种盒子。
+ * 加、删样式表各要整页重排一次，要量好几个元素时一起量
+ */
 export function layoutRects(doc: Document, els: Element[]) {
-  using _noTransform = tempStyle(doc, NO_TRANSFORM);
+  using _still = tempStyle(doc, STILL_LAYOUT);
   return els.map(el => el.getBoundingClientRect());
 }
 export const layoutRect = (doc: Document, el: Element) => layoutRects(doc, [el])[0];
