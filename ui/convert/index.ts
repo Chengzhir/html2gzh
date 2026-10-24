@@ -102,9 +102,12 @@ async function originalBoxesAt(frame: HTMLIFrameElement, html: string, width: nu
   if (known) return known;
   const doc = await loadFrame(frame, html, width);
   const boxes = measure(doc, false);
-  // 字体或图片没在时限内加载完时量出的盒子不记，下次转换再量
-  if (doc.fonts.status === 'loaded' && [...doc.images].every(img => img.complete))
-    originalBoxes.byWidth.set(width, boxes);
+  // 字体或图片没在时限内加载完、或者加载失败时量出的盒子不记，下次转换再量（失败可能只是一时的）
+  const settled =
+    doc.fonts.status === 'loaded' &&
+    ![...doc.fonts].some(face => face.status === 'error') &&
+    [...doc.images].every(img => img.complete && img.naturalWidth > 0);
+  if (settled) originalBoxes.byWidth.set(width, boxes);
   return boxes;
 }
 
