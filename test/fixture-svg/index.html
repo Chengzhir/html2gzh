@@ -96,9 +96,10 @@ body{margin:8px;font:15px/1.6 sans-serif;color:#222}
 <svg viewBox="0 0 200 60"><defs><linearGradient id="lg4" x2="0.5"><stop offset="0"><animate attributeName="stop-color" values="#dc2626;#2f6db3;#dc2626" dur="2s" repeatCount="indefinite"/></stop><stop offset="1" stop-color="#e90"><animate attributeName="offset" values="0.6;1;0.6" dur="2s" repeatCount="indefinite"/></stop><animate attributeName="x2" values="1;0.5;1" dur="2s" repeatCount="indefinite"/></linearGradient></defs>
 <rect x="10" y="8" width="120" height="44" rx="6" fill="url(#lg4)"/></svg></section>
 
-<section class="case"><p>step-end 闪烁（前一半显示、后一半隐藏）</p>
-<svg viewBox="0 0 200 60">
-<rect class="blink" x="10" y="15" width="30" height="30" fill="#dc2626"/></svg></section>
+<section class="case"><p>step-end 闪烁（前一半显示、后一半隐藏）、id 里带 %</p>
+<svg viewBox="0 0 200 60"><defs><symbol id="dot50%" viewBox="0 0 10 10"><circle cx="5" cy="5" r="5" fill="#2a2"/></symbol></defs>
+<rect class="blink" x="10" y="15" width="30" height="30" fill="#dc2626"/>
+<use href="#dot50%" x="55" y="15" width="30" height="30"/></svg></section>
 
 <section class="case"><p>图片（slice 裁切、x 动画）、触摸触发、mpath 路径动画、链接、普通文字</p>
 <svg viewBox="0 0 200 60"><image href="pic.png" x="4" y="6" width="50" height="48" preserveAspectRatio="xMidYMid slice"><animate attributeName="x" values="4;14;4" dur="2s" repeatCount="indefinite"/></image>

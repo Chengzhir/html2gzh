@@ -43,9 +43,17 @@ export const isAnim = (node: Node | null | undefined): node is SVGAnimationEleme
 export const isGraphics = (node: Node | null | undefined): node is SVGGraphicsElement =>
   isSvg(node) && typeof (node as SVGGraphicsElement).getCTM === 'function';
 export const hrefOf = (el: Element): string | null => el.getAttribute('href') ?? el.getAttributeNS(XLINK_NS, 'href');
+/** 引用里的 id 按网址转义解开；设计软件导出的 id 可能带不成转义的 %（如 Progress_50%），解不开就按原文 */
+export const decodeId = (text: string): string => {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+};
 export const refId = (text: string | null | undefined): string | null => {
   const match = /^\s*#(.+?)\s*$/.exec(text || '');
-  return match ? decodeURIComponent(match[1]) : null;
+  return match ? decodeId(match[1]) : null;
 };
 /** 同一文档的 url(#id) 引用：计算样式里会被补成 url("about:srcdoc#id") 之类的绝对地址 */
 export const URL_REF = /url\(\s*["']?(?:[^"')#]*)#([^"')]+)["']?\s*\)/;

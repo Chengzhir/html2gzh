@@ -1,5 +1,18 @@
 // 有动画、不能画成位图的元素：裁切改写成嵌套 svg 视口或 CSS clip-path:path()，滤镜改写成 CSS 滤镜函数，渐变取平均色
-import { SVG_NS, hrefOf, refId, isSvg, isAnim, isGraphics, inResource, ownAnims, URL_REF, mk, wrapG } from './dom.ts';
+import {
+  SVG_NS,
+  hrefOf,
+  refId,
+  decodeId,
+  isSvg,
+  isAnim,
+  isGraphics,
+  inResource,
+  ownAnims,
+  URL_REF,
+  mk,
+  wrapG,
+} from './dom.ts';
 import {
   shapeSegs,
   geometryReader,
@@ -69,7 +82,7 @@ function approxPaint(el: SVGElement, ids: Map<string, Element>, win: Window, rep
     const value = el.style.getPropertyValue(prop) || el.getAttribute(prop) || '';
     const match = URL_REF.exec(value);
     if (!match) continue;
-    const server = ids.get(decodeURIComponent(match[1]));
+    const server = ids.get(decodeId(match[1]));
     const color = server && server.localName.endsWith('Gradient') ? averageStops(server, ids, win) : null;
     const fallback = value.slice(match.index + match[0].length).trim();
     el.removeAttribute(prop);
@@ -324,7 +337,7 @@ export function fixRefs(
     const clipValue = el.style.getPropertyValue('clip-path') || el.getAttribute('clip-path') || '';
     let match = URL_REF.exec(clipValue);
     if (match) {
-      const clipPath = ids.get(decodeURIComponent(match[1]));
+      const clipPath = ids.get(decodeId(match[1]));
       el.removeAttribute('clip-path');
       el.style.removeProperty('clip-path');
       if (clipPath && clipPath.localName === 'clipPath') {
@@ -335,7 +348,7 @@ export function fixRefs(
     const filterValue = el.getAttribute('filter') || '';
     match = URL_REF.exec(filterValue) || URL_REF.exec(el.style.getPropertyValue('filter'));
     if (match) {
-      const filter = ids.get(decodeURIComponent(match[1]));
+      const filter = ids.get(decodeId(match[1]));
       const css = filter && filter.localName === 'filter' && filterToCss(filter, win);
       el.style.removeProperty('filter');
       if (css) {

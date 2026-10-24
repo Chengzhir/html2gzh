@@ -14,6 +14,7 @@ import {
   RESOURCE,
   hrefOf,
   refId,
+  decodeId,
 } from './dom.ts';
 import { inv, fromDom, mul, ID_M, isId, matrixAttr } from './path.ts';
 import { bakeStyleTransform } from './transform.ts';
@@ -119,7 +120,7 @@ function refsAnimated(el: Element, win: Window, ids: Map<string, Element>): bool
     const computed = win.getComputedStyle(node);
     for (const prop of OWN) {
       const match = URL_REF.exec(computed.getPropertyValue(prop));
-      const res = match && ids.get(decodeURIComponent(match[1]));
+      const res = match && ids.get(decodeId(match[1]));
       if (res && hasAnim(res)) return true;
     }
   }
@@ -132,7 +133,7 @@ function paintAnimated(el: Element, win: Window, ids: Map<string, Element>): boo
     const computed = win.getComputedStyle(node);
     for (const prop of PAINT) {
       const match = URL_REF.exec(computed.getPropertyValue(prop));
-      let res = match ? ids.get(decodeURIComponent(match[1])) : undefined;
+      let res = match ? ids.get(decodeId(match[1])) : undefined;
       for (let i = 0; res && i < 8; i++) {
         if (hasAnim(res)) return true;
         res = ids.get(refId(hrefOf(res)) || '');
@@ -272,7 +273,7 @@ function findUnits(root: Element, win: Window, ids: Map<string, Element>): Eleme
     flags.uses = flags.own || flags.paint;
     for (const prop of OWN) {
       const match = URL_REF.exec(computed.getPropertyValue(prop));
-      const res = match && ids.get(decodeURIComponent(match[1]));
+      const res = match && ids.get(decodeId(match[1]));
       if (res && animRes(res)) flags.refAnim = true;
     }
     for (const kid of el.children)
