@@ -2,7 +2,6 @@
 import { reactive, markRaw, nextTick } from 'vue';
 import { convert } from '../convert/index.ts';
 import { DEFAULT_OPTS } from '../convert/fonts.ts';
-import { imageScales } from '../convert/images.ts';
 import { ASSET_ID, assetIdsIn } from '../convert/assetid.ts';
 import type {
   ApiState,
@@ -58,8 +57,6 @@ export interface Result extends ConvertResult {
   /** 这次转换时勾选的字体表行与预览宽度 */
   paths: string[];
   width: number;
-  /** 图片 id → 版面需要的分辨率（相对原图的比例）；null 为量不出 */
-  scales: Map<string, number | null>;
   /** 压缩之前的成品；改压缩设置时从它重新得出 payload 与 preview */
   base: { payload: string; preview: string };
   /** 阅读页模拟的页头与底栏：原稿里的标题、作者等，以及文件的修改时间（毫秒） */
@@ -319,11 +316,7 @@ let shrinkSeq = 0;
  * 按当前的上限与开关，从原始成品（base）得出最终的成品：比 1080px 宽或超过上限的图片换成处理后的副本
  * （哪些要处理由服务端看图片本身决定）。被更新的一次调用取代时返回 null
  */
-async function applyShrink({
-  base,
-  scales,
-  report,
-}: Pick<Result, 'base' | 'scales' | 'report'>): Promise<ShrinkOutcome | null> {
+async function applyShrink({ base, report }: Pick<Result, 'base' | 'report'>): Promise<ShrinkOutcome | null> {
   const seq = ++shrinkSeq,
     limit = limitBytes(),
     names = report.names;
@@ -340,10 +333,9 @@ async function applyShrink({
     await Promise.all(
       Array.from({ length: Math.min(4, ids.length) }, async () => {
         for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
-          const scale = scales.get(id) ?? null;
           responses.set(
             id,
-            await api<ShrinkResponse>('/api/shrink', { id, scale, max: limit }).catch((e: unknown) => ({
+            await api<ShrinkResponse>('/api/shrink', { id, max: limit }).catch((e: unknown) => ({
               error: errText(e),
             })),
           );
@@ -458,16 +450,11 @@ async function run() {
       raster,
       fontBytes,
     });
-    // 转换结束时 #verify 停在所选宽度的成品上，并已跑过阅读页的图片脚本：在这里量每张图需要的分辨率
-    const scales = assetIdsIn(converted.payload).length
-      ? await imageScales(frameDoc('verify'), width)
-      : new Map<string, number | null>();
     const draft: Result = markRaw({
       ...converted,
       report: { ...prep.report, big: [], shrunk: [], sizes: new Map() },
       paths: opts.paths,
       width,
-      scales,
       base: { payload: converted.payload, preview: converted.preview },
       meta: prep.meta,
       mtime,
@@ -658,4 +645,4 @@ export function setDark(on: boolean) {
 export const redoHint = () => t(state.src?.kind === 'files' ? 'src.redoFiles' : 'src.redoPath');
 
 // 测试与排查脚本用的钩子
-Object.assign(window, { __wxc: state, __wxcNotice: notice, __wxcBig: bigImages, __wxcScales: imageScales });
+Object.assign(window, { __wxc: state, __wxcNotice: notice, __wxcBig: bigImages });

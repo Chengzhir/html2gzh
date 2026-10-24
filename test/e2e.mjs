@@ -1048,7 +1048,7 @@ try {
     );
   }
 
-  // 大图压缩：服务端把比 1080px 宽的图缩到 1080 宽、在上限内选编码；页面按版面量出背景图需要的分辨率；勾选后成品换成压缩后的副本
+  // 大图压缩：服务端把比 1080px 宽的图缩到 1080 宽、在上限内选编码；勾选后成品换成压缩后的副本
   console.log('\n大图压缩');
   {
     const blob = async (buf, ext, name) =>
@@ -1087,7 +1087,7 @@ try {
       .toBuffer();
     const photoId = await blob(photo, 'jpg', 'photo.jpg');
     // 读者拿到的图最宽 1080px：更宽的先缩到 1080 宽，再在上限内选尽量高的画质
-    const r1 = await shrinkApi({ id: photoId, scale: 0.5, max: 400 << 10 });
+    const r1 = await shrinkApi({ id: photoId, max: 400 << 10 });
     check(
       r1.id &&
         r1.width === 1080 &&
@@ -1099,7 +1099,7 @@ try {
       '比 1080px 宽的照片缩到 1080px 宽，在上限内用尽量高的画质，存为 JPEG',
       `${photo.length} → ${r1.size} 字节，${r1.width}×${r1.height}，${JSON.stringify(r1.how)}`,
     );
-    const roomy = await shrinkApi({ id: photoId, scale: 0.5, max: photo.length - 1024 });
+    const roomy = await shrinkApi({ id: photoId, max: photo.length - 1024 });
     check(
       roomy.width === 1080 && roomy.how && roomy.how.fmt === 'jpeg' && roomy.how.q === 92 && !roomy.over,
       '上限宽裕时缩到 1080px 宽、用最高一档画质',
@@ -1110,7 +1110,7 @@ try {
       .resize(1200, 800)
       .jpeg({ quality: 80 })
       .toBuffer();
-    const r5 = await shrinkApi({ id: await blob(light, 'jpg', 'light.jpg'), scale: 1, max: 1000 << 10 });
+    const r5 = await shrinkApi({ id: await blob(light, 'jpg', 'light.jpg'), max: 1000 << 10 });
     check(
       r5.width === 1080 && r5.size <= light.length && r5.how?.q >= 85 && r5.how?.q < 92 && !r5.over,
       '比 1080px 宽、不超过上限的图片缩到 1080px 宽，副本不超过原图',
@@ -1125,7 +1125,7 @@ try {
     const small = await sharp({ create: { width: 1000, height: 600, channels: 3, background: '#468' } })
       .jpeg()
       .toBuffer();
-    const r0 = await shrinkApi({ id: await blob(small, 'jpg', 'small.jpg'), scale: 1, max: 400 << 10 });
+    const r0 = await shrinkApi({ id: await blob(small, 'jpg', 'small.jpg'), max: 400 << 10 });
     check(r0.skip === 'fits', '不到 1080px 宽且不超过上限的图片不处理', JSON.stringify(r0));
     const TW = 900,
       TH = 2400,
@@ -1137,7 +1137,7 @@ try {
     const tallBuf = await sharp(tall, { raw: { width: TW, height: TH, channels: 3 } })
       .jpeg({ quality: 98 })
       .toBuffer();
-    const r4 = await shrinkApi({ id: await blob(tallBuf, 'jpg', 'tall.jpg'), scale: 1, max: 600 << 10 });
+    const r4 = await shrinkApi({ id: await blob(tallBuf, 'jpg', 'tall.jpg'), max: 600 << 10 });
     check(
       r4.width === TW && r4.height === TH && (r4.size <= 600 << 10 || r4.over),
       '不到 1080px 宽但超过上限的图片保持原尺寸，降低画质',
@@ -1148,7 +1148,7 @@ try {
     })
       .png({ compressionLevel: 0 })
       .toBuffer();
-    const r2 = await shrinkApi({ id: await blob(alpha, 'png', 'alpha.png'), scale: 0.5, max: 400 << 10 });
+    const r2 = await shrinkApi({ id: await blob(alpha, 'png', 'alpha.png'), max: 400 << 10 });
     const r2meta = r2.id
       ? await sharp(Buffer.from(await (await fetch(`http://127.0.0.1:${UI}/a/${r2.id}`)).arrayBuffer())).metadata()
       : {};
@@ -1159,87 +1159,16 @@ try {
     );
     const r3 = await shrinkApi({
       id: await blob(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>'), 'svg', 'v.svg'),
-      scale: 0.5,
       max: 1024,
     });
     check(r3.skip === 'vector', 'SVG 不压缩', JSON.stringify(r3));
 
-    // 所需分辨率：正文里的 <img> 读者点开就是 1080 宽的版本，记为 1；背景图按显示宽度 × 屏幕缩放 × (677×2 / 正文宽)；量不出来的为 null
-    const wide = await blob(
-      await sharp({ create: { width: 2000, height: 1000, channels: 3, background: '#88a' } })
-        .png()
-        .toBuffer(),
-      'png',
-      'wide.png',
-    );
-    const huge = await blob(
-      await sharp({ create: { width: 4000, height: 4000, channels: 3, background: '#a88' } })
-        .png()
-        .toBuffer(),
-      'png',
-      'huge.png',
-    );
-    const hid = await blob(
-      await sharp({ create: { width: 900, height: 900, channels: 3, background: '#8a8' } })
-        .png()
-        .toBuffer(),
-      'png',
-      'hid.png',
-    );
-    const edge = await blob(
-      await sharp({ create: { width: 700, height: 700, channels: 3, background: '#aa8' } })
-        .png()
-        .toBuffer(),
-      'png',
-      'edge.png',
-    );
-    const html = `<div class="rich_media_content" style="width:335px">
-      <img src="/a/${wide}" style="display:block;width:100%">
-      <div style="width:300px;height:200px;background:url(/a/${huge}) center/cover no-repeat"></div>
-      <img src="/a/${hid}" style="display:none">
-      <div style="border:4px solid;border-image:url(/a/${edge}) 30 stretch;width:50px;height:50px"></div></div>`;
-    // 在页面里另开一个 iframe 放这段内容，用页面构建进去的 imageScales 量
-    const sc = await page.evaluate(
-      async (html, ids) => {
-        const f = document.createElement('iframe');
-        f.style.cssText = 'position:fixed;left:-9999px;top:0;width:400px;height:600px;border:0';
-        document.body.appendChild(f);
-        await new Promise(r => {
-          f.onload = r;
-          f.srcdoc = html;
-        });
-        const doc = f.contentDocument;
-        await Promise.all(
-          [...doc.images]
-            .filter(i => !i.complete)
-            .map(
-              i =>
-                new Promise(r => {
-                  i.onload = i.onerror = r;
-                }),
-            ),
-        );
-        const m = await window.__wxcScales(doc, 335);
-        f.remove();
-        return ids.map(id => (m.has(id) ? m.get(id) : 'missing'));
-      },
-      html,
-      [wide, huge, hid, edge],
-    );
-    const near = (v, x) => typeof v === 'number' && Math.abs(v - x) < x * 0.01;
-    check(
-      sc[0] === 1 && near(sc[1], (((200 / 4000) * 1354) / 335) * 1.5) && sc[2] === 1 && sc[3] === null,
-      '按版面量出所需分辨率：正文 <img> 记为 1（含隐藏的），background-size: cover 按铺满的比例，border-image 记为未知',
-      JSON.stringify(sc),
-    );
-
     // 页面：把照片放进成品，勾选“压缩大图”、上限 400 KB → 成品里换成压缩后的副本；取消勾选后换回原图
     const saved = await page.evaluate(id => {
       const r = window.__wxc.result,
-        keep = { base: r.base, scales: [...r.scales] };
+        keep = r.base;
       const tag = `<img src="${location.origin}/a/${id}" style="display:block;width:100%">`;
       r.base = { payload: r.base.payload + tag, preview: r.base.preview + tag };
-      r.scales = new Map([[id, 0.5]]);
       r.report.names.set(id, 'img/photo.jpg');
       return keep;
     }, photoId);
@@ -1296,9 +1225,7 @@ try {
       JSON.stringify(off),
     );
     await page.evaluate(keep => {
-      const r = window.__wxc.result;
-      r.base = keep.base;
-      r.scales = new Map(keep.scales);
+      window.__wxc.result.base = keep;
     }, saved);
     await setChecked(page, '#shrinkOn', false);
     await page.waitForFunction(() => !window.__wxc.shrinking, { timeout: 30000 }).catch(() => {});

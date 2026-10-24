@@ -66,7 +66,7 @@ function apiBlob(res: ServerResponse, url: URL, body: Buffer) {
   return json(res, 200, { id: register(body, ext, url.searchParams.get('name') || 'blob' + ext) });
 }
 
-/** "id|scale|max" → /api/shrink 的结果。同一张图同样的参数只压缩一次 */
+/** "id|max" → /api/shrink 的结果。同一张图同样的上限只压缩一次 */
 const shrunk = new Map<string, ShrinkResponse>();
 // 收 JSON 的接口：body 是解析好的请求体
 const POST: Record<string, (res: ServerResponse, body: JsonObject) => unknown> = {
@@ -102,19 +102,18 @@ const POST: Record<string, (res: ServerResponse, body: JsonObject) => unknown> =
     }
     return json(res, 200, out);
   },
-  // { id, scale, max }：处理已登记的图片，结果另行登记（原文件与原 id 不变）
+  // { id, max }：处理已登记的图片，结果另行登记（原文件与原 id 不变）
   '/api/shrink': async (res, body) => {
     const asset = assets.get(typeof body.id === 'string' ? body.id : '');
     const maxBytes = Math.floor(Number(body.max));
-    const scale = body.scale == null ? null : Number(body.scale);
     if (!asset || !PUBLIC_EXT.has(asset.ext)) return failWith(res, 404, 'noImage');
-    if (!(maxBytes >= 1024) || (scale != null && !(scale > 0))) return failWith(res, 400, 'badParams');
-    const key = `${body.id}|${scale}|${maxBytes}`;
+    if (!(maxBytes >= 1024)) return failWith(res, 400, 'badParams');
+    const key = `${body.id}|${maxBytes}`;
     let response = shrunk.get(key);
     if (!response) {
       let result: ShrinkResult;
       try {
-        result = await shrink(asset.buf, { scale, max: maxBytes });
+        result = await shrink(asset.buf, maxBytes);
       } catch (error) {
         return failWith(res, 500, 'shrinkFailed', { msg: messageOf(error) });
       }

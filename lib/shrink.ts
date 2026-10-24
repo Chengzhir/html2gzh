@@ -10,11 +10,6 @@ const LIMIT_PIXELS = 2e8;
 const SERVED_W = 1080;
 // 判断图片类型用的缩略尺寸（长边上限）
 const PROBE = 1600;
-// 体积大致与边长的 1.8 次方成正比（像素数的 0.9 次方），用来预估放得下的最大尺寸
-const SIZE_EXP = 1.8;
-// 用到上限的 90% 以上，或者与放不下的尺寸只差 3%，就不再找更大的尺寸
-const GOOD = 0.9,
-  CLOSE = 1.03;
 // 可能是平面图形的来源格式；JPEG、HEIF/AVIF 来源已是有损照片，转 PNG 只会更大
 const GRAPHIC_SRC = new Set(['png', 'gif', 'tiff', 'webp']);
 // 平面图形（文字、图标、截图）存为 PNG 比 JPEG 清楚，照片则相反。用体积比区分：PNG 不比 JPEG 大太多时选 PNG
@@ -39,39 +34,34 @@ interface Encoded {
   how: ShrinkHow;
   width: number;
   height: number;
-  factor: number;
 }
 const jpegStep = (quality: number, chroma = '4:2:0'): Step => ({ jpeg: quality, chroma });
 const pngStep = (quality: number | 'lossless'): Step => ({ png: quality });
-// full：目标尺寸下依次尝试的画质，最后一档仍放不下时用它缩小尺寸；better：full 第一档放得下时再试的更好的编码；
-// floor：缩到显示所需的尺寸仍放不下时依次降低的画质。平面图形的 JPEG 先不降采样色度（4:4:4），文字、线条边缘不发虚
-const PLANS: Record<string, { full: Step[]; better: Step[]; floor: Step[] }> = {
+// full：依次尝试的画质；better：full 第一档放得下时再试的更好的编码；lower：full 最低一档仍超过上限时继续降低的画质。
+// 平面图形的 JPEG 先不降采样色度（4:4:4），文字、线条边缘不发虚
+const PLANS: Record<string, { full: Step[]; better: Step[]; lower: Step[] }> = {
   photo: {
     full: [jpegStep(92), jpegStep(90), jpegStep(88), jpegStep(85), jpegStep(80), jpegStep(75), jpegStep(70)],
     better: [],
-    floor: [jpegStep(65), jpegStep(60)],
+    lower: [jpegStep(65), jpegStep(60)],
   },
   graphic: {
     full: [jpegStep(92, '4:4:4'), jpegStep(85, '4:4:4'), jpegStep(85), jpegStep(80), jpegStep(70)],
     better: [],
-    floor: [jpegStep(65), jpegStep(60)],
+    lower: [jpegStep(65), jpegStep(60)],
   },
-  lossless: { full: [pngStep('lossless')], better: [], floor: [pngStep(95), pngStep(85)] },
-  palette: { full: [pngStep(95)], better: [pngStep('lossless')], floor: [pngStep(85), pngStep(75)] },
+  lossless: { full: [pngStep('lossless')], better: [], lower: [pngStep(95), pngStep(85)] },
+  palette: { full: [pngStep(95)], better: [pngStep('lossless')], lower: [pngStep(85), pngStep(75)] },
   // 有透明部分：只能用 PNG（微信把 WebP 转存为 JPEG，透明部分会丢）。抠图照片先试无损；平面图形用 256 色
-  alpha: { full: [pngStep('lossless')], better: [], floor: [pngStep(95), pngStep(85), pngStep(75)] },
-  alphaFlat: { full: [pngStep(95)], better: [pngStep('lossless')], floor: [pngStep(85), pngStep(75)] },
+  alpha: { full: [pngStep('lossless')], better: [], lower: [pngStep(95), pngStep(85), pngStep(75)] },
+  alphaFlat: { full: [pngStep(95)], better: [pngStep('lossless')], lower: [pngStep(85), pngStep(75)] },
 };
 
 /**
- * buf：原图。scale：正文显示所需的分辨率与原图之比，null 表示不知道显示尺寸。max：体积上限（字节）。
- * 宽度不超过 1080px 且不超过上限时不处理（skip: 'fits'）。
+ * buf：原图。max：体积上限（字节）。宽度不超过 1080px 且不超过上限时不处理（skip: 'fits'）。
  * → { buf, ext, how, width, height, srcWidth, srcHeight, over } 或 { skip: 'fits' | 'vector' | 'animated' | 'unreadable' | 'noGain' }
  */
-export async function shrink(
-  buf: Buffer,
-  { scale, max }: { scale: number | null; max: number },
-): Promise<ShrinkResult> {
+export async function shrink(buf: Buffer, max: number): Promise<ShrinkResult> {
   let meta;
   try {
     meta = await sharp(buf, { limitInputPixels: LIMIT_PIXELS }).metadata();
@@ -81,7 +71,7 @@ export async function shrink(
   if (meta.format === 'svg') return { skip: 'vector' };
   if ((meta.pages || 1) > 1) return { skip: 'animated' };
   if (!meta.width || !meta.height) return { skip: 'unreadable' };
-  // EXIF 方向 5–8 是转了 90°：浏览器按转正后的宽高显示，scale 也是按转正后的尺寸算的
+  // EXIF 方向 5–8 是转了 90°：浏览器按转正后的宽高显示
   const turned = (meta.orientation || 1) >= 5;
   const src: Source = {
     buf,
@@ -90,9 +80,8 @@ export async function shrink(
     opaque: true,
   };
   if (src.width <= SERVED_W && buf.length <= max) return { skip: 'fits' };
-  // servedFactor：读者拿到的尺寸；floor：显示所需的尺寸（背景图可能比它小），不再往下缩
+  // 读者拿到的尺寸与原图之比
   const servedFactor = Math.min(1, SERVED_W / src.width);
-  const floor = scale == null ? servedFactor : Math.min(servedFactor, scale);
   const probeFactor = Math.min(servedFactor, PROBE / Math.max(src.width, src.height));
   src.opaque = !meta.hasAlpha || (await opaqueAt(src, probeFactor));
   const plan = PLANS[await classify(src, probeFactor, GRAPHIC_SRC.has(meta.format))];
@@ -144,51 +133,15 @@ export async function shrink(
   if (withinBudget >= 0) return done(await atStep(withinBudget), false);
   const withinMax = budget < max ? await bestUnder(max) : -1;
   if (withinMax >= 0) return done(await atStep(withinMax), false);
-  const last = await atStep(full.length - 1);
 
-  // 二、最低一档画质下缩小尺寸（只有显示所需比读者拿到的尺寸小的背景图才有余地）：在放得下与放不下的两次结果之间插值
-  const searchStep = full[full.length - 1];
-  const probeOf = (candidate: Encoded): Probe => ({ factor: candidate.factor, size: candidate.buf.length });
-  // fitted：放得下的最大尺寸；overProbe：放不下的最小尺寸
-  let fitted: Encoded | null = null,
-    overProbe = probeOf(last);
-  const target = max * 0.97;
-  for (let k = 0; k < 6 && floor < servedFactor - 1e-9; k++) {
-    const fitProbe = fitted && probeOf(fitted);
-    if (fitProbe && (fitProbe.size >= max * GOOD || overProbe.factor / fitProbe.factor < CLOSE)) break;
-    if (!fitProbe && overProbe.factor <= floor + 1e-9) break;
-    const candidate = keep(await encode(src, nextFactor(fitProbe, overProbe, target, floor), searchStep));
-    if (!fits(candidate)) {
-      if (candidate.factor < overProbe.factor) overProbe = probeOf(candidate);
-    } else if (!fitted || candidate.factor > fitted.factor) fitted = candidate;
-  }
-  if (fitted) return done(fitted, false);
-  for (const step of plan.floor) {
-    const candidate = keep(await encode(src, floor, step));
+  // 二、最低一档仍超过上限：继续降低画质，尺寸不变
+  for (const step of plan.lower) {
+    const candidate = keep(await encode(src, servedFactor, step));
     if (fits(candidate)) return done(candidate, false);
   }
   const smallest = tried.reduce((a, b) => (b.buf.length < a.buf.length ? b : a));
   if (smallest.buf.length >= buf.length) return { skip: 'noGain' };
   return done(smallest, true);
-}
-
-/** 一次尝试：尺寸（原图的 factor 倍）与编码后的字节数 */
-interface Probe {
-  factor: number;
-  size: number;
-}
-/** 下一次尝试的尺寸（原图的倍数） */
-function nextFactor(fitProbe: Probe | null, overProbe: Probe, target: number, floor: number) {
-  if (fitProbe) {
-    const fraction =
-      (Math.log(target) - Math.log(fitProbe.size)) / (Math.log(overProbe.size) - Math.log(fitProbe.size));
-    const factor = Math.exp(
-      Math.log(fitProbe.factor) + fraction * (Math.log(overProbe.factor) - Math.log(fitProbe.factor)),
-    );
-    const gap = overProbe.factor - fitProbe.factor;
-    return Math.min(overProbe.factor - gap * 0.1, Math.max(fitProbe.factor + gap * 0.1, factor));
-  }
-  return Math.max(floor, overProbe.factor * (target / overProbe.size) ** (1 / SIZE_EXP));
 }
 
 /** 缩略图的透明通道里是否全是 255 */
@@ -246,5 +199,5 @@ async function encode(src: Source, factor: number, step: Step): Promise<Encoded>
     ext = '.png';
     how = { fmt: 'palette' };
   }
-  return { buf: output, ext, how, width: w, height: h, factor };
+  return { buf: output, ext, how, width: w, height: h };
 }
