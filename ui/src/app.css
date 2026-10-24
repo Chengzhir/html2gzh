@@ -725,7 +725,7 @@ details.fold > summary:hover {
   --scr-h: clamp(480px, calc(var(--pv-room) - 2 * var(--dev-pad)), 900px);
   --dev-w: calc(var(--b-w) + 2 * var(--dev-pad));
   --dev-h: calc(var(--scr-h) + 2 * var(--dev-pad));
-  /* 手机屏高到了 900px 还有空余时，两栏同比放大，最多占预览区宽、高的 --pv-fill，四周的留白随屏幕一起变大 */
+  /* 手机屏高到了 900px 还有空余时，两栏同比放大，最多占预览区宽、高的 --pv-fill（宽度按中间间距最大时算），四周的留白随屏幕一起变大 */
   --pv-fill: 0.85;
   /* 步长 1/1024 在二进制里是精确的，比例为 1 时正好取到 1（步长 0.001 会把 1 取成 0.999） */
   --pv-scale: max(
@@ -734,7 +734,7 @@ details.fold > summary:hover {
       down,
       min(
         (var(--pv-fill) * 100cqh - var(--cap-h) - var(--cap-gap)) / var(--dev-h),
-        (var(--pv-fill) * 100cqw - var(--pane-gap)) / (var(--a-w) + var(--dev-w))
+        var(--pv-fill) * 100cqw / (1.2 * var(--a-w) + var(--dev-w))
       ),
       1 / 1024
     )
@@ -745,7 +745,13 @@ details.fold > summary:hover {
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: safe center;
-  gap: var(--pane-gap);
+  /* 并排且有空余时，中间的间距取空余宽度的 1/5，是两侧留白的一半，两栏仍看得出是一组；最少 24px，最多为原网页栏宽的 1/5 */
+  column-gap: clamp(
+    var(--pane-gap),
+    0.2 * (100cqw - var(--pv-scale) * (var(--a-w) + var(--dev-w))),
+    0.2 * var(--pv-scale) * var(--a-w)
+  );
+  row-gap: var(--pane-gap);
   width: fit-content;
   max-width: 100%;
   margin: auto;
