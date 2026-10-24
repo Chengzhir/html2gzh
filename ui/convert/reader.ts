@@ -20,7 +20,7 @@ export function previewDoc(fragment: string, extraCss = '') {
 }
 
 /**
- * 照抄阅读页脚本 setImgSize 对正文图片做的事（2026-10 抓自线上文章页）：
+ * 按阅读页脚本 setImgSize 的行为重写（2026-10 对照线上文章页），对正文图片做同样的事：
  * 宽度取 style.width，超过正文宽的按正文宽、% 按父级内容宽换成 px、解析不了的（fit-content 等）当 0；
  * 再追加 `width: … !important; height: auto !important; aspect-ratio: 原图宽高比`。
  * 宽高比作用在 border-box 上，带边框/内边距、拉伸或裁切的图因此会变形。
