@@ -23,7 +23,8 @@ const host: Omit<HostState, 'pick' | 'config'> & { manual: { base: string; ok: b
   probes: 0,
 };
 let recheck = false,
-  generation = 0;
+  generation = 0,
+  round = new AbortController();
 const bracket = (hostname: string) => (hostname.includes(':') ? `[${hostname}]` : hostname);
 function baseOf(hostname: string) {
   const defaultPort = publicAddress.proto === 'https' ? 443 : 80,
@@ -45,12 +46,12 @@ const ROUNDS = 3;
 const TTL = 5 * 60000;
 
 /** 每次都新建 TCP 连接：多线负载均衡按连接分流，复用连接就永远只看到同一个出口 */
-function getText(url: string, timeoutMs: number) {
+function getText(url: string, timeoutMs: number, signal: AbortSignal) {
   return new Promise<string | null>(resolve => {
     const client = url.startsWith('https:') ? https : http;
     const request = client.get(
       url,
-      { agent: false, family: 4, timeout: timeoutMs, headers: { 'user-agent': 'curl/8' } },
+      { agent: false, family: 4, timeout: timeoutMs, signal, headers: { 'user-agent': 'curl/8' } },
       response => {
         let body = '';
         response.setEncoding('utf8');
@@ -66,8 +67,8 @@ function getText(url: string, timeoutMs: number) {
     request.on('error', () => resolve(null));
   });
 }
-async function ping(base: string) {
-  const text = await getText(base.replace(/\/+$/, '') + '/__ping', 6000);
+async function ping(base: string, signal: AbortSignal) {
+  const text = await getText(base.replace(/\/+$/, '') + '/__ping', 6000, signal);
   return text != null && text.trim() === TOKEN;
 }
 // 内网和保留地址微信永远连不上；查 IP 的网站被劫持（如校园网认证页）时回的可能就是本机内网地址，回连检测照样能通
@@ -88,30 +89,32 @@ function isPublicIPv4(ip: string) {
   );
 }
 /** 检测回连也会被分到不同出口，一个出口试三次，有一次通就算通 */
-async function countPings(base: string, attempts = 3) {
-  const results = await Promise.all(Array.from({ length: attempts }, () => ping(base)));
+async function countPings(base: string, signal: AbortSignal, attempts = 3) {
+  const results = await Promise.all(Array.from({ length: attempts }, () => ping(base, signal)));
   return results.filter(Boolean).length;
 }
 export async function checkHosts() {
-  // 检测进行中又要求检测：这一轮结束后再测一轮；这一轮里设置改了（gen 变了），结果作废
+  // 检测进行中又要求检测：这一轮结束后再测一轮；设置改了（generation 变了）时 applyHost 中止这一轮，结果作废
   if (host.checking) {
     recheck = true;
     return;
   }
   host.checking = true;
   const startGeneration = generation;
+  round = new AbortController();
+  const { signal } = round;
   try {
     if (publicAddress.host) {
       // 填了公网地址就不查公网 IP，只测这个地址
       const base = baseOf(publicAddress.host),
-        ok = (await countPings(base)) > 0;
+        ok = (await countPings(base, signal)) > 0;
       if (startGeneration !== generation) return;
       Object.assign(host, { manual: { base, ok }, list: [], probes: 0, checkedAt: Date.now() });
       console.log(`${stamp()}  取图地址  ${base}  ${ok ? '可以访问' : '无法访问'}`);
       return;
     }
     const jobs = [];
-    for (let k = 0; k < ROUNDS; k++) for (const source of IP_SOURCES) jobs.push(getText(source, 5000));
+    for (let k = 0; k < ROUNDS; k++) for (const source of IP_SOURCES) jobs.push(getText(source, 5000, signal));
     const seen = new Map<string, number>();
     for (const text of await Promise.all(jobs)) {
       const ip = text && (text.match(/\b\d{1,3}(\.\d{1,3}){3}\b/) || [])[0];
@@ -120,7 +123,7 @@ export async function checkHosts() {
     const fresh = await Promise.all(
       [...seen].map(async ([ip, hits]): Promise<HostExit> => {
         const base = baseOf(ip);
-        const passes = await countPings(base);
+        const passes = await countPings(base, signal);
         return { base, ip, seen: hits, ok: passes > 0, passes, stale: false };
       }),
     );
@@ -210,6 +213,7 @@ export function applyHost(config: HostConfig) {
   Object.assign(publicAddress, { host: config.host, port: config.port, proto: config.proto });
   saveSettings({ imgPort: IMG_PORT, host: publicAddress.host, port: publicAddress.port, proto: publicAddress.proto });
   generation++;
+  round.abort();
   Object.assign(host, { list: [], manual: null, checkedAt: 0, probes: 0 });
   void checkHosts();
 }

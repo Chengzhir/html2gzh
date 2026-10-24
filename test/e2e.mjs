@@ -1367,14 +1367,18 @@ try {
       'https 时公网端口留空使用 443',
       JSON.stringify(p3),
     );
+    // 第一次提交起的公网 IP 检测（查 IP 5 秒、回连 6 秒）此时多半还在进行：改设置要中止它，新地址的结果不等它
+    const askedAt = performance.now();
     await page.waitForFunction(() => window.__wxc.server.host.pick.ok === false, { timeout: 30000 }).catch(() => {});
+    const waited = (performance.now() - askedAt) / 1000;
     check(
-      await page.evaluate(
+      (await page.evaluate(
         () =>
           window.__wxc.server.host.pick.ok === false &&
           /无法访问/.test(document.getElementById('hostLine').textContent),
-      ),
-      '连不通的地址显示“无法访问”',
+      )) && waited < 5,
+      '连不通的地址显示“无法访问”，不等之前的检测结束',
+      `${waited.toFixed(1)} 秒`,
     );
     const helpNow = await page.evaluate(() => {
       const h = document.getElementById('hostHelp');
