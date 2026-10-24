@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>排版示例</title>
+<meta name="author" content="html2gzh">
+<style>
+body{margin:0;background:#fff}
+.page{container-type:inline-size;font-family:"Microsoft YaHei","PingFang SC",sans-serif;color:#24323d;line-height:1.75}
+.hero{position:relative;height:92cqw;overflow:hidden;background:#0f4c5c}
+.hero .sun{position:absolute;right:-12cqw;top:-14cqw;width:60cqw;height:60cqw;border-radius:50%;background:#e36414}
+.hero .waves{position:absolute;left:0;right:0;bottom:0}
+.hero .waves svg{display:block;width:100%;height:auto}
+.hero .tag{position:absolute;left:6cqw;top:7cqw;padding:1cqw 3cqw;border:1px solid rgba(255,255,255,.6);border-radius:99px;color:#fff;font-size:3.4cqw;letter-spacing:.3em}
+.hero h1{position:absolute;left:6cqw;bottom:24cqw;margin:0;color:#fff;font-size:12cqw;line-height:1.15;font-weight:700}
+.hero h1 span{display:block;font-size:5cqw;font-weight:400;opacity:.85}
+.lead{margin:7cqw 6cqw 0;font-size:4.2cqw}
+h2{position:relative;margin:10cqw 6cqw 3cqw;font-size:5.4cqw}
+h2::before{content:"";position:absolute;left:-6cqw;top:.35em;width:3.4cqw;height:.9em;background:#e36414}
+.cards{display:flex;gap:3cqw;margin:0 6cqw}
+.card{flex:1;padding:4cqw 3cqw;border-radius:2.4cqw;background:#f1f5f4;text-align:center;font-size:3.6cqw}
+.card b{display:block;margin-bottom:1cqw;color:#0f4c5c;font-size:7cqw;line-height:1.2}
+.layer{position:relative;margin:0 6cqw;height:40cqw}
+.layer .a{position:absolute;left:0;top:0;width:58cqw;height:30cqw;background:#9ac1b8}
+.layer .b{position:absolute;right:0;bottom:0;width:52cqw;padding:4cqw;background:#fff;box-shadow:0 1cqw 4cqw rgba(15,76,92,.18);font-size:3.8cqw;z-index:1}
+.layer .note{position:absolute;left:4cqw;top:4cqw;color:#0f4c5c;font-size:3.6cqw;transform:rotate(-4deg)}
+.anim{display:block;width:88cqw;height:auto;margin:0 6cqw}
+.quote{position:relative;margin:4cqw 6cqw 0;padding-left:5cqw;color:#52616b;font-size:4cqw}
+.quote::before{content:"";position:absolute;left:0;top:.4em;bottom:.4em;width:1cqw;background:#9ac1b8}
+.end{margin:10cqw 6cqw 12cqw;color:#8a979f;font-size:3.4cqw;text-align:center}
+</style>
+</head>
+<body>
+<div class="page">
+  <section class="hero">
+    <div class="sun"></div>
+    <div class="waves"><svg viewBox="0 0 375 120" aria-hidden="true">
+      <g><animateTransform attributeName="transform" type="translate" values="0 0;-60 0;0 0" dur="8s" repeatCount="indefinite"/>
+        <path d="M0 60 Q 60 30 120 60 T 240 60 T 360 60 T 480 60 V120 H0Z" fill="#2c7a7b" opacity=".75"/></g>
+      <g><animateTransform attributeName="transform" type="translate" values="-60 0;0 0;-60 0" dur="6s" repeatCount="indefinite"/>
+        <path d="M0 80 Q 60 55 120 80 T 240 80 T 360 80 T 480 80 V120 H0Z" fill="#f1f5f4"/></g>
+    </svg></div>
+    <div class="tag">排版示例</div>
+    <h1>海边的一天<span>从日出到日落</span></h1>
+  </section>
+
+  <p class="lead">清早出门时，海面还是灰蓝色的。等太阳完全升起来，沙滩上已经有人在捡贝壳了。这一天没有安排什么行程，只是沿着海岸慢慢走。</p>
+
+  <h2>时间表</h2>
+  <div class="cards">
+    <div class="card"><b>6:10</b>日出</div>
+    <div class="card"><b>12:30</b>涨潮</div>
+    <div class="card"><b>17:45</b>日落</div>
+  </div>
+
+  <h2>午后</h2>
+  <div class="layer">
+    <div class="a"></div>
+    <div class="note">退潮后的礁石</div>
+    <div class="b">潮水退下去以后，礁石之间留下许多小水洼，里面有螃蟹和小鱼。</div>
+  </div>
+
+  <h2>海浪</h2>
+  <svg class="anim" viewBox="0 0 330 90" aria-hidden="true">
+    <rect width="330" height="90" rx="10" fill="#f1f5f4"/>
+    <circle cx="40" cy="45" r="12" fill="#e36414"><animate attributeName="cx" values="40;290;40" dur="5s" repeatCount="indefinite"/></circle>
+    <path d="M20 70 H310" stroke="#9ac1b8" stroke-width="3" stroke-dasharray="8 8"><animate attributeName="stroke-dashoffset" values="0;-32" dur="1.6s" repeatCount="indefinite"/></path>
+  </svg>
+  <p class="quote">傍晚风大起来，浪一阵一阵地推上沙滩，又退回去。</p>
+
+  <p class="end">— 示例结束 —</p>
+</div>
+</body>
+</html>

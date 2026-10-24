@@ -3,6 +3,7 @@ test/out/
 test/vendor/
 package-lock.json
 *.md
-# 测试稿与探针页是输入数据，排版本身就是被测的内容
+# 测试稿、示例网页与探针页是输入数据，排版本身就是被测的内容
 test/fixture*/
+docs/demo/
 tools/probe.html
