@@ -1,6 +1,6 @@
 # html2gzh
 
-把 HTML 页面转换为公众号编辑器能够保留的格式，粘贴为公众号图文。
+把 HTML 网页转为公众号图文，保留原网页的版面。
 
 公众号后台的编辑器会删除 `<style>`、class、position、CSS 变量、calc()、SVG 的 id 等内容，直接复制、粘贴网页，版面会错乱。html2gzh 把文章改写为编辑器能够保留的 HTML 与 CSS：
 

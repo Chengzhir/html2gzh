@@ -2,7 +2,7 @@
   "name": "html2gzh",
   "version": "0.1.0",
   "private": true,
-  "description": "把 HTML 页面转成公众号编辑器能保留的格式，粘贴为公众号图文；本地图片临时提供给微信取走",
+  "description": "把 HTML 网页转为公众号图文，保留原网页的版面",
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
