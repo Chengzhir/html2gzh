@@ -13,6 +13,16 @@ export async function settled(page, timeout = 180000) {
   );
 }
 
+/**
+ * 写入页面内容，等图片、字体加载完。不用 networkidle0：Chrome 在版面复杂的页面上要过 1 秒多才报网络空闲，
+ * 这时请求早已结束；这里等 load 之后 100ms 内没有新请求
+ */
+export async function setContentReady(pg, html) {
+  await pg.setContent(html, { waitUntil: 'load' });
+  await pg.waitForNetworkIdle({ idleTime: 100, timeout: 10000 });
+  await pg.evaluate(() => document.fonts.ready);
+}
+
 /** 勾选框（Naive UI 的 role="checkbox"）现在是否勾上 */
 export const isChecked = (page, sel) => page.$eval(sel, e => e.getAttribute('aria-checked') === 'true');
 /** 把勾选框设成 on：状态不同才点 */

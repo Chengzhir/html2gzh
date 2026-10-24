@@ -5,6 +5,7 @@ import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 import { findChrome } from '../lib/chrome.ts';
 import { previewDoc, readerImages } from '../ui/convert/reader.ts';
+import { pickDefault, setContentReady } from './ui.mjs';
 
 const VIEW_H = 900;
 // origin：先打开本机服务的一个页面再写入内容，原稿引用的本地字体（/a/…）与页面同源，不用跨域
@@ -12,8 +13,7 @@ const load = async (browser, html, width, dpr, reader, origin) => {
   const pg = await browser.newPage();
   await pg.setViewport({ width, height: VIEW_H, deviceScaleFactor: dpr });
   if (origin) await pg.goto(origin + '/__blank');
-  await pg.setContent(html, { waitUntil: 'networkidle0' });
-  await pg.evaluate(() => document.fonts.ready);
+  await setContentReady(pg, html);
   if (reader) await pg.evaluate(`(${readerImages})(document, true)`);
   return pg;
 };
@@ -165,7 +165,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) {
     if (process.env.UI_DPR) await ui.setViewport({ width: 1280, height: 900, deviceScaleFactor: +process.env.UI_DPR });
     await ui.goto(`http://127.0.0.1:${UI}/`);
     await ui.waitForFunction(() => window.__wxc.result, { timeout: 180000 });
-    const { pickDefault } = await import('./ui.mjs');
     // PICK_MIN：勾选字号不小于它的行（默认 18）
     await pickDefault(ui, +(process.env.PICK_MIN || 18));
     const r = await ui.evaluate(() => ({

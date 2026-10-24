@@ -9,7 +9,7 @@ import { findChrome } from '../lib/chrome.ts';
 import { alignUnits } from './align.mjs';
 import { previewDoc, readerImages } from '../ui/convert/reader.ts';
 import { WX_ANIM_OK } from '../ui/convert/svg/dom.ts';
-import { settled, pickDefault, openFontList, isChecked, setChecked, typeNumber } from './ui.mjs';
+import { settled, pickDefault, openFontList, isChecked, setChecked, typeNumber, setContentReady } from './ui.mjs';
 import { buildWebfontFixture, serveRemote } from './webfonts.mjs';
 import { startServer } from './serve.mjs';
 import { pixelDiff, WINDOW } from './pixeldiff.mjs';
@@ -261,7 +261,7 @@ try {
   const colorsOf = async html => {
     const pg = await browser.newPage();
     await pg.setViewport({ width: 335, height: 800 });
-    await pg.setContent(html, { waitUntil: 'networkidle0' });
+    await setContentReady(pg, html);
     const m = await pg.evaluate(() =>
       Object.fromEntries(
         [...document.querySelectorAll('[data-wxc]')]
@@ -321,7 +321,7 @@ try {
     // 位图上方的透明文字：放在位图（foreignObject）之后、落在位图的范围内
     const pg = await browser.newPage();
     await pg.setViewport({ width: 335, height: 800 });
-    await pg.setContent(previewDoc(r.preview), { waitUntil: 'networkidle0' });
+    await setContentReady(pg, previewDoc(r.preview));
     const copies = await pg.evaluate(() =>
       [...document.querySelectorAll('svg text')]
         .filter(t => getComputedStyle(t).fillOpacity === '0')
@@ -412,8 +412,7 @@ try {
       const pg = await browser.newPage();
       await pg.setViewport({ width: 335, height: 800 });
       await pg.goto(`http://127.0.0.1:${UI}/__blank`);
-      await pg.setContent(html, { waitUntil: 'networkidle0' });
-      await pg.evaluate(() => document.fonts.ready);
+      await setContentReady(pg, html);
       const out = await pg.evaluate(ids => {
         ids ??= [...document.querySelectorAll('svg[data-wxc-unit]')]
           .filter(s => getComputedStyle(s).writingMode !== 'horizontal-tb' && s.parentElement.hasAttribute('data-wxc'))
@@ -541,8 +540,7 @@ try {
       .send('Animation.enable')
       .then(() => cdp.send('Animation.setPlaybackRate', { playbackRate: 0 }))
       .catch(() => {});
-    await pg.setContent(html, { waitUntil: 'networkidle0' });
-    await pg.evaluate(() => document.fonts.ready);
+    await setContentReady(pg, html);
     if (masks) await pg.evaluate(`(${readerImages})(document, true)`);
     const freeze = t =>
       pg.evaluate(t => {
