@@ -197,11 +197,6 @@ export function saveOpts(patch: Partial<Opts>, how: 'now' | 'soon' | 'none' = 'n
 /* ---------- 读文件、登记文件 ---------- */
 const uploaded = new WeakMap<File, string>();
 const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
-/** 准备、转换期间一定已经选好了来源 */
-function currentSrc(): Src {
-  if (!state.src) throw new Error('no source');
-  return state.src;
-}
 const uploadBlob = async (body: Blob | ArrayBuffer, ext: string, name: string) =>
   (await api<{ id: string }>(`/api/blob?ext=${encodeURIComponent(ext)}&name=${encodeURIComponent(name)}`, body, true))
     .id;
@@ -210,11 +205,11 @@ async function uploadDataUri(uri: string) {
   const ext = EXT_OF_MIME[blob.type];
   return ext ? uploadBlob(blob, ext, `inline.${ext}`) : null;
 }
-const io: PrepIO = {
+// 绑定一次转换的来源：转换中途拖入别的文件夹时，这一次仍从原来的来源取文件
+const ioFor = (src: Src): PrepIO => ({
   async resolveRefs(rels) {
     const ids = new Map<string, string | null>();
     if (!rels.length) return ids;
-    const src = currentSrc();
     if (src.kind === 'path') {
       const found = await api<Record<string, string | null>>('/api/assets', { refs: rels });
       for (const rel of rels) ids.set(rel, found[rel] || null);
@@ -241,7 +236,6 @@ const io: PrepIO = {
   },
   uploadDataUri,
   async readLocalText(rel) {
-    const src = currentSrc();
     if (src.kind === 'files') {
       const file = src.map.get(rel);
       return file ? file.text() : null;
@@ -249,7 +243,7 @@ const io: PrepIO = {
     const found = await api<Record<string, string | null>>('/api/assets', { refs: [rel] });
     return found[rel] ? (await fetch('/a/' + found[rel])).text() : null;
   },
-};
+});
 const glyphs = (body: GlyphRequest) => api<GlyphResponse>('/api/glyphs', body);
 /** SVG 里依赖 id 的部分画成的位图：登记到图床口，返回地址（复制时和其他图片一起换成取图地址） */
 const raster = async (uri: string) => {
@@ -431,7 +425,8 @@ export function rerun() {
 }
 
 async function run() {
-  if (!state.src || state.busy) return;
+  const src = state.src;
+  if (!src || state.busy) return;
   state.busy = true;
   state.copiedAt = null;
   state.copyDenied = false;
@@ -444,7 +439,6 @@ async function run() {
     width = state.width;
   try {
     let html: string, entry: string, mtime: number;
-    const src = currentSrc();
     if (src.kind === 'path') {
       const article = await api<ArticleResponse>('/api/article');
       ({ html, mtime } = article);
@@ -461,7 +455,7 @@ async function run() {
         where: src.name ? t('src.droppedDir', { name: src.name }) : t('src.droppedFiles', { n: src.map.size }),
       };
     }
-    const prep = await prepare(html, entry, io);
+    const prep = await prepare(html, entry, ioFor(src));
     if (opts.paths.length) notice('all', t('stage.convertingFonts'));
     const converted = await convert(prep.html, {
       width,
@@ -483,6 +477,11 @@ async function run() {
       mtime,
     });
     const out = await applyShrink(draft);
+    // 转换中途换了来源：这一次的结果作废，按新来源再转
+    if (state.src !== src) {
+      again = true;
+      return;
+    }
     state.result = out ? withShrink(draft, out) : draft;
     state.error = '';
     state.originalDoc = converted.original;
@@ -490,6 +489,10 @@ async function run() {
     notice('all', '');
     await renderReader();
   } catch (error) {
+    if (state.src !== src) {
+      again = true;
+      return;
+    }
     console.error(error);
     state.error = errText(error);
     notice('all', t('stage.failed', { msg: state.error }), 'err');
