@@ -175,21 +175,29 @@ try {
         .map(r => [r.left, r.top].join(','));
     const before = JSON.stringify(pos()),
       out = [];
-    for (const [scope, kind] of [
-      ['all', 'busy'],
-      ['all', 'err'],
-      ['reader', 'busy'],
+    for (const [source, kind] of [
+      ['convert', 'busy'],
+      ['convert', 'err'],
+      ['dark', 'busy'],
     ]) {
-      window.__wxcNotice(scope, '测试提示', kind);
+      window.__wxcNotice(source, '测试提示', kind);
+      await new Promise(r => setTimeout(r, 600));
+      const t = document.querySelector('#panes .notice .n-message');
+      if (!t || !t.textContent.includes('测试提示')) out.push(`${source}/${kind} 没显示`);
+      else {
+        // 不压住手机的状态栏与导航栏
+        const nbar = document.querySelector('.nbar').getBoundingClientRect().bottom;
+        if (t.getBoundingClientRect().top < nbar) out.push(`${source}/${kind} 压住了手机的导航栏`);
+      }
+      if (!document.getElementById('notice').textContent.includes('测试提示'))
+        out.push(`${source}/${kind} 读屏软件的播报区域里没有文字`);
+      if (JSON.stringify(pos()) !== before) out.push(`${source}/${kind} 挤动了预览`);
+      window.__wxcNotice(source, '');
       await new Promise(r => setTimeout(r, 400));
-      const t = document.getElementById(scope === 'all' ? 'toastAll' : 'toastReader');
-      if (!t.classList.contains('on')) out.push(`${scope}/${kind} 没显示`);
-      if (JSON.stringify(pos()) !== before) out.push(`${scope}/${kind} 挤动了预览`);
-      window.__wxcNotice(scope, '');
     }
     return out;
   });
-  check(!toastMoves.length, '提示浮在预览上方，两栏位置不变', toastMoves.join(' | '));
+  check(!toastMoves.length, '提示浮在预览上方，两栏位置不变，也不压住手机的状态栏与导航栏', toastMoves.join(' | '));
   const shown = await page.evaluate(
     fs => fs.map(f => window.__wxcFinding(f)),
     r.findings.toSorted((a, b) => a.level.localeCompare(b.level)),

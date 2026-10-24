@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, useTemplateRef } from 'vue';
-import { NCheckbox } from 'naive-ui';
+import { NCheckbox, NMessageProvider } from 'naive-ui';
 import { useI18n } from 'vue-i18n';
 import { readerImages } from '../../convert/reader.ts';
 import { BAR_H } from '../phone.ts';
-import { state, setDark } from '../store.ts';
+import { state, setDark, previewNotice } from '../store.ts';
 import { frames } from '../frames.ts';
 import { WIN } from '../status.ts';
-import Toast from './Toast.vue';
+import NoticeBridge from './NoticeBridge.vue';
 import HelpTip from './HelpTip.vue';
 import { viewOf } from '../../convert/util.ts';
 
@@ -31,9 +31,8 @@ const paneWidths = computed(() => ({
   '--a-w': state.result ? state.result.width + 'px' : undefined,
   '--b-w': state.reader.width ? state.reader.width + 'px' : undefined,
 }));
-const dimAll = computed(() => state.notices.all.shown && state.notices.all.kind === 'busy');
-const dimReader = computed(() => state.notices.reader.shown && state.notices.reader.kind === 'busy');
-const emptyMsg = computed(() => (state.notices.all.shown ? state.notices.all : null));
+const dim = computed(() => previewNotice.value.shown && previewNotice.value.kind === 'busy');
+const emptyMsg = computed(() => (state.notices.convert.shown ? state.notices.convert : null));
 
 // 原网页顶上留出与阅读页标题区等高的空白，两栏同步滚动就是一比一。用定位的 html 的上外边距（边框宽度会被取整）：
 // 相对页面定位的元素一起下移，vh 不变；NEUTRAL 用 !important 清掉了 html 的外边距，这里也要 !important
@@ -86,8 +85,10 @@ function onLoad(which: 'A' | 'B') {
 
 <template>
   <main class="stage" :style="{ '--wxbar-h': BAR_H + 'px' }">
-    <div id="panes" :class="['panes', { dim: dimAll }]" :style="paneWidths" :hidden="!state.panesShown">
-      <Toast scope="all" />
+    <div id="panes" :class="['panes', { dim }]" :style="paneWidths" :hidden="!state.panesShown">
+      <NMessageProvider to="#panes" container-class="notice">
+        <NoticeBridge />
+      </NMessageProvider>
       <figure class="pane">
         <figcaption>{{ t('stage.original') }}</figcaption>
         <div class="sheet">
@@ -110,8 +111,7 @@ function onLoad(which: 'A' | 'B') {
           }}</NCheckbox>
         </figcaption>
         <div id="device" :class="['device', { dark: state.reader.dark }]">
-          <div id="screen" :class="['screen', { dim: dimReader }]">
-            <Toast scope="reader" />
+          <div id="screen" class="screen">
             <div class="sbar" aria-hidden="true">
               <span>9:41</span
               ><svg viewBox="0 0 26 12">

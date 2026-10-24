@@ -875,89 +875,26 @@ details.fold > summary:hover {
   visibility: hidden;
 }
 
-/* 浮在预览上方的提示：不占位置，不把两栏往下挤 */
-/* left:50% 时自动宽度只按右半边可用空间收缩，短句也会折行；改用 max-content，由 max-width 限宽 */
-.toast {
+/* 预览区的提示：Naive UI 的消息，挂在 #panes 里，浮在两栏上方，不把两栏往下挤 */
+/* 预览区是尺寸容器，position: fixed 会相对它定位，改成 absolute。上沿在正文可见区上沿以下 10px，不压住手机的状态栏与导航栏 */
+.panes .notice.n-message-container {
   position: absolute;
-  left: 50%;
   z-index: 5;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: max-content;
-  max-width: min(560px, calc(100% - 24px));
-  padding: 7px 14px;
-  border-radius: 18px;
-  background: rgba(29, 27, 24, 0.92);
-  color: #f4f1ea;
-  font-size: 13px;
-  line-height: 1.5;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
-  pointer-events: none;
-  visibility: hidden;
-}
-.toast.on {
-  visibility: visible;
-}
-.toast-all {
-  top: 52px;
-}
-/* 手机屏放大时，屏里的提示反向缩小，字号与界面其他文字相同 */
-.toast-reader {
-  top: 84px;
-  max-width: calc((100% - 24px) * var(--pv-scale));
-  transform: translateX(-50%) scale(calc(1 / var(--pv-scale)));
-  transform-origin: 50% 0;
-}
-.toast.busy .toast-text::before {
-  content: '';
-  display: inline-block;
-  width: 11px;
-  height: 11px;
-  margin-right: 8px;
-  vertical-align: -1px;
-  border: 2px solid rgba(244, 241, 234, 0.35);
-  border-top-color: #f4f1ea;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-.toast.err {
-  background: #fff;
-  color: var(--ui-err);
-  border: 1px solid var(--ui-err);
-  border-radius: 8px;
-  pointer-events: auto;
-}
-.toast-text {
-  text-wrap: balance;
-}
-.toast-x {
-  padding: 0 2px;
-  border: 0;
-  background: none;
-  font-size: 16px;
-  line-height: 1;
-  color: inherit;
-  cursor: pointer;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  top: calc(var(--cap-h) + var(--cap-gap) + var(--pv-scale) * (var(--dev-pad) + var(--sbar-h) + var(--nbar-h) + 10px));
+  left: 0;
+  right: 0;
 }
 .panes.dim .sheet iframe,
-.panes.dim .screen iframe,
-.screen.dim iframe {
+.panes.dim .screen iframe {
   opacity: 0.55;
   transition: opacity 0.2s;
 }
 @media (prefers-reduced-motion: reduce) {
-  .toast.busy .toast-text::before {
-    animation: none;
+  .n-message-container .n-base-loading,
+  .n-message-container .n-base-loading * {
+    animation: none !important;
   }
-  .panes.dim iframe,
-  .screen.dim iframe {
+  .panes.dim iframe {
     transition: none;
   }
 }

@@ -1,5 +1,5 @@
 // 页面的状态与动作：载入与转换、大图压缩、轮询本机服务、复制。组件只读状态、调这里的函数
-import { reactive, markRaw, nextTick } from 'vue';
+import { computed, reactive, markRaw, nextTick } from 'vue';
 import { convert } from '../convert/index.ts';
 import { DEFAULT_OPTS } from '../convert/fonts.ts';
 import { ASSET_ID, assetIdsIn } from '../convert/assetid.ts';
@@ -73,6 +73,7 @@ interface ShrinkOutcome {
   sizes: Map<string, number>;
 }
 export type NoticeKind = 'busy' | 'err';
+export type NoticeSource = 'convert' | 'dark';
 interface Notice {
   text: string;
   kind: NoticeKind;
@@ -152,17 +153,23 @@ export const state = reactive({
   originalDoc: '',
   reader: { width: 0, dark: false, html: '', darkDoc: false },
   notices: {
-    all: idleNotice(),
-    reader: idleNotice(),
+    convert: idleNotice(),
+    dark: idleNotice(),
   },
 });
 
 /* ---------- 提示 ---------- */
-// 浮在预览上方，不占位置。all：两栏都受影响（转换）；reader：只影响阅读页（深色模式）。
-// 进度提示延迟一会儿才出现，很快结束的操作不闪一下；已经显示着时直接换字。错误立即显示，点 × 关闭。还没有预览时写在空白区里
+// 转换与生成深色模式可能同时进行，所以两者的提示分开保存：先结束的一方只清除自己的提示，另一方的提示继续显示。
+// 两者都有提示时，预览区只显示转换的提示，转换结束后再显示深色模式的提示（previewNotice）。
+// 进度提示稍等一会儿才出现，很快完成的操作不会让提示一闪而过；提示正在显示时，新的进度直接替换其中的文字。
+// 错误提示立即出现，点 × 关闭。还没有预览时，提示显示在预览区的空白处
 const NOTICE_DELAY = 300;
-export function notice(scope: 'all' | 'reader', text: string, kind: NoticeKind = 'busy') {
-  const target = state.notices[scope];
+export const previewNotice = computed(() => {
+  const source: NoticeSource = state.notices.convert.shown ? 'convert' : 'dark';
+  return { source, ...state.notices[source] };
+});
+export function notice(source: NoticeSource, text: string, kind: NoticeKind = 'busy') {
+  const target = state.notices[source];
   clearTimeout(target.timer);
   const show = () => {
     target.text = text;
@@ -170,7 +177,7 @@ export function notice(scope: 'all' | 'reader', text: string, kind: NoticeKind =
     target.shown = !!text;
   };
   const showingBusy = target.shown && target.kind === 'busy';
-  if (text && kind === 'busy' && !showingBusy && (scope === 'reader' || state.panesShown))
+  if (text && kind === 'busy' && !showingBusy && (source === 'dark' || state.panesShown))
     target.timer = window.setTimeout(show, NOTICE_DELAY);
   else show();
 }
@@ -355,7 +362,7 @@ async function applyShrink({ base, report }: Pick<Result, 'base' | 'report'>): P
               error: errText(error),
             })),
           );
-          if (seq === shrinkSeq) notice('all', t('shrink.progress', { n: ++done, total: ids.length }));
+          if (seq === shrinkSeq) notice('convert', t('shrink.progress', { n: ++done, total: ids.length }));
         }
       }),
     );
@@ -410,7 +417,7 @@ async function reshrink() {
     const out = await applyShrink(result);
     if (!out || state.result !== result) return;
     state.result = withShrink(result, out);
-    notice('all', '');
+    notice('convert', '');
     await renderReader();
   } finally {
     if (!--shrinkRuns) state.shrinking = false;
@@ -436,7 +443,7 @@ async function run() {
   again = false;
   shrinkAgain = false;
   srcNote('');
-  notice('all', t('stage.converting'));
+  notice('convert', t('stage.converting'));
   // 转换器拿到的是普通对象，不是响应式代理
   const opts: Opts = { ...state.opts, paths: [...state.opts.paths] },
     width = state.width;
@@ -459,7 +466,7 @@ async function run() {
       };
     }
     const prep = await prepare(html, entry, ioFor(src));
-    if (opts.paths.length) notice('all', t('stage.convertingFonts'));
+    if (opts.paths.length) notice('convert', t('stage.convertingFonts'));
     const converted = await convert(prep.html, {
       width,
       frame: frame('scratch'),
@@ -489,7 +496,7 @@ async function run() {
     state.error = '';
     state.originalDoc = converted.original;
     state.panesShown = true;
-    notice('all', '');
+    notice('convert', '');
     await renderReader();
   } catch (error) {
     if (state.src !== src) {
@@ -498,7 +505,7 @@ async function run() {
     }
     console.error(error);
     state.error = errText(error);
-    notice('all', t('stage.failed', { msg: state.error }), 'err');
+    notice('convert', t('stage.failed', { msg: state.error }), 'err');
   } finally {
     state.busy = false;
     if (again) void run();
@@ -524,12 +531,12 @@ async function renderReader() {
   state.reader.dark = dark;
   const doc = readerDoc(result.preview, { ...result.meta, time: result.mtime }, dark);
   if (!dark) {
-    notice('reader', '');
+    notice('dark', '');
     state.reader.darkDoc = false;
     state.reader.html = doc;
     return;
   }
-  notice('reader', t('stage.darkBusy'));
+  notice('dark', t('stage.darkBusy'));
   // 先让新宽度生效：深色算法按首屏判断背景，隐藏帧要和显示用的 iframe 一样高
   await nextTick();
   try {
@@ -537,13 +544,13 @@ async function renderReader() {
     if (html == null || seq !== readerSeq) return;
     state.reader.darkDoc = true;
     state.reader.html = html;
-    notice('reader', '');
+    notice('dark', '');
   } catch (error) {
     if (seq !== readerSeq) return;
     // 深色算法出错：右栏换上这次的成品（未经深色转换），不留着上一篇或空白
     state.reader.darkDoc = false;
     state.reader.html = doc;
-    notice('reader', errText(error), 'err');
+    notice('dark', errText(error), 'err');
   }
 }
 
