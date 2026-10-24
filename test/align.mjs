@@ -148,6 +148,10 @@ export async function alignUnits(browser, original, preview, width, dpr, origin)
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) {
+  if (!process.argv[2]) {
+    console.error('用法：node test/align.mjs <文章路径> [设备像素比…]');
+    process.exit(1);
+  }
   const ARTICLE = path.resolve(process.argv[2]);
   const DPRS = process.argv.slice(3).map(Number).filter(Boolean);
   const IMG = 48980,

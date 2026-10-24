@@ -7,6 +7,10 @@ import { pickDefault } from '../test/ui.mjs';
 import { startServer } from '../test/serve.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const [ARTICLE, MODE = 'svg'] = process.argv.slice(2);
+if (!ARTICLE) {
+  console.error('用法：node tools/shot-side.mjs <文章> [svg|text]');
+  process.exit(1);
+}
 const IMG = 48982,
   UI = 48983;
 const srv = await startServer({ article: ARTICLE, img: IMG, ui: UI });

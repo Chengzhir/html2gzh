@@ -3,10 +3,11 @@ import puppeteer from 'puppeteer-core';
 import { findChrome } from '../lib/chrome.ts';
 import { startServer } from '../test/serve.mjs';
 const ART = process.argv[2] || 'test/fixture';
-const srv = await startServer({ article: ART, img: 48970, ui: 48971 });
+// 48970 留给网页字体测试稿的模拟字体网站（test/webfonts.mjs）
+const srv = await startServer({ article: ART, img: 48984, ui: 48985 });
 const b = await puppeteer.launch({ executablePath: findChrome(), headless: true });
 const p = await b.newPage();
-await p.goto('http://127.0.0.1:48971/');
+await p.goto('http://127.0.0.1:48985/');
 await p.waitForFunction(() => window.__wxc.result, { timeout: 90000 });
 const r = await p.evaluate(() => {
   const s = window.__wxc.result;

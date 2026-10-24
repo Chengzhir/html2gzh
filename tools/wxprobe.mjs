@@ -1,8 +1,9 @@
 // 公众号存储清洗探针：生成一页带编号的小样（CSS 属性、HTML 标签、SVG 结构与 SMIL 动画），贴进测试草稿保存后，
 // 从预览页取回存储下来的正文，逐项比对哪些被删、被改。平台规则在服务端，会变，改转换器前可以重跑一遍。
 // 用法：
-//   node tools/wxprobe.mjs build [--img <mmbiz 图片地址>]   → test/out/probe.html（再用 tools/clip.mjs test/out/probe.html 放进剪贴板）
-//   node tools/wxprobe.mjs check <预览链接>                 → 逐项结果，另存 test/out/probe-result.json
+//   node tools/wxprobe.mjs build [--set 1|2|3|4] [--img <mmbiz 图片地址>] [--asset <外网可达的图片地址>]
+//                                                          → test/out/probe.html（再用 tools/clip.mjs test/out/probe.html 放进剪贴板）
+//   node tools/wxprobe.mjs check <预览链接或存储正文文件>   → 逐项结果，另存 test/out/probe-result.json
 //   node tools/wxprobe.mjs diff <预览链接> [发出的正文]      → 转换器成品整份比对：存下来的正文与发出的有哪些差异（合并计数），另存 test/out/diff-result.json
 import fs from 'node:fs';
 import puppeteer from 'puppeteer-core';

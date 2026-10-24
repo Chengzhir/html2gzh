@@ -1,5 +1,5 @@
 // 端到端：起真服务 → 无头 Chrome 打开页面 → 转换文章 → 检查成品 + 原稿/成品逐像素比对 + 端口安全探测
-// 用法：node test/e2e.mjs [文章路径]   默认用 test/fixture
+// 用法：node test/e2e.mjs [文章路径] [--svg]   默认用 test/fixture；--svg 勾选转为 SVG 路径
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
