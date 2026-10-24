@@ -185,6 +185,19 @@ try {
       codes.filter(c => c.startsWith('z')).join(',') || '无',
     );
   }
+  if (ARTICLE === path.join(HERE, 'fixture-svg')) {
+    // 有动画的渐变图形换成平均色：红、白、蓝各占一半的渐变（offset 写成百分数），平均约为 rgb(191,128,191)
+    const fill = /<circle\b[^>]*\bcx="88"[^>]*>/
+      .exec(p)?.[0]
+      .match(/fill:\s*rgba?\(([^)]*)\)/)?.[1]
+      .split(',')
+      .map(Number);
+    check(
+      !!fill && Math.abs(fill[0] - 191) < 8 && Math.abs(fill[2] - 191) < 8,
+      '渐变的 offset 写成百分数时，平均色按 0–1 的位置算',
+      fill ? fill.slice(0, 3).join(',') : '没找到',
+    );
+  }
   check(count(/[\s;"]position\s*:/g) === 0, '没有 position', String(count(/[\s;"]position\s*:/g)));
   check(count(/var\(|--[a-z]/g) === 0, '没有 CSS 变量');
   check(count(/\d(rem|vh|cq[hb])\b/g) === 0, '没有 rem/vh/cqh');

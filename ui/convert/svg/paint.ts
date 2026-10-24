@@ -43,13 +43,13 @@ function averageStops(gradient: Element, ids: Map<string, Element>, win: Window)
     node = href ? ids.get(href) : undefined;
   }
   if (!stops.length) return null;
+  // offset 可以写成 0–1 的数或百分数，DOM 里的 offset.baseVal 已换算成 0–1；比前一个小的按前一个算（与绘制时一致）
+  let previous = 0;
   const points = stops.map(stop => {
     const computed = win.getComputedStyle(stop),
       color = parseColor(computed.stopColor) || [0, 0, 0, 1];
-    return {
-      o: Math.min(1, Math.max(0, parseFloat(attrOf(stop, 'offset')) || 0)),
-      c: [...color.slice(0, 3), color[3] * +computed.stopOpacity],
-    };
+    previous = Math.max(previous, Math.min(1, (stop as SVGStopElement).offset.baseVal));
+    return { o: previous, c: [...color.slice(0, 3), color[3] * +computed.stopOpacity] };
   });
   if (points.length === 1) return points[0].c;
   const acc = [0, 0, 0, 0];

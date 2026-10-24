@@ -86,7 +86,9 @@ body{margin:8px;font:15px/1.6 sans-serif;color:#222}
 
 <section class="case" data-pixel-skip><p>有动画的渐变图形（只能换成平均色，近似）</p>
 <svg viewBox="0 0 200 60"><defs><linearGradient id="lg3"><stop offset="0" stop-color="#dc2626"/><stop offset="1" stop-color="#2f6db3"/></linearGradient></defs>
-<circle cx="30" cy="30" r="14" fill="url(#lg3)"><animate attributeName="r" values="14;22;14" dur="2s" repeatCount="indefinite"/></circle></svg></section>
+<circle cx="30" cy="30" r="14" fill="url(#lg3)"><animate attributeName="r" values="14;22;14" dur="2s" repeatCount="indefinite"/></circle>
+<linearGradient id="lg5"><stop offset="0%" stop-color="#f00"/><stop offset="50%" stop-color="#fff"/><stop offset="100%" stop-color="#00f"/></linearGradient>
+<circle cx="88" cy="30" r="14" fill="url(#lg5)"><animate attributeName="r" values="14;20;14" dur="2s" repeatCount="indefinite"/></circle></svg></section>
 
 <section class="case" data-sample-skip><p>渐变里的动画（公众号里播放不了，按 0 秒时的样子画成位图；第一个色标只由动画给颜色）</p>
 <svg viewBox="0 0 200 60"><defs><linearGradient id="lg4" x2="0.5"><stop offset="0"><animate attributeName="stop-color" values="#dc2626;#2f6db3;#dc2626" dur="2s" repeatCount="indefinite"/></stop><stop offset="1" stop-color="#e90"><animate attributeName="offset" values="0.6;1;0.6" dur="2s" repeatCount="indefinite"/></stop><animate attributeName="x2" values="1;0.5;1" dur="2s" repeatCount="indefinite"/></linearGradient></defs>
