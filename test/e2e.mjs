@@ -951,6 +951,21 @@ try {
     });
     check(r2.status === 200 && JSON.parse(r2.body)[outside] === null, '不登记文章文件夹以外的文件', outside);
   }
+  {
+    // 资源管理器“复制文件地址”得到的路径带双引号。指向没有 HTML 的 test/vendor，不会换掉当前文章
+    const noHtml = path.join(HERE, 'vendor');
+    const r3 = await raw(UI, '/api/open', {
+      method: 'POST',
+      headers: { host: '127.0.0.1:' + UI, origin: 'http://127.0.0.1:' + UI },
+      body: JSON.stringify({ path: ` "${noHtml}" ` }),
+    });
+    const reply = JSON.parse(r3.body);
+    check(
+      r3.status === 400 && reply.code === 'noHtml' && reply.params?.path === noHtml,
+      '打开的路径去掉前后的空格与引号',
+      `${r3.status} ${reply.code} ${reply.params?.path}`,
+    );
+  }
 
   // 下载进度：照微信服务器的请求规律模拟——下载成功只来一次；超时（约 0.5 秒）隔 0.5 秒重试，三次后放弃
   console.log('\n下载进度');

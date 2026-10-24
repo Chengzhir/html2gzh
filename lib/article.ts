@@ -14,7 +14,8 @@ function findHtml(target: string): string | null {
   return pick ? path.join(target, pick) : null;
 }
 function cleanPath(input: unknown) {
-  let text = typeof input === 'string' ? input : ''.trim().replace(/^["']|["']$/g, '');
+  // 资源管理器的“复制文件地址”带双引号
+  let text = (typeof input === 'string' ? input : '').trim().replace(/^["']|["']$/g, '');
   if (/^file:\/\//i.test(text)) text = fileURLToPath(text);
   return text;
 }
