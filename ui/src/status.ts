@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import { assetIdsIn } from '../convert/assetid.ts';
 import { t } from './i18n.ts';
 import { kb } from './fmt.ts';
-import { state } from './store.ts';
+import { state, redoHint } from './store.ts';
 import { counts } from './checks.ts';
 
 // Windows 上用 serve.cmd 启动；别的系统在终端里跑 node server.ts
@@ -17,6 +17,8 @@ const saveTwice = () => (/<img\b/.test(state.result?.payload ?? '') ? t('copy.sa
 /** 复制按钮能不能点，以及按钮下的说明 */
 export const copyState = computed(() => {
   const images = localIds.value.length;
+  // 转换失败时留下的是上一次的成品，与现在的原网页或设置对不上，不能复制
+  if (state.error && !state.busy) return { disabled: true, note: t('copy.failed', { redo: redoHint() }) };
   if (!state.result) return { disabled: true, note: t('copy.idle') };
   if (images && !pick()) {
     const checking = state.server && (state.server.host.checking || state.recheckPending);
