@@ -124,11 +124,12 @@ export function tempStyle(doc: Document, css: string): Disposable {
   return { [Symbol.dispose]: () => style.remove() };
 }
 
-/** 不含 transform 的布局盒 */
-export function layoutRect(doc: Document, el: Element) {
+/** 不含 transform 的布局盒。加、删样式表各要整页重排一次，要量好几个元素时一起量 */
+export function layoutRects(doc: Document, els: Element[]) {
   using _noTransform = tempStyle(doc, NO_TRANSFORM);
-  return el.getBoundingClientRect();
+  return els.map(el => el.getBoundingClientRect());
 }
+export const layoutRect = (doc: Document, el: Element) => layoutRects(doc, [el])[0];
 
 /**
  * 量每个带 ID 的元素相对 body 内容区原点的盒子。layout=true 时临时去掉 transform，得到的是布局位置。

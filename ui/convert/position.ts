@@ -1,4 +1,4 @@
-import { ID, idOf, isHtmlEl, isText, round, measure, layoutRect, viewOf } from './util.ts';
+import { ID, idOf, isHtmlEl, isText, round, measure, layoutRects, tempStyle, NO_TRANSFORM, viewOf } from './util.ts';
 import { msg } from './types.ts';
 import type { BoxRect, FindingSink } from './types.ts';
 
@@ -52,36 +52,41 @@ export function convertPositions(doc: Document, root: Element, findings: Finding
   const plan: PositionPlan[] = [];
   for (const el of els) {
     const computed = computedStyle(el);
-    if (computed.position === 'static') {
-      stripInset(el.style);
-      continue;
-    }
-    const rect = layoutRect(doc, el);
-    plan.push({
-      el,
-      pos: computed.position,
-      z: computed.zIndex,
-      tf: computed.transform,
-      w: rect.width,
-      h: rect.height,
-      display: computed.display,
-    });
+    // 静态元素本来不受 top、left 等影响，去掉它们不改版面，可以先去掉再量定位元素
+    if (computed.position === 'static') stripInset(el.style);
+    else
+      plan.push({
+        el,
+        pos: computed.position,
+        z: computed.zIndex,
+        tf: computed.transform,
+        w: 0,
+        h: 0,
+        display: computed.display,
+      });
   }
+  layoutRects(
+    doc,
+    plan.map(item => item.el),
+  ).forEach((rect, i) => Object.assign(plan[i], { w: rect.width, h: rect.height }));
   // 宽度先全部量完：转换一个元素会改变别的元素的包含块
-  for (const item of plan) {
-    if (item.pos !== 'absolute' && item.pos !== 'fixed') continue;
-    const style = item.el.style;
-    const set = (value: string) => !!value && value !== 'auto';
-    item.explicitH = set(style.height);
-    item.stretch = set(style.left) && set(style.right);
-    item.side = set(style.right) && !set(style.left) ? 'right' : 'left';
-    item.maxContent = false;
-    if ((!style.width || style.width === 'auto') && !item.stretch) {
-      const old = style.getPropertyValue('width');
-      style.setProperty('width', 'max-content');
-      item.maxContent = Math.abs(layoutRect(doc, item.el).width - item.w) < 0.3;
-      if (old) style.setProperty('width', old);
-      else style.removeProperty('width');
+  {
+    using _noTransform = tempStyle(doc, NO_TRANSFORM);
+    for (const item of plan) {
+      if (item.pos !== 'absolute' && item.pos !== 'fixed') continue;
+      const style = item.el.style;
+      const set = (value: string) => !!value && value !== 'auto';
+      item.explicitH = set(style.height);
+      item.stretch = set(style.left) && set(style.right);
+      item.side = set(style.right) && !set(style.left) ? 'right' : 'left';
+      item.maxContent = false;
+      if ((!style.width || style.width === 'auto') && !item.stretch) {
+        const old = style.getPropertyValue('width');
+        style.setProperty('width', 'max-content');
+        item.maxContent = Math.abs(item.el.getBoundingClientRect().width - item.w) < 0.3;
+        if (old) style.setProperty('width', old);
+        else style.removeProperty('width');
+      }
     }
   }
   const fixed: HTMLElement[] = [],
@@ -208,7 +213,7 @@ function flexify(doc: Document, parent: HTMLElement): boolean {
   const floating = (e: Element) => e.hasAttribute('data-wxc-float');
   // 浮动的元素稍后统一用 translate 摆回，不参与这里的校验；父级例外：下面要按它的内容框排，它自己浮动也要量
   const watched = [parent, ...[parent.nextElementSibling, ...kids].filter(e => e != null).filter(e => !floating(e))];
-  const snap = () => watched.map(e => layoutRect(doc, e));
+  const snap = () => layoutRects(doc, watched);
   const before = snap();
   const rectOf = new Map(watched.map((e, i) => [e, before[i]]));
   const saved = [parent, ...kids].map(e => e.getAttribute('style'));
@@ -223,7 +228,7 @@ function flexify(doc: Document, parent: HTMLElement): boolean {
     return [parseFloat(computed.marginTop), parseFloat(computed.marginBottom)];
   });
   const collapse = (a: number, b: number) => Math.max(a, b, 0) + Math.min(a, b, 0);
-  const floatH = kids.map(kid => (floating(kid) ? layoutRect(doc, kid).height : 0));
+  const floatH = layoutRects(doc, kids).map((rect, i) => (floating(kids[i]) ? rect.height : 0));
   parent.style.setProperty('display', 'flex');
   parent.style.setProperty('flex-direction', 'column');
   parent.style.setProperty('align-items', 'stretch');
