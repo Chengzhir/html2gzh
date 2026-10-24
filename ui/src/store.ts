@@ -533,7 +533,11 @@ async function renderReader() {
     state.reader.html = html;
     notice('reader', '');
   } catch (error) {
-    if (seq === readerSeq) notice('reader', errText(error), 'err');
+    if (seq !== readerSeq) return;
+    // 深色算法出错：右栏换上这次的成品（未经深色转换），不留着上一篇或空白
+    state.reader.darkDoc = false;
+    state.reader.html = doc;
+    notice('reader', errText(error), 'err');
   }
 }
 
