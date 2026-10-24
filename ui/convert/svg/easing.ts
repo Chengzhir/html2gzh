@@ -135,7 +135,10 @@ export function compile<V>(keyframes: Keyframe<V>[], lerp: (a: V, b: V, p: numbe
   return { times, values, splines: splines.some(text => text !== '0 0 1 1') ? splines : null };
 }
 
-/** 离散属性（visibility）：两帧之间取 CSS 的插值规则——有一端可见，中间就可见 */
+/**
+ * 离散属性（visibility）：两帧之间取 CSS 的插值规则——有一端可见，中间就可见。
+ * steps() 把一段分成几个台阶，按台阶的进度取值：进度为 0 是前一帧（step-end 整段都是），为 1 是后一帧
+ */
 export function compileDiscrete<V>(
   keyframes: Keyframe<V>[],
   interior: (from: V, to: V) => V,
@@ -143,8 +146,19 @@ export function compileDiscrete<V>(
   const times: number[] = [],
     values: V[] = [];
   for (let i = 0; i + 1 < keyframes.length; i++) {
-    times.push(keyframes[i].off);
-    values.push(interior(keyframes[i].v, keyframes[i + 1].v));
+    const a = keyframes[i],
+      b = keyframes[i + 1],
+      easing = a.e;
+    if (easing.kind !== 'steps') {
+      times.push(a.off);
+      values.push(interior(a.v, b.v));
+      continue;
+    }
+    for (let k = 0; k < easing.n; k++) {
+      const level = stepLevel(easing, k);
+      times.push(a.off + ((b.off - a.off) * k) / easing.n);
+      values.push(level <= 0 ? a.v : level >= 1 ? b.v : interior(a.v, b.v));
+    }
   }
   times.push(1);
   values.push(keyframes[keyframes.length - 1].v);
