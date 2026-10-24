@@ -707,15 +707,21 @@ details.fold > summary:hover {
   overflow: auto;
   padding: 20px 24px;
   position: relative;
+  display: flex;
+  flex-direction: column;
 }
+/* 两栏在预览区里水平、垂直居中；放不下时从左上角排起，照常滚动（safe：直接居中的话，超出左边的部分滚不到） */
 .panes {
   position: relative;
   display: flex;
+  flex: none;
   flex-wrap: wrap;
   align-items: flex-start;
+  justify-content: safe center;
   gap: 24px;
   width: fit-content;
   max-width: 100%;
+  margin: auto;
 }
 .pane {
   display: flex;
