@@ -83,6 +83,12 @@ export const checkItems = computed<CheckItem[]>(() => {
       ]),
     );
   }
+  if (report.stills.length)
+    items.push(
+      item('warn', 'stills', { n: report.stills.length, list: few(report.stills) }, [
+        para(t('checks.stills.detail', { redo })),
+      ]),
+    );
   if (shrunk.length) {
     const lines = shrunk.slice(0, 8).map(shrinkLine);
     if (shrunk.length > 8) lines.push(t('checks.shrinkMore', { n: shrunk.length }));

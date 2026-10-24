@@ -51,6 +51,8 @@ interface Report extends PrepReport {
   big: Big[];
   shrunk: Shrunk[];
   sizes: Map<string, number>;
+  /** APNG 与动图 WebP 的名称：公众号文章里只显示第一帧 */
+  stills: string[];
 }
 export interface Result extends ConvertResult {
   report: Report;
@@ -298,6 +300,26 @@ async function imageSizes(payload: string) {
   );
   return sizes;
 }
+/** 成品里的 APNG 与动图 WebP 的 id：公众号读者拿到的这两种图只有第一帧，动图只有 GIF 能保留 */
+async function animatedStills(payload: string) {
+  const ids = assetIdsIn(payload).filter(id => /\.(png|webp)$/.test(id));
+  const animated = await Promise.all(
+    ids.map(async id => {
+      try {
+        const response = await fetch('/a/' + id);
+        if (!response.ok || !response.body) return false;
+        const decoder = new ImageDecoder({ data: response.body, type: response.headers.get('content-type') || '' });
+        await decoder.tracks.ready;
+        const isAnimated = decoder.tracks.selectedTrack?.animated ?? false;
+        decoder.close();
+        return isAnimated;
+      } catch {
+        return false;
+      }
+    }),
+  );
+  return ids.filter((_, i) => animated[i]);
+}
 /** 超过 limit 字节的本地图片，从大到小 */
 async function bigImages(
   payload: string,
@@ -450,9 +472,10 @@ async function run() {
       raster,
       fontBytes,
     });
+    const stills = (await animatedStills(converted.payload)).map(id => prep.report.names.get(id) || t('img.generated'));
     const draft: Result = markRaw({
       ...converted,
-      report: { ...prep.report, big: [], shrunk: [], sizes: new Map() },
+      report: { ...prep.report, big: [], shrunk: [], sizes: new Map(), stills },
       paths: opts.paths,
       width,
       base: { payload: converted.payload, preview: converted.preview },
@@ -645,4 +668,4 @@ export function setDark(on: boolean) {
 export const redoHint = () => t(state.src?.kind === 'files' ? 'src.redoFiles' : 'src.redoPath');
 
 // 测试与排查脚本用的钩子
-Object.assign(window, { __wxc: state, __wxcNotice: notice, __wxcBig: bigImages });
+Object.assign(window, { __wxc: state, __wxcNotice: notice, __wxcBig: bigImages, __wxcStills: animatedStills });

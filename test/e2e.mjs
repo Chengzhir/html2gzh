@@ -3,7 +3,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import zlib from 'node:zlib';
 import puppeteer from 'puppeteer-core';
 import sharp from 'sharp';
 import { findChrome } from '../lib/chrome.ts';
@@ -15,6 +14,7 @@ import { buildWebfontFixture, serveRemote } from './webfonts.mjs';
 import { startServer } from './serve.mjs';
 import { pixelDiff, WINDOW } from './pixeldiff.mjs';
 import { assetIdsIn } from '../ui/convert/assetid.ts';
+import { apngOf } from './apng.mjs';
 
 const HERE = import.meta.dirname;
 const args = process.argv.slice(2);
@@ -1161,18 +1161,52 @@ try {
       max: 1024,
     });
     check(r3.skip === 'vector', 'SVG 不压缩', JSON.stringify(r3));
-    // APNG：在 IHDR 后面插一个 acTL 块（sharp 读 APNG 只读第一帧，压缩会丢掉动画）
-    const still = await sharp({ create: { width: 1600, height: 200, channels: 3, background: '#468' } })
-      .png()
-      .toBuffer();
-    const acTLData = Buffer.alloc(8);
-    acTLData.writeUInt32BE(2, 0);
-    const acTLType = Buffer.from('acTL', 'latin1');
-    const acTL = Buffer.concat([Buffer.from([0, 0, 0, 8]), acTLType, acTLData, Buffer.alloc(4, 0)]);
-    acTL.writeUInt32BE(zlib.crc32(Buffer.concat([acTLType, acTLData])), 16);
-    const apng = Buffer.concat([still.subarray(0, 33), acTL, still.subarray(33)]);
+    // 动图：sharp 读 APNG 只读第一帧，压缩会丢掉动画
+    const frames = (width, height) =>
+      Promise.all(
+        ['#c33', '#36c'].map(color =>
+          sharp({ create: { width, height, channels: 3, background: color } })
+            .png()
+            .toBuffer(),
+        ),
+      );
+    const apng = apngOf(await frames(1600, 200));
     const r6 = await shrinkApi({ id: await blob(apng, 'png', 'anim.png'), max: 1000 << 10 });
     check(r6.skip === 'animated', '比 1080px 宽的 APNG 不压缩，保留动画', JSON.stringify(r6));
+    // 公众号读者拿到的 APNG 与动图 WebP 只有第一帧，GIF 与静态图不算
+    const tiny = await frames(40, 20);
+    const stillIds = {
+      apng: await blob(apngOf(tiny), 'png', 'a.png'),
+      webp: await blob(
+        await sharp(tiny, { join: { animated: true } })
+          .webp()
+          .toBuffer(),
+        'webp',
+        'a.webp',
+      ),
+      gif: await blob(
+        await sharp(tiny, { join: { animated: true } })
+          .gif()
+          .toBuffer(),
+        'gif',
+        'a.gif',
+      ),
+      png: await blob(tiny[0], 'png', 'b.png'),
+    };
+    const stills = await page.evaluate(
+      ids =>
+        window.__wxcStills(
+          Object.values(ids)
+            .map(id => `<img src="/a/${id}">`)
+            .join(''),
+        ),
+      stillIds,
+    );
+    check(
+      stills.length === 2 && stills.includes(stillIds.apng) && stills.includes(stillIds.webp),
+      '检查结果列出 APNG 与动图 WebP（只显示第一帧），不列 GIF 与静态 PNG',
+      JSON.stringify(stills),
+    );
 
     // 页面：把照片放进成品，勾选“压缩大图”、上限 400 KB → 成品里换成压缩后的副本；取消勾选后换回原图
     const saved = await page.evaluate(id => {
