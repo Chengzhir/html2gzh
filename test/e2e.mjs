@@ -178,6 +178,12 @@ try {
   check(count(/\sclass=/g) === 0, '没有 class');
   if (ARTICLE === path.join(HERE, 'fixture')) {
     check(!p.includes('星标'), '伪元素 content 里斜杠后的替代文字不写进正文');
+    const codes = r.findings.map(f => f.code);
+    check(
+      codes.includes('zFlex') && !codes.includes('zLost'),
+      '容器里有隐藏的子元素时，仍能改为纵向 flex 保留 z-index',
+      codes.filter(c => c.startsWith('z')).join(',') || '无',
+    );
   }
   check(count(/[\s;"]position\s*:/g) === 0, '没有 position', String(count(/[\s;"]position\s*:/g)));
   check(count(/var\(|--[a-z]/g) === 0, '没有 CSS 变量');

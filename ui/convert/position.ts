@@ -208,11 +208,18 @@ function flexify(doc: Document, parent: HTMLElement): boolean {
   const win = viewOf(doc);
   for (const node of parent.childNodes) if (isText(node) && node.data.trim()) return false;
   const kids = [...parent.children] as (HTMLElement | SVGElement)[];
-  if (kids.some(kid => win.getComputedStyle(kid).display.startsWith('inline') && !kid.hasAttribute('data-wxc-float')))
-    return false;
   const floating = (e: Element) => e.hasAttribute('data-wxc-float');
+  const displays = kids.map(kid => win.getComputedStyle(kid).display);
+  // display:contents 的子级会变成弹性项，没法按下面的外边距排
+  if (displays.some((display, i) => display === 'contents' || (display.startsWith('inline') && !floating(kids[i]))))
+    return false;
+  // display:none 的子元素没有盒子，不是弹性项，不参与排列与校验
+  const hidden = new Set<Element>(kids.filter((kid, i) => displays[i] === 'none'));
   // 浮动的元素稍后统一用 translate 摆回，不参与这里的校验；父级例外：下面要按它的内容框排，它自己浮动也要量
-  const watched = [parent, ...[parent.nextElementSibling, ...kids].filter(e => e != null).filter(e => !floating(e))];
+  const watched = [
+    parent,
+    ...[parent.nextElementSibling, ...kids].filter(e => e != null).filter(e => !floating(e) && !hidden.has(e)),
+  ];
   const snap = () => layoutRects(doc, watched);
   const before = snap();
   const rectOf = new Map(watched.map((e, i) => [e, before[i]]));
@@ -235,6 +242,7 @@ function flexify(doc: Document, parent: HTMLElement): boolean {
   let last: HTMLElement | SVGElement | null = null,
     prev = -1;
   for (const [i, kid] of kids.entries()) {
+    if (hidden.has(kid)) continue;
     // 没量的就是浮动项
     const rect = rectOf.get(kid);
     if (!rect) {
