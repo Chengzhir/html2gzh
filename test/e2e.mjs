@@ -931,8 +931,18 @@ try {
   check((await raw(IMG, '/api/state')).status === 404, '图床口不暴露 API');
   check((await raw(IMG, '/a/..%2f..%2fserver.ts')).status === 404, '图床口路径穿越 404');
   check((await raw(IMG, '/a/0000000000000000.png')).status === 404, '图床口未登记 id 404');
-  const css = assetIdsIn(p).filter(id => id.endsWith('.css'));
-  if (css.length) check((await raw(IMG, '/a/' + css[0])).status === 404, '图床口不出非图片文件');
+  {
+    // 测试稿的成品里没有样式表：自己登记一个，UI 口取得到、取图口不给
+    const registered = await raw(UI, '/api/blob?ext=css&name=probe.css', {
+      method: 'POST',
+      headers: { host: '127.0.0.1:' + UI, origin: 'http://127.0.0.1:' + UI },
+      body: 'p{color:red}',
+    });
+    const cssId = registered.status === 200 ? JSON.parse(registered.body).id : '';
+    const viaUi = cssId ? (await raw(UI, '/a/' + cssId, { headers: { host: '127.0.0.1:' + UI } })).status : 0,
+      viaImg = cssId ? (await raw(IMG, '/a/' + cssId)).status : 0;
+    check(viaUi === 200 && viaImg === 404, '图床口不出非图片文件', `UI 口 ${viaUi}，取图口 ${viaImg}`);
+  }
   check(
     (await raw(UI, '/api/state', { headers: { host: 'evil.example:' + UI } })).status === 403,
     'UI 口拒绝陌生 Host',
