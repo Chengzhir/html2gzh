@@ -1,4 +1,4 @@
-import { ID, idOf, isHtmlEl, round, measure, NO_TRANSFORM, tempStyle, viewOf } from './util.ts';
+import { ID, idOf, isHtmlEl, round, measure, layoutRect, viewOf } from './util.ts';
 import { msg } from './types.ts';
 import type { BoxRect, FindingSink } from './types.ts';
 
@@ -28,10 +28,6 @@ const REPLACED = new Set(['img', 'svg', 'video', 'canvas', 'iframe', 'object', '
 
 const stripInset = (style: CSSStyleDeclaration) => INSET.forEach(prop => style.removeProperty(prop));
 const FAR = 4000;
-const layoutRect = (doc: Document, el: Element) => {
-  using _noTransform = tempStyle(doc, NO_TRANSFORM);
-  return el.getBoundingClientRect();
-};
 
 /** 一个非 static 定位元素的转换计划；explicitH 及以下只有 absolute/fixed 才填 */
 interface PositionPlan {

@@ -85,40 +85,27 @@ function iconRef(doc: Document) {
   return best || 'favicon.ico';
 }
 
-/** 返回 { html, report, meta } */
-export async function prepare(
-  html: string,
-  entryRel: string,
-  io: PrepIO,
-): Promise<{ html: string; report: PrepReport; meta: ArticleMeta }> {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const baseDir = dirOf(entryRel);
-  const report: PrepReport = {
-    missing: [],
-    sheets: [],
-    refs: [],
-    remote: 0,
-    dataUri: 0,
-    badData: 0,
-    local: 0,
-    names: new Map(),
-  };
-  // 公众号名称：站点名，没有时用作者
+/** 页头用的标题、作者与公众号名称（站点名，没有时用作者）；icon 由 prepare 填 */
+function articleMeta(doc: Document): ArticleMeta {
   const author = metaContent(doc, 'meta[name="author" i]');
   const site = metaContent(doc, 'meta[property="og:site_name"]') || metaContent(doc, 'meta[name="application-name" i]');
-  const meta: ArticleMeta = {
+  return {
     title: doc.title.trim() || metaContent(doc, 'meta[property="og:title"]'),
     author,
     account: site || author,
     icon: '',
   };
-  const icon = iconRef(doc),
-    iconRel = isLocalRef(icon) ? joinRel(baseDir, cleanRef(icon)) : '';
-  if (!iconRel && /^(https?:|data:image\/)/i.test(icon.trim())) meta.icon = icon.trim();
+}
 
-  // 外链样式表与 @import 读进来，内联成 <style>，各自记下自己的基准（本地是相对文章根的目录，站外是绝对地址）。
-  // 站外的要对方允许跨域读取（Google Fonts 等字体服务都允许），读不了的列进检查结果
-  const absUrl = (s: string) => /^[a-z][a-z0-9+.-]*:/i.test(s) || s.startsWith('//');
+const absUrl = (s: string) => /^[a-z][a-z0-9+.-]*:/i.test(s) || s.startsWith('//');
+const IMPORT_RE = /@import\s+(?:url\(\s*(['"]?)([^'")]+)\1\s*\)|(['"])([^'"]+)\3)\s*([^;]*);/gi;
+type Chunk = { text: string; base: string; media: string; supports?: string };
+
+/**
+ * 外链样式表与 @import 读进来，内联成 <style>，各自记下自己的基准（本地是相对文章根的目录，站外是绝对地址）。
+ * 站外的要对方允许跨域读取（Google Fonts 等字体服务都允许），读不了的记进 sheets
+ */
+async function inlineSheets(doc: Document, baseDir: string, io: PrepIO, sheets: string[]) {
   const loadSheet = async (href: string, base: string) => {
     href = href.trim();
     if (absUrl(href) || absUrl(base)) {
@@ -136,8 +123,6 @@ export async function prepare(
     const text = await io.readLocalText(rel).catch((): null => null);
     return text == null ? null : { text, base: dirOf(rel) };
   };
-  const IMPORT_RE = /@import\s+(?:url\(\s*(['"]?)([^'")]+)\1\s*\)|(['"])([^'"]+)\3)\s*([^;]*);/gi;
-  type Chunk = { text: string; base: string; media: string; supports?: string };
   /** 样式表文本 → 依次排列的若干段：@import 就地展开（最多四层），条件跟着它那一段 */
   const expand = async (text: string, base: string, media: string, depth = 0): Promise<Chunk[]> => {
     const chunks: Chunk[] = [];
@@ -153,7 +138,7 @@ export async function prepare(
         const mediaQuery = (supports ? condition.slice(supports[0].length) : condition).trim();
         const imported = await loadSheet(href, base);
         if (!imported) {
-          report.sheets.push(href);
+          sheets.push(href);
           continue;
         }
         for (const chunk of await expand(imported.text, imported.base, mediaQuery || media, depth + 1))
@@ -177,7 +162,7 @@ export async function prepare(
       media = link.getAttribute('media') || '';
     const sheet = await loadSheet(href, baseDir);
     if (!sheet) {
-      report.sheets.push(href);
+      sheets.push(href);
       link.remove();
       continue;
     }
@@ -187,8 +172,27 @@ export async function prepare(
     if (style.dataset.base != null || !/@import/i.test(style.textContent)) continue;
     style.replaceWith(...styleEls(await expand(style.textContent, baseDir, style.media || '')));
   }
+}
 
-  // 第一遍：收集。@font-face 里的地址是字体文件，不是图片：本地的登记成文件，data: 与站外的原样保留，都不计入图片数
+const URL_RE = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+const FACE_RE = /@font-face\s*\{[^}]*\}/gi;
+/** 样式文本按 @font-face 块切开：[[文本, 是不是 @font-face], …] */
+function segments(css: string): [string, boolean][] {
+  const parts: [string, boolean][] = [];
+  let at = 0;
+  for (const match of css.matchAll(FACE_RE)) {
+    parts.push([css.slice(at, match.index), false], [match[0], true]);
+    at = match.index + match[0].length;
+  }
+  parts.push([css.slice(at), false]);
+  return parts;
+}
+
+/**
+ * 第一遍：收集要登记的本地文件（wanted，相对文章根）与 data: 地址（datas）。
+ * @font-face 里的地址是字体文件，不是图片：本地的登记成文件，data: 与站外的原样保留，都不计入图片数
+ */
+function collectRefs(doc: Document, baseDir: string) {
   const wanted = new Set<string>();
   const datas = new Set<string>();
   const note = (ref: string, base: string) => {
@@ -203,19 +207,6 @@ export async function prepare(
   const noteFont = (ref: string, base: string) => {
     if (isLocalRef(ref) && !absUrl(base)) wanted.add(joinRel(base, cleanRef(ref.trim())));
   };
-  const URL_RE = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
-  const FACE_RE = /@font-face\s*\{[^}]*\}/gi;
-  /** 样式文本按 @font-face 块切开：[[文本, 是不是 @font-face], …] */
-  const segments = (css: string): [string, boolean][] => {
-    const parts: [string, boolean][] = [];
-    let at = 0;
-    for (const match of css.matchAll(FACE_RE)) {
-      parts.push([css.slice(at, match.index), false], [match[0], true]);
-      at = match.index + match[0].length;
-    }
-    parts.push([css.slice(at), false]);
-    return parts;
-  };
   doc.querySelectorAll('img[src]').forEach(e => note(attrOf(e, 'src'), baseDir));
   doc.querySelectorAll('image').forEach(e => note(attrOf(e, 'href') || attrOf(e, 'xlink:href'), baseDir));
   doc.querySelectorAll('[style]').forEach(e => {
@@ -226,14 +217,20 @@ export async function prepare(
     for (const [text, isFace] of segments(style.textContent))
       for (const match of text.matchAll(URL_RE)) (isFace ? noteFont : note)(match[2], base);
   });
+  return { wanted, datas };
+}
 
-  // 图标和其他文件一起登记，但不在正文里，不计入图片
-  const ids = await io.resolveRefs([...wanted, ...(iconRel && !wanted.has(iconRel) ? [iconRel] : [])]);
-  if (iconRel && ids.get(iconRel)) meta.icon = ORIGIN + '/a/' + ids.get(iconRel);
-  const dataIds = new Map<string, string | null>();
-  for (const uri of datas) dataIds.set(uri, await io.uploadDataUri(uri).catch((): null => null));
-
-  // 第二遍：改写。站外样式表里的相对地址按样式表自己的地址补全
+/**
+ * 第二遍：把地址改写成本机服务的地址，并记进 report。ids：相对路径 → 文件 id；dataIds：data: 地址 → 文件 id。
+ * 站外样式表里的相对地址按样式表自己的地址补全
+ */
+function rewriteRefs(
+  doc: Document,
+  baseDir: string,
+  ids: Map<string, string | null>,
+  dataIds: Map<string, string | null>,
+  report: PrepReport,
+) {
   const swap = (ref: string, base: string, lost = report.missing) => {
     const value = (ref || '').trim();
     if (/^data:/i.test(value)) {
@@ -312,6 +309,39 @@ export async function prepare(
     style.removeAttribute('data-base');
     style.setAttribute('data-wxc-author', '');
   });
+}
+
+/** 返回 { html, report, meta } */
+export async function prepare(
+  html: string,
+  entryRel: string,
+  io: PrepIO,
+): Promise<{ html: string; report: PrepReport; meta: ArticleMeta }> {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const baseDir = dirOf(entryRel);
+  const report: PrepReport = {
+    missing: [],
+    sheets: [],
+    refs: [],
+    remote: 0,
+    dataUri: 0,
+    badData: 0,
+    local: 0,
+    names: new Map(),
+  };
+  const meta = articleMeta(doc);
+  const icon = iconRef(doc),
+    iconRel = isLocalRef(icon) ? joinRel(baseDir, cleanRef(icon)) : '';
+  if (!iconRel && /^(https?:|data:image\/)/i.test(icon.trim())) meta.icon = icon.trim();
+
+  await inlineSheets(doc, baseDir, io, report.sheets);
+  const { wanted, datas } = collectRefs(doc, baseDir);
+  // 图标和其他文件一起登记，但不在正文里，不计入图片
+  const ids = await io.resolveRefs([...wanted, ...(iconRel && !wanted.has(iconRel) ? [iconRel] : [])]);
+  if (iconRel && ids.get(iconRel)) meta.icon = ORIGIN + '/a/' + ids.get(iconRel);
+  const dataIds = new Map<string, string | null>();
+  for (const uri of datas) dataIds.set(uri, await io.uploadDataUri(uri).catch((): null => null));
+  rewriteRefs(doc, baseDir, ids, dataIds, report);
   doc.querySelectorAll('script').forEach(e => e.remove());
   return { html: '<!DOCTYPE html>' + doc.documentElement.outerHTML, report, meta };
 }

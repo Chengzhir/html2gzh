@@ -124,6 +124,12 @@ export function tempStyle(doc: Document, css: string): Disposable {
   return { [Symbol.dispose]: () => style.remove() };
 }
 
+/** 不含 transform 的布局盒 */
+export function layoutRect(doc: Document, el: Element) {
+  using _noTransform = tempStyle(doc, NO_TRANSFORM);
+  return el.getBoundingClientRect();
+}
+
 /**
  * 量每个带 ID 的元素相对 body 内容区原点的盒子。layout=true 时临时去掉 transform，得到的是布局位置。
  * 只量 HTML 元素与最外层 svg；svg 内部不参与。

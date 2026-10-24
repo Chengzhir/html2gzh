@@ -1,4 +1,4 @@
-import { ID, idOf, isHtmlEl, measure, diffBoxes, loadFrame, sleep, NO_TRANSFORM, tempStyle, viewOf } from './util.ts';
+import { ID, idOf, isHtmlEl, measure, layoutRect, diffBoxes, loadFrame, sleep, viewOf } from './util.ts';
 import { collectRules, matchRules, cascadeOrder, toStyle } from './cascade.ts';
 import type { CascadeNotes, MatchedSlots, StyleEnv, UnitHits } from './cascade.ts';
 import { convertPositions, correctOffsets, INHERITED } from './position.ts';
@@ -494,13 +494,9 @@ function styleEnv(doc: Document, fontRules: FontRule[]) {
     computedStyleOf = (el: Element) => win.getComputedStyle(el);
   const hit: UnitHits = { cq: 0, rem: 0, vw: 0, pct: 0, badVar: 0, font: 0 };
   const rem = parseFloat(computedStyleOf(doc.documentElement).fontSize) || 16;
-  const layoutBox = (el: Element) => {
-    using _noTransform = tempStyle(doc, NO_TRANSFORM);
-    return el.getBoundingClientRect();
-  };
   // 用布局盒（不含 transform）的小数尺寸；clientWidth 会取整，换算出的 px 就差 1
   const box = (el: Element) => {
-    const rect = layoutBox(el),
+    const rect = layoutRect(doc, el),
       computed = computedStyleOf(el);
     return {
       pw: rect.width - parseFloat(computed.borderLeftWidth) - parseFloat(computed.borderRightWidth),
