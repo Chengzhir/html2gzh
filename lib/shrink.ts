@@ -69,7 +69,8 @@ export async function shrink(buf: Buffer, max: number): Promise<ShrinkResult> {
     return { skip: 'unreadable' };
   }
   if (meta.format === 'svg') return { skip: 'vector' };
-  if ((meta.pages || 1) > 1) return { skip: 'animated' };
+  // libvips 只读 APNG 的第一帧，pages 不会大于 1，要自己看有没有 acTL
+  if ((meta.pages || 1) > 1 || (meta.format === 'png' && isApng(buf))) return { skip: 'animated' };
   if (!meta.width || !meta.height) return { skip: 'unreadable' };
   // EXIF 方向 5–8 是转了 90°：浏览器按转正后的宽高显示
   const turned = (meta.orientation || 1) >= 5;
@@ -142,6 +143,16 @@ export async function shrink(buf: Buffer, max: number): Promise<ShrinkResult> {
   const smallest = tried.reduce((a, b) => (b.buf.length < a.buf.length ? b : a));
   if (smallest.buf.length >= buf.length) return { skip: 'noGain' };
   return done(smallest, true);
+}
+
+/** PNG 在第一个 IDAT 之前有 acTL 块，就是 APNG */
+function isApng(buf: Buffer) {
+  for (let at = 8; at + 8 <= buf.length; at += 12 + buf.readUInt32BE(at)) {
+    const type = buf.toString('latin1', at + 4, at + 8);
+    if (type === 'acTL') return true;
+    if (type === 'IDAT') return false;
+  }
+  return false;
 }
 
 /** 缩略图的透明通道里是否全是 255 */

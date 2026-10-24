@@ -3,6 +3,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import puppeteer from 'puppeteer-core';
 import sharp from 'sharp';
 import { findChrome } from '../lib/chrome.ts';
@@ -1160,6 +1161,18 @@ try {
       max: 1024,
     });
     check(r3.skip === 'vector', 'SVG 不压缩', JSON.stringify(r3));
+    // APNG：在 IHDR 后面插一个 acTL 块（sharp 读 APNG 只读第一帧，压缩会丢掉动画）
+    const still = await sharp({ create: { width: 1600, height: 200, channels: 3, background: '#468' } })
+      .png()
+      .toBuffer();
+    const acTLData = Buffer.alloc(8);
+    acTLData.writeUInt32BE(2, 0);
+    const acTLType = Buffer.from('acTL', 'latin1');
+    const acTL = Buffer.concat([Buffer.from([0, 0, 0, 8]), acTLType, acTLData, Buffer.alloc(4, 0)]);
+    acTL.writeUInt32BE(zlib.crc32(Buffer.concat([acTLType, acTLData])), 16);
+    const apng = Buffer.concat([still.subarray(0, 33), acTL, still.subarray(33)]);
+    const r6 = await shrinkApi({ id: await blob(apng, 'png', 'anim.png'), max: 1000 << 10 });
+    check(r6.skip === 'animated', '比 1080px 宽的 APNG 不压缩，保留动画', JSON.stringify(r6));
 
     // 页面：把照片放进成品，勾选“压缩大图”、上限 400 KB → 成品里换成压缩后的副本；取消勾选后换回原图
     const saved = await page.evaluate(id => {
