@@ -176,6 +176,9 @@ try {
     String(count(/<blockquote\b/g)),
   );
   check(count(/\sclass=/g) === 0, '没有 class');
+  if (ARTICLE === path.join(HERE, 'fixture')) {
+    check(!p.includes('星标'), '伪元素 content 里斜杠后的替代文字不写进正文');
+  }
   check(count(/[\s;"]position\s*:/g) === 0, '没有 position', String(count(/[\s;"]position\s*:/g)));
   check(count(/var\(|--[a-z]/g) === 0, '没有 CSS 变量');
   check(count(/\d(rem|vh|cq[hb])\b/g) === 0, '没有 rem/vh/cqh');

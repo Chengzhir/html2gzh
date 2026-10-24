@@ -24,6 +24,8 @@ ul.plain i{width:10px;height:10px;background:#333;flex:none;margin-top:8px}
 .nw{white-space:nowrap;font-size:20px}
 p.lead{font-size:1.2rem}
 p.lead::after{content:" →"}
+/* 斜杠后面是给读屏软件的替代文字，不显示 */
+.alt::before{content:"★" / "星标"}
 .dot{position:relative}
 .dot i{position:absolute;right:-12px;top:0;width:8px;height:8px;border-radius:50%;background:var(--c)}
 img{display:block;width:100%}
@@ -77,6 +79,7 @@ img{display:block;width:100%}
   <div class="holder"><div><p class="up">绝对定位盒里 z-index:2 的段</p><p>下一段</p></div></div>
   <p class="nw">不折行：&#x1F468;&#x200D;&#x1F469;&#x200D;&#x1F467; &#x1F44D;&#x1F3FD; e&#x301; &#x1F1E8;&#x1F1F3;</p>
   <p class="dot">末尾圆点<i></i></p>
+  <p class="alt">伪元素带替代文字</p>
   <p class="big" data-expect="svg">两行的大标题，<em>中间有一处</em>蓝字</p>
   <h3 class="mix" data-expect="svg"><b>A1</b>弹性容器里的文字段</h3>
   <p class="de" data-expect="svg">Zwölf Boxkämpfer jagen Viktor quer über den großen Sylter Deich, während Franz sein Quiz löst.</p>

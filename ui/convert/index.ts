@@ -1,4 +1,4 @@
-import { ID, idOf, isHtmlEl, measure, layoutRect, diffBoxes, loadFrame, sleep, viewOf } from './util.ts';
+import { ID, idOf, isHtmlEl, measure, layoutRect, diffBoxes, loadFrame, sleep, splitTop, viewOf } from './util.ts';
 import { collectRules, matchRules, cascadeOrder, toStyle } from './cascade.ts';
 import type { CascadeNotes, MatchedSlots, StyleEnv, UnitHits } from './cascade.ts';
 import { convertPositions, correctOffsets, INHERITED } from './position.ts';
@@ -919,10 +919,12 @@ async function convertAt(
 /** 伪元素 content 计算值 → 文本；counter()/url() 无法转换返回 null */
 function contentText(content: string, el: Element, notes: CascadeNotes) {
   let out = '';
+  // `"★" / "星标"`：斜杠后面是给读屏软件的替代文字，不显示
+  const shown = splitTop(content, '/')[0] || '';
   const re =
     /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|attr\(\s*([\w-]+)\s*\)|(open-quote|close-quote|no-open-quote|no-close-quote)|([a-z-]+\([^)]*\))/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(content))) {
+  while ((m = re.exec(shown))) {
     if (m[1] != null || m[2] != null)
       out += (m[1] ?? m[2])
         .replace(/\\([0-9a-f]{1,6})\s?/gi, (whole: string, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
