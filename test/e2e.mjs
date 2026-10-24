@@ -132,6 +132,41 @@ try {
   }
   await page.setViewport({ width: 1400, height: 900 });
   check(!pageScroll.length, '整页不能滚动，只有两栏各自滚动', pageScroll.join(' | '));
+  // 大屏幕上两栏按同一比例放大，iframe 里仍按原尺寸排版；默认窗口下不放大
+  await page.setViewport({ width: 2560, height: 1440 });
+  const scaled = await page.evaluate(() => {
+    const scale = +getComputedStyle(document.getElementById('panes')).getPropertyValue('--pv-scale');
+    const a = document.getElementById('paneA'),
+      b = document.getElementById('paneB'),
+      ra = a.getBoundingClientRect(),
+      rb = b.getBoundingClientRect(),
+      bar = b.contentDocument.querySelector('.wx_bar').getBoundingClientRect().height,
+      body = b.contentDocument.getElementById('js_content').getBoundingClientRect().width;
+    const stage = document.querySelector('.stage'),
+      pad = getComputedStyle(stage);
+    const inner = stage.clientHeight - parseFloat(pad.paddingTop) - parseFloat(pad.paddingBottom);
+    return {
+      scale,
+      fill: document.getElementById('panes').getBoundingClientRect().height / inner,
+      a: [ra.width / scale, ra.top, ra.height / scale],
+      b: [body, rb.top, rb.height / scale - bar],
+      inner: [a.contentWindow.innerWidth, b.contentWindow.innerWidth],
+      want: [window.__wxc.result.width, window.__wxc.reader.width],
+      overflow: [stage.scrollWidth - stage.clientWidth, stage.scrollHeight - stage.clientHeight],
+    };
+  });
+  await page.setViewport({ width: 1400, height: 900 });
+  const normalScale = await page.$eval('#panes', e => getComputedStyle(e).getPropertyValue('--pv-scale'));
+  check(
+    scaled.scale > 1.1 &&
+      scaled.fill <= 0.851 &&
+      +normalScale === 1 &&
+      scaled.a.every((v, i) => Math.abs(v - scaled.b[i]) <= scaled.scale) &&
+      scaled.inner.every((w, i) => w === scaled.want[i]) &&
+      scaled.overflow.every(d => d === 0),
+    '大屏幕上两栏同比放大、四周留白、仍然对齐，iframe 里的版面不变；默认窗口下不放大',
+    JSON.stringify({ ...scaled, normalScale }),
+  );
   // 进度与错误提示浮在预览上方，不改变两栏的位置
   const toastMoves = await page.evaluate(async () => {
     const pos = () =>

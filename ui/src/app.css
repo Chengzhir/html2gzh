@@ -696,11 +696,19 @@ details.fold > summary:hover {
 }
 
 /* 预览：两栏等高。原稿是正文宽的一张纸；阅读页是手机屏（正文宽 + 两侧各 20px），外面一圈边框 */
+@property --pv-scale {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 1;
+}
 .stage {
-  --scr-h: clamp(480px, calc(100vh - 110px), 900px);
   --dev-pad: 10px;
   --sbar-h: 30px;
   --nbar-h: 44px;
+  --cap-h: 28px;
+  --cap-gap: 6px;
+  --pane-gap: 24px;
+  container-type: size;
   flex: 1;
   min-width: 0;
   height: 100%;
@@ -712,13 +720,32 @@ details.fold > summary:hover {
 }
 /* 两栏在预览区里水平、垂直居中；放不下时从左上角排起，照常滚动（safe：直接居中的话，超出左边的部分滚不到） */
 .panes {
+  /* 手机外框可用的高度：预览区内容高减去栏名与上下各 8px 的空隙 */
+  --pv-room: calc(100cqh - var(--cap-h) - var(--cap-gap) - 16px);
+  --scr-h: clamp(480px, calc(var(--pv-room) - 2 * var(--dev-pad)), 900px);
+  --dev-w: calc(var(--b-w) + 2 * var(--dev-pad));
+  --dev-h: calc(var(--scr-h) + 2 * var(--dev-pad));
+  /* 手机屏高到了 900px 还有空余时，两栏同比放大，最多占预览区宽、高的 --pv-fill，四周的留白随屏幕一起变大 */
+  --pv-fill: 0.85;
+  /* 步长 1/1024 在二进制里是精确的，比例为 1 时正好取到 1（步长 0.001 会把 1 取成 0.999） */
+  --pv-scale: max(
+    1,
+    round(
+      down,
+      min(
+        (var(--pv-fill) * 100cqh - var(--cap-h) - var(--cap-gap)) / var(--dev-h),
+        (var(--pv-fill) * 100cqw - var(--pane-gap)) / (var(--a-w) + var(--dev-w))
+      ),
+      1 / 1024
+    )
+  );
   position: relative;
   display: flex;
   flex: none;
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: safe center;
-  gap: 24px;
+  gap: var(--pane-gap);
   width: fit-content;
   max-width: 100%;
   margin: auto;
@@ -732,8 +759,8 @@ details.fold > summary:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 28px;
-  margin-bottom: 6px;
+  min-height: var(--cap-h);
+  margin-bottom: var(--cap-gap);
   font-size: var(--ui-fs-sm);
   color: var(--ui-text3);
 }
@@ -741,8 +768,15 @@ details.fold > summary:hover {
   margin-left: auto;
 }
 /* 与右栏模拟的正文可见区同高、上沿对齐：两栏同步滚动时同一段内容在同一高度 */
+/* 放大用 transform 不用 zoom（zoom 改变 iframe 里的设备像素比，部分字体的字宽与断行随之改变），外边距补上多出的尺寸 */
 .sheet {
-  margin-top: calc(var(--dev-pad) + var(--sbar-h) + var(--nbar-h));
+  --sheet-h: calc(var(--scr-h) - var(--sbar-h) - var(--nbar-h) - var(--wxbar-h));
+  width: var(--a-w);
+  margin-top: calc(var(--pv-scale) * (var(--dev-pad) + var(--sbar-h) + var(--nbar-h)));
+  margin-right: calc((var(--pv-scale) - 1) * var(--a-w));
+  margin-bottom: calc((var(--pv-scale) - 1) * var(--sheet-h));
+  transform: scale(var(--pv-scale));
+  transform-origin: 0 0;
   background: #fff;
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.08),
@@ -750,10 +784,16 @@ details.fold > summary:hover {
 }
 .sheet iframe {
   display: block;
+  width: 100%;
   border: 0;
-  height: calc(var(--scr-h) - var(--sbar-h) - var(--nbar-h) - var(--wxbar-h));
+  height: var(--sheet-h);
 }
 .device {
+  width: var(--dev-w);
+  margin-right: calc((var(--pv-scale) - 1) * var(--dev-w));
+  margin-bottom: calc((var(--pv-scale) - 1) * var(--dev-h));
+  transform: scale(var(--pv-scale));
+  transform-origin: 0 0;
   padding: var(--dev-pad);
   border-radius: 30px;
   background: #1b1b1d;
@@ -857,9 +897,12 @@ details.fold > summary:hover {
 .toast-all {
   top: 52px;
 }
+/* 手机屏放大时，屏里的提示反向缩小，字号与界面其他文字相同 */
 .toast-reader {
   top: 84px;
-  max-width: calc(100% - 24px);
+  max-width: calc((100% - 24px) * var(--pv-scale));
+  transform: translateX(-50%) scale(calc(1 / var(--pv-scale)));
+  transform-origin: 50% 0;
 }
 .toast.busy .toast-text::before {
   content: '';

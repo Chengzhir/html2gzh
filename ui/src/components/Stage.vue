@@ -26,6 +26,11 @@ onMounted(() =>
     dark: darkFrame.value,
   }),
 );
+// 原网页是正文宽，阅读页是屏宽；大屏幕上的放大比例也按这两个宽度算
+const paneWidths = computed(() => ({
+  '--a-w': state.result ? state.result.width + 'px' : undefined,
+  '--b-w': state.reader.width ? state.reader.width + 'px' : undefined,
+}));
 const dimAll = computed(() => state.notices.all.shown && state.notices.all.kind === 'busy');
 const dimReader = computed(() => state.notices.reader.shown && state.notices.reader.kind === 'busy');
 const emptyMsg = computed(() => (state.notices.all.shown ? state.notices.all : null));
@@ -81,7 +86,7 @@ function onLoad(which: 'A' | 'B') {
 
 <template>
   <main class="stage" :style="{ '--wxbar-h': BAR_H + 'px' }">
-    <div id="panes" :class="['panes', { dim: dimAll }]" :hidden="!state.panesShown">
+    <div id="panes" :class="['panes', { dim: dimAll }]" :style="paneWidths" :hidden="!state.panesShown">
       <Toast scope="all" />
       <figure class="pane">
         <figcaption>{{ t('stage.original') }}</figcaption>
@@ -92,7 +97,6 @@ function onLoad(which: 'A' | 'B') {
             :title="t('stage.originalFrame')"
             sandbox="allow-same-origin"
             :srcdoc="state.originalDoc"
-            :style="{ width: state.result ? state.result.width + 'px' : undefined }"
             @load="onLoad('A')"
           />
         </div>
@@ -132,7 +136,6 @@ function onLoad(which: 'A' | 'B') {
               sandbox="allow-same-origin"
               :srcdoc="state.reader.html"
               :data-dark="state.reader.darkDoc ? '1' : ''"
-              :style="{ width: state.reader.width ? state.reader.width + 'px' : undefined }"
               @load="onLoad('B')"
             />
           </div>
