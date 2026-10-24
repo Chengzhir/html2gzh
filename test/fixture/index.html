@@ -21,6 +21,9 @@ ul.plain i{width:10px;height:10px;background:#333;flex:none;margin-top:8px}
 .holder>div{position:absolute;right:8px;top:6px;width:45%;background:#ddd}
 .holder p{margin:0;height:24px}
 .holder .up{position:relative;z-index:2;background:#9cf}
+/* 直接放在 HTML 里、绝对定位贴底的 svg */
+.wave{position:relative;height:60px;overflow:hidden;background:#cde}
+.wave svg{position:absolute;left:0;bottom:0;width:100%;height:auto}
 .nw{white-space:nowrap;font-size:20px}
 p.lead{font-size:1.2rem}
 p.lead::after{content:" →"}
@@ -77,6 +80,7 @@ img{display:block;width:100%}
   <div class="over">在上面（z-index:1）</div>
   <div class="under">被压住</div>
   <div class="holder"><div><p class="up">绝对定位盒里 z-index:2 的段</p><span hidden></span><p>下一段</p></div></div>
+  <div class="wave"><svg viewBox="0 0 200 20"><path d="M0 10 Q 50 0 100 10 T 200 10 V20 H0Z" fill="#579"/></svg></div>
   <p class="nw">不折行：&#x1F468;&#x200D;&#x1F469;&#x200D;&#x1F467; &#x1F44D;&#x1F3FD; e&#x301; &#x1F1E8;&#x1F1F3;</p>
   <p class="dot">末尾圆点<i></i></p>
   <p class="alt">伪元素带替代文字</p>

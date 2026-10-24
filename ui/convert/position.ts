@@ -1,4 +1,16 @@
-import { ID, idOf, isHtmlEl, isText, round, measure, layoutRects, tempStyle, STILL_LAYOUT, viewOf } from './util.ts';
+import {
+  ID,
+  idOf,
+  isHtmlEl,
+  isOuterSvg,
+  isText,
+  round,
+  measure,
+  layoutRects,
+  tempStyle,
+  STILL_LAYOUT,
+  viewOf,
+} from './util.ts';
 import { msg } from './types.ts';
 import type { BoxRect, FindingSink } from './types.ts';
 
@@ -30,8 +42,11 @@ const stripInset = (style: CSSStyleDeclaration) => INSET.forEach(prop => style.r
 const FAR = 4000;
 
 /** 一个非 static 定位元素的转换计划；explicitH 及以下只有 absolute/fixed 才填 */
+/** 参与定位改写的元素：HTML 元素，以及直接放在 HTML 里的 svg */
+type Box = HTMLElement | SVGSVGElement;
+
 interface PositionPlan {
-  el: HTMLElement;
+  el: Box;
   pos: string;
   z: string;
   tf: string;
@@ -48,7 +63,7 @@ export function convertPositions(doc: Document, root: Element, findings: Finding
   const win = viewOf(doc);
   const computedStyle = (el: Element) => win.getComputedStyle(el);
   const layers = new Set<string>();
-  const els = [...root.querySelectorAll('*')].filter(isHtmlEl);
+  const els = [...root.querySelectorAll('*')].filter((el): el is Box => isHtmlEl(el) || isOuterSvg(el));
   const plan: PositionPlan[] = [];
   for (const el of els) {
     const computed = computedStyle(el);
@@ -89,8 +104,8 @@ export function convertPositions(doc: Document, root: Element, findings: Finding
       }
     }
   }
-  const fixed: HTMLElement[] = [],
-    clipped: HTMLElement[] = [];
+  const fixed: Box[] = [],
+    clipped: Box[] = [];
   let relocated = 0;
   for (const item of plan) {
     const { el } = item,
@@ -142,14 +157,14 @@ export function convertPositions(doc: Document, root: Element, findings: Finding
     }
   }
   // z-index 只在 flex/grid 子项上还有效；正值的普通流元素尝试把父级改成纵向 flex
-  const zLost: HTMLElement[] = [];
+  const zLost: Box[] = [];
   let zKept = 0;
   const flexified = new Set<HTMLElement>();
   // 去掉 z-index 后，layer 只是按文档顺序画的一层；后面压在它上面的层若只是 position:relative 且没有 transform，
   // 让它退回普通流（不加 translate），layer 就重新盖在它上面。还有别的层压着就算保不住。
   const overlap = (a: DOMRect, b: DOMRect) =>
     a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-  const yieldLaterLayers = (layer: HTMLElement) => {
+  const yieldLaterLayers = (layer: Box) => {
     const layerRect = layer.getBoundingClientRect();
     let ok = true;
     for (const later of els) {

@@ -102,6 +102,12 @@ export const isElement = (node: Node | null | undefined): node is Element => nod
 export const isText = (node: Node | null | undefined): node is Text => node?.nodeType === 3;
 export const isHtmlEl = (node: Node | null | undefined): node is HTMLElement =>
   isElement(node) && node.namespaceURI === 'http://www.w3.org/1999/xhtml';
+/** 直接放在 HTML 里的 svg（不是 svg 里嵌套的 svg）：在版面中与 img 一样是一个盒子 */
+export const isOuterSvg = (node: Node | null | undefined): node is SVGSVGElement =>
+  isElement(node) &&
+  node.localName === 'svg' &&
+  node.namespaceURI === 'http://www.w3.org/2000/svg' &&
+  isHtmlEl(node.parentElement);
 /** 文档所在的窗口。转换只在装进 iframe 的文档上进行，取不到说明 iframe 已被移走 */
 export function viewOf(doc: Document): Window & typeof globalThis {
   if (!doc.defaultView) throw new Error('document is not in a window');
