@@ -31,7 +31,7 @@ function parsePath(d: string | null): PathSeg[] {
       out.push([segCmd, ...args.slice(i, i + n)]);
     }
   };
-  // 圆弧的两个标志位可以不带分隔符紧挨着写（"a1 1 0 01 10 10"），按位拆开
+  // 圆弧的两个标志位只有一位，可以与后面的数紧挨着写（"a1 1 0 01 10 10"、"a1 1 0 0 110 10"），在标志位上逐位拆开
   const src = d || '';
   while ((match = re.exec(src))) {
     if (match[1]) {
@@ -41,13 +41,13 @@ function parsePath(d: string | null): PathSeg[] {
       continue;
     }
     if (!cmd) break;
-    if ((cmd === 'A' || cmd === 'a') && [3, 4].includes(args.length % 7) && /^[01]{2,}/.test(match[2])) {
-      for (const ch of match[2].slice(0, 2)) args.push(+ch);
-      const rest = match[2].slice(2);
-      if (rest) args.push(+rest);
-      continue;
-    }
-    args.push(+match[2]);
+    let token = match[2];
+    if (cmd === 'A' || cmd === 'a')
+      while ([3, 4].includes(args.length % 7) && /^[01]./.test(token)) {
+        args.push(+token[0]);
+        token = token.slice(1);
+      }
+    args.push(+token);
   }
   if (cmd) push(cmd);
   return out;
