@@ -3,6 +3,7 @@
 // Skia 合成的粗体与斜体都照 Chrome 的结果；只有 Windows 上 DirectWrite 模拟的粗体、斜体不进 PDF，按实测补画
 import * as fontkit from 'fontkit';
 import type { Browser, CDPSession, Page } from 'puppeteer-core';
+import type * as Mupdf from 'mupdf';
 import type { Font, Matrix, Page as PdfPage, PDFDocument } from 'mupdf';
 import { findChrome } from './chrome.ts';
 import { isJsonObject, type JsonObject } from './http.ts';
@@ -51,7 +52,7 @@ let sessionPromise: Promise<Session> | null = null,
 /** 按 id 取已登记文件的字节（lib/uiroute.ts 提供） */
 let getAsset: (id: string) => Buffer | null = () => null;
 // MuPDF 是 WASM，第一次用到时才载入
-let mupdfModule: Promise<typeof import('mupdf')> | null = null;
+let mupdfModule: Promise<typeof Mupdf> | null = null;
 const loadMupdf = () => (mupdfModule ??= import('mupdf'));
 
 async function getSession(): Promise<Session> {
@@ -236,10 +237,10 @@ function parseFonts(list: unknown): GlyphFont[] {
 async function installFonts(page: Page, fonts: GlyphFont[]) {
   const signature = JSON.stringify(fonts);
   if (signature === fontsSignature) return;
-  const skipped = await page.evaluate(async (fonts: GlyphFont[]) => {
+  const skipped = await page.evaluate(async (faces: GlyphFont[]) => {
     document.fonts.clear();
-    let skipped = 0;
-    for (const face of fonts) {
+    let failed = 0;
+    for (const face of faces) {
       const src = face.src.length
         ? face.src
             .map(source =>
@@ -259,11 +260,11 @@ async function installFonts(page: Page, fonts: GlyphFont[]) {
       try {
         document.fonts.add(new FontFace(face.family, src, descriptors));
       } catch {
-        skipped++;
+        failed++;
       }
     }
     await Promise.all([...document.fonts].map(face => face.load().catch(() => {})));
-    return skipped;
+    return failed;
   }, fonts);
   if (skipped) console.error(`字形服务  ${skipped} 条网页字体声明无效，已跳过`);
   fontsSignature = signature;
@@ -450,7 +451,7 @@ const hex = (components: number[]) =>
         .padStart(2, '0'),
     )
     .join('');
-function readPage(mupdf: typeof import('mupdf'), page: PdfPage, fonts: FontUse, offsetX: number, offsetY: number): Ink {
+function readPage(mupdf: typeof Mupdf, page: PdfPage, fonts: FontUse, offsetX: number, offsetY: number): Ink {
   const ink: Ink = { glyphs: [], fills: [], effect: false };
   const stack: number[] = [];
   let groupAlpha = 1;
@@ -533,7 +534,7 @@ interface Outline {
  * 用到的字形逐个取轮廓：每个字体把它的字形在单位矩阵下各画一次，交给 MuPDF 的 SVG 输出（text=path），按出现顺序对回字形号。
  * 内嵌的 TrueType/CFF 字形由 FreeType 读出（em 单位），Type3 字形是 Skia 写进 PDF 的路径（带 FontMatrix）
  */
-function outlines(mupdf: typeof import('mupdf'), fonts: FontUse, fontPrograms: Map<string, Program | null>) {
+function outlines(mupdf: typeof Mupdf, fonts: FontUse, fontPrograms: Map<string, Program | null>) {
   const out = new Map<string, Outline>();
   for (const [name, { font, gids }] of fonts) {
     const glyphList = [...gids];

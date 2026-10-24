@@ -66,7 +66,7 @@ export function entryOf(rels: string[]): string | null {
   const isIndex = (rel: string) => /(^|\/)index\.html?$/i.test(rel);
   const htmls = rels
     .filter(rel => /\.html?$/i.test(rel))
-    .sort((a, b) => depth(a) - depth(b) || Number(isIndex(b)) - Number(isIndex(a)));
+    .toSorted((a, b) => depth(a) - depth(b) || Number(isIndex(b)) - Number(isIndex(a)));
   if (!htmls.length) return null;
   const top = htmls.filter(rel => depth(rel) === depth(htmls[0]));
   return top.find(isIndex) || top[0];

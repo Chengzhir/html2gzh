@@ -128,7 +128,7 @@ export async function checkHosts() {
     // 上一轮见过、这轮没探到的出口先留着（可能只是这轮没分到），标成 stale
     const missing = host.list.filter(exit => !seen.has(exit.ip)).map(exit => ({ ...exit, seen: 0, stale: true }));
     Object.assign(host, {
-      list: [...fresh, ...missing].sort((a, b) => Number(b.ok) - Number(a.ok) || b.seen - a.seen),
+      list: [...fresh, ...missing].toSorted((a, b) => Number(b.ok) - Number(a.ok) || b.seen - a.seen),
       manual: null,
       probes: jobs.length,
       checkedAt: Date.now(),

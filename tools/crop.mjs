@@ -37,7 +37,7 @@ const res = await p.evaluate(
         cur[2] += n;
       }
     });
-    const top = bands.sort((a, b) => b[2] - a[2]).slice(0, 4);
+    const top = bands.toSorted((a, b) => b[2] - a[2]).slice(0, 4);
     const crops = [];
     for (const [y0, y1] of top) {
       const ys = Math.max(0, y0 - 20),

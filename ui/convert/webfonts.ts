@@ -18,20 +18,10 @@ const STRETCH_KEYWORDS: Record<string, string> = {
 };
 /** "bold" / "300 700" / "400 400" → 统一写法；FontFace 与 CSSFontFaceRule 序列化得不一样，两边都过一遍再比 */
 const normRange = (text: string, keywords: Record<string, string>, fallback: string) => {
-  const parts = (
-    String(text || '')
-      .trim()
-      .toLowerCase() || fallback
-  )
-    .split(/\s+/)
-    .map(word => keywords[word] || word);
+  const parts = ((text || '').trim().toLowerCase() || fallback).split(/\s+/).map(word => keywords[word] || word);
   return parts.length === 2 && parts[0] === parts[1] ? parts[0] : parts.join(' ');
 };
-const normStyle = (text: string) =>
-  String(text || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ') || 'normal';
+const normStyle = (text: string) => (text || '').trim().toLowerCase().replace(/\s+/g, ' ') || 'normal';
 /** unicode-range → "lo-hi,lo-hi"（十六进制），空值或全写错时为全部 */
 function normUnicode(text: string) {
   const ranges = unicodeRanges(text);

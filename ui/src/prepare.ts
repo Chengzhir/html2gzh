@@ -37,9 +37,9 @@ export const EXT_OF_MIME: Record<string, string> = {
 /** 读文件、登记文件的途径：路径模式经本机服务，拖入模式读浏览器里的 File */
 export interface PrepIO {
   /** 相对文章根的路径 → 本机服务里的文件 id；缺失为 null */
-  resolveRefs(rels: string[]): Promise<Map<string, string | null>>;
-  uploadDataUri(uri: string): Promise<string | null>;
-  readLocalText(rel: string): Promise<string | null>;
+  resolveRefs: (rels: string[]) => Promise<Map<string, string | null>>;
+  uploadDataUri: (uri: string) => Promise<string | null>;
+  readLocalText: (rel: string) => Promise<string | null>;
 }
 /**
  * missing 只放 <img> 的图（粘贴后变错误卡片、草稿存不了）；样式表、CSS 与 svg <image> 引用的文件缺了只影响效果。
@@ -99,7 +99,12 @@ function articleMeta(doc: Document): ArticleMeta {
 
 const absUrl = (s: string) => /^[a-z][a-z0-9+.-]*:/i.test(s) || s.startsWith('//');
 const IMPORT_RE = /@import\s+(?:url\(\s*(['"]?)([^'")]+)\1\s*\)|(['"])([^'"]+)\3)\s*([^;]*);/gi;
-type Chunk = { text: string; base: string; media: string; supports?: string };
+interface Chunk {
+  text: string;
+  base: string;
+  media: string;
+  supports?: string;
+}
 
 /**
  * 外链样式表与 @import 读进来，内联成 <style>，各自记下自己的基准（本地是相对文章根的目录，站外是绝对地址）。

@@ -57,11 +57,7 @@ function serveUi(res: ServerResponse, pathname: string) {
 }
 /** 页面生成的位图、内嵌图片：原样登记 */
 function apiBlob(res: ServerResponse, url: URL, body: Buffer) {
-  const ext =
-    '.' +
-    String(url.searchParams.get('ext') || '')
-      .toLowerCase()
-      .replace(/^\./, '');
+  const ext = '.' + (url.searchParams.get('ext') || '').toLowerCase().replace(/^\./, '');
   if (!ASSET_EXT.has(ext)) return failWith(res, 400, 'badExt', { ext });
   return json(res, 200, { id: register(body, ext, url.searchParams.get('name') || 'blob' + ext) });
 }
@@ -180,7 +176,7 @@ const POST: Record<string, (res: ServerResponse, body: JsonObject) => unknown> =
 export async function uiRoute(req: IncomingMessage, res: ServerResponse) {
   // 防 DNS rebinding 与跨站请求：Host 必须是本机；POST 必须带本页的 Origin（浏览器发 POST 都会带）
   if (!LOCAL_HOSTS.has(req.headers.host || '')) return send(res, 403, 'forbidden');
-  if (req.method === 'POST' && !LOCAL_HOSTS.has(String(req.headers.origin || '').replace(/^https?:\/\//, '')))
+  if (req.method === 'POST' && !LOCAL_HOSTS.has((req.headers.origin || '').replace(/^https?:\/\//, '')))
     return send(res, 403, 'forbidden');
   const url = new URL(req.url ?? '/', 'http://x');
   const pathname = decodeURIComponent(url.pathname);

@@ -1,6 +1,6 @@
 // SVG 转换共用的小工具与公众号规则（规则来自草稿存储实测，见 tools/wxprobe.mjs）
 
-import { attrOf } from '../util.ts';
+import { attrOf, isElement } from '../util.ts';
 
 export const SVG_NS = 'http://www.w3.org/2000/svg';
 export const XLINK_NS = 'http://www.w3.org/1999/xlink';
@@ -35,7 +35,7 @@ export const RESOURCE = new Set([
 const NON_RENDER = new Set([...RESOURCE, 'defs']);
 
 export const isSvg = (node: Node | null | undefined): node is SVGElement =>
-  !!node && node.nodeType === 1 && (node as Element).namespaceURI === SVG_NS;
+  isElement(node) && node.namespaceURI === SVG_NS;
 /** 属性值；没有这个属性时为空串（用在已知有这个属性的地方，如 hasAttribute、getAttributeNames 之后） */
 export const isAnim = (node: Node | null | undefined): node is SVGAnimationElement =>
   isSvg(node) && ANIM.has(node.localName);

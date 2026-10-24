@@ -156,10 +156,10 @@ try {
   check(!toastMoves.length, '提示浮在预览上方，两栏位置不变', toastMoves.join(' | '));
   const shown = await page.evaluate(
     fs => fs.map(f => window.__wxcFinding(f)),
-    [...r.findings].sort((a, b) => a.level.localeCompare(b.level)),
+    r.findings.toSorted((a, b) => a.level.localeCompare(b.level)),
   );
-  [...r.findings]
-    .sort((a, b) => a.level.localeCompare(b.level))
+  r.findings
+    .toSorted((a, b) => a.level.localeCompare(b.level))
     .forEach((f, i) => console.log(`    [${f.level}] ${f.code} ${shown[i].text}`));
   console.log(
     `    图片 本地 ${r.report.local} · 缺失 ${r.report.missing.length} · data: ${r.report.dataUri} · 外链 ${r.report.remote}`,
@@ -564,15 +564,13 @@ try {
       masks.push(
         ...(await pg.evaluate(
           sampled =>
-            [...document.querySelectorAll('svg[data-wxc-unit]')]
-              .map(s => s.parentElement)
-              .concat([
-                ...document.querySelectorAll(sampled ? '[data-pixel-skip],[data-sample-skip]' : '[data-pixel-skip]'),
-              ])
-              .map(e => {
-                const b = e.getBoundingClientRect();
-                return [b.left + scrollX, b.top + scrollY, b.width, b.height];
-              }),
+            [
+              ...[...document.querySelectorAll('svg[data-wxc-unit]')].map(s => s.parentElement),
+              ...document.querySelectorAll(sampled ? '[data-pixel-skip],[data-sample-skip]' : '[data-pixel-skip]'),
+            ].map(e => {
+              const b = e.getBoundingClientRect();
+              return [b.left + scrollX, b.top + scrollY, b.width, b.height];
+            }),
           !!(t || clicks != null),
         )),
       );
@@ -681,7 +679,7 @@ try {
           .join('、') +
         (fonts.length > 8 ? ' …' : ''),
     );
-    const keyed = sel => `#faceList [data-key="${sel.replace(/["\\]/g, '\\$&')}"] [role="checkbox"]`;
+    const keyed = sel => `#faceList [data-key="${sel.replace(/["\\]/g, String.raw`\$&`)}"] [role="checkbox"]`;
     if (SVG_MODE) {
       const t = fonts.find(f => f.done > 0);
       if (t) {
@@ -1371,9 +1369,9 @@ try {
     );
     busy.close();
   }
-} catch (e) {
-  if (e.message !== 'stop') {
-    console.error(e);
+} catch (error) {
+  if (error.message !== 'stop') {
+    console.error(error);
     fails++;
   }
 } finally {

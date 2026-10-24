@@ -309,7 +309,7 @@ async function bigImages(
   return [...sizes]
     .filter(([, size]) => size > limit)
     .map(([id, size]) => ({ id, name: names.get(id) || t('img.generated'), size, why: '' }))
-    .sort((a, b) => b.size - a.size);
+    .toSorted((a, b) => b.size - a.size);
 }
 let shrinkSeq = 0;
 /**
@@ -335,8 +335,8 @@ async function applyShrink({ base, report }: Pick<Result, 'base' | 'report'>): P
         for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
           responses.set(
             id,
-            await api<ShrinkResponse>('/api/shrink', { id, max: limit }).catch((e: unknown) => ({
-              error: errText(e),
+            await api<ShrinkResponse>('/api/shrink', { id, max: limit }).catch((error: unknown) => ({
+              error: errText(error),
             })),
           );
           if (seq === shrinkSeq) notice('all', t('shrink.progress', { n: ++done, total: ids.length }));
@@ -466,9 +466,9 @@ async function run() {
     state.panesShown = true;
     notice('all', '');
     await renderReader();
-  } catch (e) {
-    console.error(e);
-    state.error = errText(e);
+  } catch (error) {
+    console.error(error);
+    state.error = errText(error);
     notice('all', t('stage.failed', { msg: state.error }), 'err');
   } finally {
     state.busy = false;
@@ -506,8 +506,8 @@ async function renderReader() {
     state.reader.darkDoc = true;
     state.reader.html = html;
     notice('reader', '');
-  } catch (e) {
-    if (seq === readerSeq) notice('reader', errText(e), 'err');
+  } catch (error) {
+    if (seq === readerSeq) notice('reader', errText(error), 'err');
   }
 }
 
@@ -627,8 +627,8 @@ export async function openPath(input: string) {
     await api('/api/open', { path: input });
     srcNote(t('src.opening'));
     void pollNow();
-  } catch (e) {
-    srcNote(errText(e), 'err');
+  } catch (error) {
+    srcNote(errText(error), 'err');
   }
 }
 export function setWidth(width: number) {

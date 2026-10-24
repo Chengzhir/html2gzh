@@ -48,7 +48,7 @@ function distOf(version) {
 
 const html = await pageHtml();
 const installed = JSON.parse(fs.readFileSync(path.join(ROOT, 'node_modules/mp-darkmode/package.json'), 'utf8')).version;
-const versions = [installed, ...JSON.parse(npm('view mp-darkmode versions --json')).reverse()];
+const versions = [installed, ...JSON.parse(npm('view mp-darkmode versions --json')).toReversed()];
 let found = null;
 for (const v of new Set(versions)) {
   const dist = distOf(v);

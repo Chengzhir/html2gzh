@@ -106,7 +106,9 @@ function specificity(sel: string): Specificity {
   stripped = stripped.replace(
     /:(is|not|has|matches|-webkit-any)\(((?:[^()]|\([^()]*\))*)\)/gi,
     (whole: string, fn: string, inner: string) => {
-      const best = splitTop(inner).map(specificity).sort(cmpSpec).pop() || [0, 0, 0];
+      const best = splitTop(inner)
+        .map(specificity)
+        .reduce<Specificity>((max, spec) => (cmpSpec(spec, max) > 0 ? spec : max), [0, 0, 0]);
       a += best[0];
       b += best[1];
       c += best[2];
@@ -181,7 +183,7 @@ export function matchRules(doc: Document, rules: CollectedRule[], notes: Cascade
       }
       if (!els.length) continue;
       const spec = specificity(slot === 'self' ? part : part + '::' + slot);
-      decls = decls || parseDecls(rule.style.cssText);
+      decls ||= parseDecls(rule.style.cssText);
       for (const el of els) bucket(el)[slot].push({ spec, order: rule.order, decls });
     }
   }
@@ -196,7 +198,7 @@ export function cascadeOrder(entries: MatchedEntry[], inlineText?: string | null
   if (inlineText)
     for (const decl of parseDecls(inlineText))
       all.push({ ...decl, rank: decl.important ? 3 : 1, spec: [0, 0, 0], order: 1e9 });
-  return all.sort((x, y) => x.rank - y.rank || cmpSpec(x.spec, y.spec) || x.order - y.order);
+  return all.toSorted((x, y) => x.rank - y.rank || cmpSpec(x.spec, y.spec) || x.order - y.order);
 }
 
 function topComma(text: string) {

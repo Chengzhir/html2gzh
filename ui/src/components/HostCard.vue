@@ -90,9 +90,9 @@ async function save() {
     shownConfig = JSON.stringify(saved.config);
     note.cls = 'ok';
     note.text = t('host.saved');
-  } catch (e) {
+  } catch (error) {
     note.cls = 'err';
-    note.text = errText(e);
+    note.text = errText(error);
   } finally {
     saving.value = false;
   }

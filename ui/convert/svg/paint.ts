@@ -118,11 +118,11 @@ function filterToCss(filter: Element, win: Window): string | null {
       const deviation = std(prim);
       if (deviation == null) return null;
       blur = Math.hypot(blur, deviation);
-      src = src || prim.getAttribute('in') || 'SourceGraphic';
+      src ||= prim.getAttribute('in') || 'SourceGraphic';
     } else if (tag === 'feOffset') {
       dx += +(prim.getAttribute('dx') || 0);
       dy += +(prim.getAttribute('dy') || 0);
-      src = src || prim.getAttribute('in') || 'SourceGraphic';
+      src ||= prim.getAttribute('in') || 'SourceGraphic';
     } else if (tag === 'feFlood') {
       color = win.getComputedStyle(prim).floodColor;
       alpha = +win.getComputedStyle(prim).floodOpacity;
@@ -142,7 +142,7 @@ function filterToCss(filter: Element, win: Window): string | null {
       )
         return null;
       alpha *= values[18];
-      color = color || 'rgb(0,0,0)';
+      color ||= 'rgb(0,0,0)';
     } else return null;
   }
   // 只认用 SourceAlpha 做影子的写法；拿 SourceGraphic 本身模糊的"发光"颜色跟着图形走，CSS 表达不了
@@ -285,7 +285,7 @@ function pathClip(el: SVGGraphicsElement, shapes: ClipShape[], win: Window, rep:
     const parts = subpaths(transformPath(shapePath, m));
     // 几个形状并成一条路径用 nonzero 填充：外轮廓统一绕向，重叠处才不会互相抵消
     const area = parts.reduce((n, part) => n + signedArea(part), 0);
-    segs = segs.concat(...(area < 0 ? parts.map(reverseSubpath) : parts));
+    for (const part of parts) segs.push(...(area < 0 ? reverseSubpath(part) : part));
   }
   const rules = shapes.map(({ el: shape }) => win.getComputedStyle(shape).clipRule);
   if (shapes.length > 1 && rules.includes('evenodd')) rep('clip:approx', el);

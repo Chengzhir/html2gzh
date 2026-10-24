@@ -180,7 +180,7 @@ function discrete(doc: Document, el: SVGElement, p: string, frames: Frame[], tm:
   const vis = (value: string) =>
     p === 'display' ? (value === 'none' ? 'hidden' : 'visible') : value === 'visible' ? 'visible' : 'hidden';
   const { kf, k } = directed(
-    frames.map(frame => ({ off: frame.off, v: vis(String(frame.raw).trim()), e: frame.e })),
+    frames.map(frame => ({ off: frame.off, v: vis(frame.raw.trim()), e: frame.e })),
     tm.dir,
   );
   const compiled = compileDiscrete(kf, (a: string, b: string) =>
@@ -393,7 +393,7 @@ export function cssToSmil(doc: Document, anims: CssAnims, rep: Report): number {
             rep('css:prop:' + p, svgEl);
             continue;
           }
-          box = box || (root ? rootBox(root, computed) : measureBox(svgEl as SVGGraphicsElement));
+          box ||= root ? rootBox(root, computed) : measureBox(svgEl as SVGGraphicsElement);
           if (!box) {
             rep(root ? 'css:root' : 'css:transform', svgEl);
             continue;

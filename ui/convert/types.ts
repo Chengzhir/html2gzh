@@ -14,6 +14,7 @@ export class CodedError extends Error {
   params: Record<string, Param>;
   constructor(key: string, params: Record<string, Param> = {}) {
     super(`${key} ${JSON.stringify(params)}`);
+    this.name = 'CodedError';
     this.key = key;
     this.params = params;
   }

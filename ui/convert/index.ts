@@ -87,7 +87,9 @@ const sumOf = (counts: Map<string, number>) => [...counts.values()].reduce((a, b
 const FORCED = ['max-width', 'min-height', 'clear', 'box-sizing', 'height'];
 // 微信正文样式里这几项带 !important，只有它们补回时也得带；其余内联声明本来就压得过（规范不建议用 !important）
 const READER_IMPORTANT = new Set(['max-width', 'box-sizing', 'height']);
-/** 比对用的正文宽度：常见手机，加上内容结构检测用的 375/585/677 屏宽（它直接把这些宽度设成正文区宽） */
+/** 内容结构检测直接把这几个宽度设成正文区宽来量（见其 xr 数组） */
+const STRUCTURE_WIDTHS = [375, 585, 677];
+/** 比对用的正文宽度：常见手机，加上内容结构检测用的宽度 */
 const CHECK_WIDTHS = [320, 335, 353, 372, 374, 375, 460, 585, 677];
 const FLOW = /^(block|flow-root|list-item)$/;
 
@@ -169,9 +171,9 @@ export async function convert(
   for (const row of fonts)
     if (row.web && row.chars > row.done) webLeft.set(row.web, (webLeft.get(row.web) || 0) + row.chars - row.done);
   if (webLeft.size) findings.warn('webfont', { n: sumOf(webLeft), fonts: [...webLeft.keys()] });
-  // 内容结构检测就在 375/585/677 三个宽度下来量（见其 xr 数组），超出正文区的节点会被判"存在溢出问题"
+  // 超出正文区的节点会被内容结构检测判为"存在溢出问题"
   const overIds = new Set<string>();
-  for (const w of CHECK_WIDTHS.filter(w => w > 460 || w === 375))
+  for (const w of STRUCTURE_WIDTHS)
     for (const id of overflowing(await loadFrame(verifyFrame, previewDoc(mergedRaw), w))) overIds.add(id);
   const { html: marked, n: ignored } = markIgnoreWidth(mergedRaw, [...overIds]);
   const merged = wechatClean(marked);
@@ -354,7 +356,7 @@ function outlineFindings(
     code === 'font' && miss.length
       ? msg('finding.svgPathLeft.itemFonts', { n, why: msg('why.' + code), fonts: { list: miss, sep: 'common.semi' } })
       : msg('finding.svgPathLeft.item', { n, why: msg('why.' + code) });
-  const reasons = [...why].sort((a, b) => b[1] - a[1]);
+  const reasons = [...why].toSorted((a, b) => b[1] - a[1]);
   findings.warn(
     'svgPathLeft',
     { n: reasons.reduce((sum, [, n]) => sum + n, 0) },

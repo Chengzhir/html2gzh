@@ -31,7 +31,7 @@ async function handOver() {
     const state: Partial<ApiState> = await (
       await fetch(base + '/api/state', { signal: AbortSignal.timeout(2000) })
     ).json();
-    if (state.app !== 'html2gzh') throw new Error();
+    if (state.app !== 'html2gzh') throw new Error('not html2gzh');
   } catch {
     console.error(
       `页面端口 ${UI_PORT} 已被其他程序占用。请改用其他端口启动，例如 ${LAUNCH} --port 40000（本机端口为 40000，页面端口为 40001）`,

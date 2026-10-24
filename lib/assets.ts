@@ -84,7 +84,7 @@ export function serveAsset(req: IncomingMessage, res: ServerResponse, id: string
     // 记下时刻而不只是次数：微信服务器下载一张图超时（约 0.5 秒）会隔 0.5 秒再试，共三次，页面据此区分成功与失败
     asset.fetches.push(Date.now());
     if (asset.fetches.length > 12) asset.fetches.shift();
-    asset.lastUA = String(req.headers['user-agent'] || '');
+    asset.lastUA = req.headers['user-agent'] || '';
     // 取图口对外网开放，请求头里的控制字符（终端转义序列等）不原样打进日志
     const safe = (text: string) => text.replace(/[\x00-\x1f\x7f]/g, '');
     console.log(

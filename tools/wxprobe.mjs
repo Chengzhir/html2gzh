@@ -917,7 +917,7 @@ async function check(url, mode = 'probe', sentFile = `${OUT}/probe.html`) {
           const tags = ['svg', 'animate', 'animateTransform', 'animateMotion', 'set', 'path', 'img', 'foreignObject'];
           return {
             total: notes.length,
-            kinds: [...kinds.values()].sort((a, b) => b.n - a.n),
+            kinds: [...kinds.values()].toSorted((a, b) => b.n - a.n),
             tags: tags.map(t => [t, count(A, t), count(B, t)]),
           };
         }

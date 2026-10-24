@@ -25,11 +25,11 @@ const groups = computed(() =>
 );
 const picked = computed(() => new Set(state.opts.paths));
 /** 上一次转换时勾选的行：结果按那次转换写 */
-const ranWith = computed(() => new Set(state.result?.paths ?? []));
+const ranWith = computed(() => new Set(state.result?.paths));
 /** 勾选改了还没转完：结果先变淡 */
 const stale = computed(() => {
   const keys = new Set(fonts.value.map(row => row.key));
-  const signature = (paths: Iterable<string>) => JSON.stringify([...paths].filter(key => keys.has(key)).sort());
+  const signature = (paths: Iterable<string>) => JSON.stringify([...paths].filter(key => keys.has(key)).toSorted());
   return state.busy || signature(ranWith.value) !== signature(picked.value);
 });
 function checkState(rows: FontRow[]) {

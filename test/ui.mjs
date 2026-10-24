@@ -6,8 +6,8 @@ export async function settled(page, timeout = 180000) {
     () => {
       const s = window.__wxc;
       if (s.busy || !s.result || s.result.width !== s.width) return false;
-      const want = (JSON.parse(localStorage.getItem('wxc.opts') || '{}').paths || []).slice().sort();
-      return JSON.stringify(s.result.paths.slice().sort()) === JSON.stringify(want);
+      const want = (JSON.parse(localStorage.getItem('wxc.opts') || '{}').paths || []).toSorted();
+      return JSON.stringify(s.result.paths.toSorted()) === JSON.stringify(want);
     },
     { timeout, polling: 200 },
   );

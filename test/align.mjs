@@ -89,7 +89,7 @@ export async function alignUnits(browser, original, preview, width, dpr, origin)
           const k = Math.round(lum(A, i));
           hist.set(k, (hist.get(k) || 0) + 1);
         }
-        const bg = [...hist].sort((a, b) => b[1] - a[1])[0][0];
+        const bg = [...hist].toSorted((a, b) => b[1] - a[1])[0][0];
         const prof = (d, ax) => {
           const o = new Float64Array(ax ? h : w);
           for (let y = 0; y < h; y++)

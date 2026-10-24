@@ -1,4 +1,4 @@
-import { ID, idOf, isHtmlEl, round, measure, layoutRect, viewOf } from './util.ts';
+import { ID, idOf, isHtmlEl, isText, round, measure, layoutRect, viewOf } from './util.ts';
 import { msg } from './types.ts';
 import type { BoxRect, FindingSink } from './types.ts';
 
@@ -201,7 +201,7 @@ export function convertPositions(doc: Document, root: Element, findings: Finding
 /** 父级改纵向 flex，用外边距复现原位置；任何元素位移超差就还原 */
 function flexify(doc: Document, parent: HTMLElement): boolean {
   const win = viewOf(doc);
-  for (const node of parent.childNodes) if (node.nodeType === 3 && (node as Text).data.trim()) return false;
+  for (const node of parent.childNodes) if (isText(node) && node.data.trim()) return false;
   const kids = [...parent.children] as (HTMLElement | SVGElement)[];
   if (kids.some(kid => win.getComputedStyle(kid).display.startsWith('inline') && !kid.hasAttribute('data-wxc-float')))
     return false;

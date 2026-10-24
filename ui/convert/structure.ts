@@ -1,4 +1,4 @@
-import { ID, isHtmlEl, viewOf } from './util.ts';
+import { ID, isElement, isHtmlEl, isText, viewOf } from './util.ts';
 import type { FindingSink } from './types.ts';
 
 // 粘贴后编辑器（ProseMirror）的实测行为：div 会被重建成 p 并丢掉容器样式，section 原样保留；
@@ -165,7 +165,7 @@ export function cleanStructure(doc: Document, root: Element, findings: FindingSi
 }
 
 const isTextContext = (win: Window, el: Element) => {
-  for (const child of el.childNodes) if (child.nodeType === 3 && (child as Text).data.trim()) return true;
+  for (const child of el.childNodes) if (isText(child) && child.data.trim()) return true;
   return (
     /^(p|h[1-6]|span|li|blockquote|td|th|pre|figcaption|b|strong|i|em|u|s|label|sub|sup|small|code|mark)$/.test(
       el.localName,
@@ -179,7 +179,7 @@ export function keepShapes(doc: Document, root: Element, findings: FindingSink) 
   const win = viewOf(doc);
   let shapes = 0,
     dropped = 0;
-  for (const el of [...root.querySelectorAll('*')].reverse()) {
+  for (const el of [...root.querySelectorAll('*')].toReversed()) {
     // foreignObject 里的 HTML 由 SVG 自己排版，不按段落规则改
     if (!isHtmlEl(el) || VOID.has(el.localName) || el === root || el.closest('svg')) continue;
     if (el.children.length || el.textContent.replace(/\u00a0/g, ' ').trim()) continue;
@@ -226,9 +226,7 @@ export function squashWhitespace(doc: Document, root: Element) {
   const nodes: CharacterData[] = [];
   while (walker.nextNode()) nodes.push(walker.currentNode as CharacterData);
   const isBlock = (node: Node) =>
-    node &&
-    node.nodeType === 1 &&
-    (BLOCKISH.test(win.getComputedStyle(node as Element).display) || (node as Element).hasAttribute('data-wxc-float'));
+    isElement(node) && (BLOCKISH.test(win.getComputedStyle(node).display) || node.hasAttribute('data-wxc-float'));
   const isBox = (el: Element) =>
     el === root ||
     BLOCKISH.test(win.getComputedStyle(el).display) ||

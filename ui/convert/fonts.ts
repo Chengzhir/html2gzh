@@ -31,7 +31,7 @@ const toRe = (names: string[]) =>
         .map(name =>
           name
             .trim()
-            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+            .replace(/[.+?^${}()|[\]\\]/g, String.raw`\$&`)
             .replace(/\*/g, '.*'),
         )
         .join('|') +
@@ -48,20 +48,18 @@ export interface FontRule {
 export function parseRules(text: string) {
   const rules: FontRule[] = [],
     bad: number[] = [];
-  String(text || '')
-    .split(/\r?\n/)
-    .forEach((line, i) => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) return;
-      const sides = trimmed.split('=>');
-      const left = sides.length === 2 ? splitTop(sides[0]).map(bare).filter(Boolean) : [];
-      const right = sides.length === 2 ? splitTop(sides[1]).map(bare).filter(Boolean) : [];
-      if (!left.length || !right.length) {
-        bad.push(i + 1);
-        return;
-      }
-      rules.push({ re: toRe(left), fonts: right });
-    });
+  (text || '').split(/\r?\n/).forEach((line, i) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return;
+    const sides = trimmed.split('=>');
+    const left = sides.length === 2 ? splitTop(sides[0]).map(bare).filter(Boolean) : [];
+    const right = sides.length === 2 ? splitTop(sides[1]).map(bare).filter(Boolean) : [];
+    if (!left.length || !right.length) {
+      bad.push(i + 1);
+      return;
+    }
+    rules.push({ re: toRe(left), fonts: right });
+  });
   return { rules, bad };
 }
 

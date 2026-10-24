@@ -37,14 +37,11 @@ export function splitTop(text: string, sep = ',') {
 }
 
 /** 去掉首尾空白与一层引号（字体名等） */
-export const unquote = (text: string | null | undefined) =>
-  String(text || '')
-    .trim()
-    .replace(/^["']|["']$/g, '');
+export const unquote = (text: string | null | undefined) => (text || '').trim().replace(/^["']|["']$/g, '');
 
 /** unicode-range → [[lo, hi]]；空值表示全部，写错的段跳过（全写错时为空数组） */
 export function unicodeRanges(text: string | null | undefined): [number, number][] {
-  if (!String(text || '').trim()) return [[0, 0x10ffff]];
+  if (!(text || '').trim()) return [[0, 0x10ffff]];
   const out: [number, number][] = [];
   for (const part of String(text).split(',')) {
     const match = part.trim().match(/^u\+([0-9a-f?]{1,6})(?:-([0-9a-f]{1,6}))?$/i);
@@ -100,8 +97,11 @@ export function parseDecls(text: string | null | undefined) {
 /** 读属性，没有时为空串 */
 export const attrOf = (el: Element, name: string) => el.getAttribute(name) ?? '';
 export const idOf = (el: Element) => attrOf(el, ID);
+// 按 nodeType 判断：iframe 里的节点 instanceof 不认外层窗口的类
+export const isElement = (node: Node | null | undefined): node is Element => node?.nodeType === 1;
+export const isText = (node: Node | null | undefined): node is Text => node?.nodeType === 3;
 export const isHtmlEl = (node: Node | null | undefined): node is HTMLElement =>
-  !!node && node.nodeType === 1 && (node as Element).namespaceURI === 'http://www.w3.org/1999/xhtml';
+  isElement(node) && node.namespaceURI === 'http://www.w3.org/1999/xhtml';
 /** 文档所在的窗口。转换只在装进 iframe 的文档上进行，取不到说明 iframe 已被移走 */
 export function viewOf(doc: Document): Window & typeof globalThis {
   if (!doc.defaultView) throw new Error('document is not in a window');

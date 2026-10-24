@@ -34,10 +34,10 @@ function mapForm(anim: Element, map: (value: string, k: FormKey) => string | nul
     if (value == null) continue;
     const parts = value
       .split(';')
-      .map(value => value.trim())
+      .map(part => part.trim())
       .filter(Boolean);
-    const mapped = parts.map(value => map(value, k));
-    if (mapped.some(value => value == null)) return null;
+    const mapped = parts.map(part => map(part, k));
+    if (mapped.some(part => part == null)) return null;
     out[k] = mapped.join(';');
   }
   return Object.keys(out).length ? out : null;

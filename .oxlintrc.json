@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "ignorePatterns": ["ui/dist/**", "test/out/**", "test/vendor/**", "test/fixture*/**"],
+  "categories": { "correctness": "warn", "suspicious": "warn", "perf": "warn" },
   "rules": {
     "unicorn/no-useless-spread": "off",
     "eslint/no-useless-escape": "off",
@@ -11,6 +12,29 @@
     "typescript/no-misused-promises": "error",
     "typescript/await-thenable": "error",
     "typescript/no-unnecessary-type-assertion": "error",
-    "typescript/no-base-to-string": "error"
-  }
+    "typescript/no-base-to-string": "error",
+
+    "eslint/no-await-in-loop": "off",
+    "unicorn/prefer-add-event-listener": "off",
+    "eslint/no-underscore-dangle": "off",
+    "unicorn/consistent-function-scoping": "off",
+    "typescript/no-unsafe-type-assertion": "off",
+    "oxc/no-map-spread": "off",
+
+    "eslint/logical-assignment-operators": "warn",
+    "eslint/prefer-const": ["warn", { "destructuring": "all" }],
+    "typescript/consistent-type-imports": "warn",
+    "typescript/consistent-type-definitions": "warn",
+    "typescript/method-signature-style": "warn",
+    "typescript/prefer-for-of": "warn",
+    "unicorn/catch-error-name": "warn",
+    "unicorn/prefer-string-raw": "warn",
+    "unicorn/prefer-spread": "warn",
+    "unicorn/no-useless-collection-argument": "warn",
+    "unicorn/error-message": "warn",
+    "unicorn/custom-error-definition": "warn",
+    "unicorn/relative-url-style": "warn",
+    "eslint/new-cap": "warn"
+  },
+  "overrides": [{ "files": ["test/**", "tools/**"], "rules": { "eslint/no-shadow": "off" } }]
 }

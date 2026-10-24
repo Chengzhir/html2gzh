@@ -1,4 +1,17 @@
-import { ID, idOf, isHtmlEl, measure, diffBoxes, splitTop, unquote, NO_TRANSFORM, tempStyle, viewOf } from './util.ts';
+import {
+  ID,
+  idOf,
+  isElement,
+  isHtmlEl,
+  isText,
+  measure,
+  diffBoxes,
+  splitTop,
+  unquote,
+  NO_TRANSFORM,
+  tempStyle,
+  viewOf,
+} from './util.ts';
 import { GLYPH_BATCH as BATCH, SNAP_BOX, SNAP_INHERITED, SNAP_INLINE, SNAP_TAGS } from './glyphapi.ts';
 import { faceKey } from './fonts.ts';
 import { annotateContainerWidths } from './responsive.ts';
@@ -147,7 +160,7 @@ export type OutlineResult =
       bytes: number;
     };
 
-const isFloat = (node: Node) => node.nodeType === 1 && (node as Element).hasAttribute('data-wxc-float');
+const isFloat = (node: Node) => isElement(node) && node.hasAttribute('data-wxc-float');
 const f3 = (value: number) => String(Math.round(value * 1000) / 1000);
 /** 缺字形的原因（文案 miss.<kind>）按"原因|字体名"计数，同一原因在不同字体上分开记 */
 const noteMiss = (notes: OutlineNotes, kind: string, fontName?: string) => {
@@ -260,8 +273,8 @@ const blockOf = (win: Window, el: Element, root: Element) => {
 function textNodes(nodes: ChildNode[]) {
   const out: Text[] = [];
   const walk = (node: Node) => {
-    if (node.nodeType === 3) {
-      if ((node as Text).data) out.push(node as Text);
+    if (isText(node)) {
+      if (node.data) out.push(node);
       return;
     }
     if (node.nodeType === 1 && !isFloat(node)) for (const child of node.childNodes) walk(child);
@@ -462,7 +475,7 @@ export function planFonts(
       bad = false;
     const flush = () => {
       const from = run.findIndex(node => !isFloat(node)),
-        to = run.length - 1 - [...run].reverse().findIndex(node => !isFloat(node));
+        to = run.findLastIndex(node => !isFloat(node));
       const nodes = from < 0 ? [] : run.slice(from, to + 1);
       if (nodes.length) {
         const why = !id ? 'other' : bad ? 'inline' : ineligible(win, el, nodes, root);
@@ -474,13 +487,12 @@ export function planFonts(
       bad = false;
     };
     for (const node of el.childNodes) {
-      if (node.nodeType === 3) {
-        if ((node as Text).data.trim() || run.length) run.push(node);
+      if (isText(node)) {
+        if (node.data.trim() || run.length) run.push(node);
         continue;
       }
-      if (node.nodeType !== 1) continue;
-      const nodeStyle =
-        isHtmlEl(node) || (node as Element).localName === 'svg' ? win.getComputedStyle(node as Element) : null;
+      if (!isElement(node)) continue;
+      const nodeStyle = isHtmlEl(node) || node.localName === 'svg' ? win.getComputedStyle(node) : null;
       if (!nodeStyle || nodeStyle.display === 'none') continue;
       if (isFloat(node) && !itemized) {
         if (node.textContent?.trim()) {
@@ -644,7 +656,7 @@ function baselines(doc: Document, chars: RawChar[], content: BoxRect): boolean {
     return range.getClientRects()[0];
   };
   for (const segment of segments) {
-    const last = [...segment].reverse().find(char => !char.space);
+    const last = segment.findLast(char => !char.space);
     if (!last) continue;
     const t = last.t,
       data = t.data;
@@ -680,14 +692,13 @@ function snapshot(win: Window, unit: MeasuredUnit): { unit: GlyphUnit; elements:
   const walk = (parentStyle: CSSStyleDeclaration, nodes: ChildNode[]): SnapNode[] => {
     const out: SnapNode[] = [];
     for (const child of nodes) {
-      if (child.nodeType === 3) {
-        const t = child as Text;
-        if (!t.data) continue;
-        base.set(t, text);
-        text += t.data.length;
-        out.push(t.data);
-      } else if (child.nodeType === 1 && !isFloat(child)) {
-        const el = child as Element,
+      if (isText(child)) {
+        if (!child.data) continue;
+        base.set(child, text);
+        text += child.data.length;
+        out.push(child.data);
+      } else if (isElement(child) && !isFloat(child)) {
+        const el = child,
           computed = win.getComputedStyle(el);
         const diff: Record<string, string> = {};
         for (const prop of SNAP_INHERITED) {
@@ -737,7 +748,10 @@ async function fetchOutlines(
   const WHY: Record<string, string> = { mismatch: 'relayout', color: 'color', effect: 'effect', render: 'font' };
   const inks = new Map<MeasuredUnit, Ink>();
   const settle = (unit: MeasuredUnit, drawn: Drawn) => {
-    if (drawn.fail == null) return void inks.set(unit, drawn);
+    if (drawn.fail == null) {
+      inks.set(unit, drawn);
+      return;
+    }
     unit.fail = WHY[drawn.fail] || 'font';
     if (unit.fail === 'font') noteMiss(notes, 'render');
     if (drawn.detail) unit.detail = [drawn.detail];
@@ -963,7 +977,9 @@ function copyLines(unit: DrawnUnit): ((doc: Document) => SVGTextElement)[] {
       line.text += '\u00a0';
       pending = false;
     }
-    for (let i = 0; i < char.s.length; i++) line.xs.push(xOf(char));
+    // xs 与 line.text 按 UTF-16 码元一一对应，不是按码位
+    const x = xOf(char);
+    line.xs.push(...Array.from({ length: char.s.length }, () => x));
     line.text += char.space ? '\u00a0'.repeat(char.s.length) : char.s;
     line.right = char.x + char.w;
     if (char.trail) pending = true;
@@ -1033,11 +1049,7 @@ const esc = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').
 const originalHtml = (unit: Located) =>
   unit.d.from == null
     ? unit.box.innerHTML
-    : unit.nodes
-        .map(node =>
-          node.nodeType === 3 ? esc((node as Text).data) : node.nodeType === 1 ? (node as Element).outerHTML : '',
-        )
-        .join('');
+    : unit.nodes.map(node => (isText(node) ? esc(node.data) : isElement(node) ? node.outerHTML : '')).join('');
 
 /**
  * 在一次转换的 DOM 上把 descs 描述的单元换成轮廓。逐元素校验布局不变，坏的单元单独还原。
@@ -1069,8 +1081,9 @@ export async function outline(
   if (measured.length) {
     try {
       inks = await fetchOutlines(win, measured, ctx, notes);
-    } catch (e) {
-      notes.server = e instanceof CodedError ? msg(e.key, e.params) : msg('common.raw', { msg: messageOf(e) });
+    } catch (error) {
+      notes.server =
+        error instanceof CodedError ? msg(error.key, error.params) : msg('common.raw', { msg: messageOf(error) });
       for (const unit of measured) unit.fail = 'server';
     }
   }

@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import subsetFont from 'subset-font';
 
 export const REMOTE_PORT = 48970;
-const WIN_FONTS = path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts');
+const WIN_FONTS = path.join(process.env.WINDIR || String.raw`C:\Windows`, 'Fonts');
 const ASCII = String.fromCharCode(...Array.from({ length: 95 }, (_, i) => 32 + i));
 
 /** 生成 fonts/ 下的字体与样式表；测试稿没改过就不重做 */
@@ -62,7 +62,8 @@ export function serveRemote(dir) {
     const file = path.join(root, name);
     if (!name || !fs.existsSync(file)) {
       res.writeHead(404, { 'access-control-allow-origin': '*' });
-      return res.end();
+      res.end();
+      return;
     }
     res.writeHead(200, {
       'content-type': TYPES[path.extname(name)] || 'application/octet-stream',
